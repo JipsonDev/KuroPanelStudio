@@ -73,6 +73,27 @@ páginas en publicaciones públicas, confirma que tienes los derechos necesarios
 - GPU NVIDIA opcional. El modo CPU continúa disponible sin CUDA.
 - Git LFS para descargar los modelos almacenados en el repositorio.
 
+## Instalación en Windows con el instalador `.exe` (recomendada)
+
+Si solo quieres utilizar KuroPanel Studio, no necesitas instalar Python, Git ni
+descargar el código fuente:
+
+1. Abre la sección de [Releases](https://github.com/JipsonDev/KuroPanelStudio/releases).
+2. En la versión más reciente, descarga
+   `KuroPanelStudio-Setup-0.1.0-Windows-x64.exe`.
+3. Ejecuta el instalador y, si lo deseas, activa el acceso directo del
+   escritorio.
+4. Abre **KuroPanel Studio** desde el menú Inicio o desde el acceso directo.
+
+El instalador funciona en Windows x64, se instala en la carpeta del usuario y
+no necesita permisos de administrador. Incluye la aplicación, los modelos y las
+dependencias de ejecución. Las credenciales de las API no están incluidas: cada
+usuario debe configurarlas dentro del programa.
+
+Windows puede mostrar una advertencia de SmartScreen porque esta versión aún
+no tiene firma digital. Verifica la descarga comparando su SHA-256 con el
+archivo `SHA256SUMS.txt` incluido en la misma Release.
+
 ## Instalación desde el código fuente
 
 Instala Git LFS antes de clonar, porque los modelos ONNX no caben en el flujo
