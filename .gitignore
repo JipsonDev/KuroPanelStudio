@@ -1,0 +1,11 @@
+__pycache__/
+.venv-gpu/
+*.py[cod]
+_ui_preview.png
+api_configs.json
+build/
+dist/
+github-release/
+github-source/
+installer-smoke-*/
+*.spec.bak

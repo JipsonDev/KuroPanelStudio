@@ -1,0 +1,1 @@
+"""Custom compact Qt widgets."""

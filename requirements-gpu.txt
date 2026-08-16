@@ -1,0 +1,4 @@
+-r requirements-base.txt
+# ONNX Runtime <1.27 uses the CUDA 12 generation bundled by current PyTorch.
+# CUDA is first priority; CPU remains the per-node fallback provider.
+onnxruntime-gpu>=1.24,<1.27
