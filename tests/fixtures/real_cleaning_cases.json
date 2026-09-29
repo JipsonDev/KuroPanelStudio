@@ -1,0 +1,56 @@
+{
+  "description": "Rectángulos revisados visualmente en las páginas de prueba aportadas por el usuario. Las imágenes permanecen fuera del repositorio.",
+  "cases": [
+    {
+      "id": "156-01-dialogo-mixto",
+      "image": "156/01.png",
+      "crop": [0, 4500, 900, 6100],
+      "regions": [
+        {"label": "globo blanco sobre viñeta", "selection": [82, 4785, 390, 176], "text_roi": [87, 4790, 380, 166]},
+        {"label": "globo translúcido", "selection": [411, 5724, 487, 218], "text_roi": [416, 5729, 484, 208]}
+      ]
+    },
+    {
+      "id": "156-02-globos-blancos",
+      "image": "156/02.png",
+      "crop": [0, 5100, 900, 5900],
+      "regions": [
+        {"label": "globo angular corto", "selection": [243, 5356, 240, 54], "text_roi": [243, 5361, 250, 44]},
+        {"label": "globo angular sobre ilustración", "selection": [534, 5532, 291, 140], "text_roi": [539, 5537, 281, 130]}
+      ]
+    },
+    {
+      "id": "179-01-dialogo-claro",
+      "image": "179/01.png",
+      "crop": [0, 4570, 900, 5350],
+      "regions": [
+        {"label": "globo oval con línea larga", "selection": [33, 4862, 817, 104], "text_roi": [38, 4867, 807, 94]}
+      ]
+    },
+    {
+      "id": "179-02-dialogo-grueso",
+      "image": "179/02.png",
+      "crop": [0, 0, 900, 650],
+      "regions": [
+        {
+          "label": "texto negro grueso en globo dentado",
+          "selection": [147, 91, 677, 258],
+          "text_rois": [
+            [360, 104, 225, 53],
+            [284, 164, 385, 53],
+            [285, 224, 408, 53],
+            [151, 284, 670, 53]
+          ]
+        }
+      ]
+    },
+    {
+      "id": "179-03-globo-radial",
+      "image": "179/03.png",
+      "crop": [0, 0, 900, 650],
+      "regions": [
+        {"label": "globo con rayos exteriores", "selection": [476, 138, 224, 118], "text_roi": [481, 143, 214, 108]}
+      ]
+    }
+  ]
+}

@@ -47,6 +47,9 @@ a = Analysis(
     noarchive=False,
     optimize=1,
 )
+# Use the Windows ICU shim expected by Qt rather than an unrelated ICU wheel.
+a.binaries = [entry for entry in a.binaries
+              if Path(entry[0]).name.casefold() not in {"icuuc.dll", "icudt78.dll"}]
 pyz = PYZ(a.pure)
 
 exe = EXE(

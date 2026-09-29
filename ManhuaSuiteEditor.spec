@@ -66,6 +66,11 @@ a = Analysis(
     noarchive=False,
     optimize=1,
 )
+# Windows provides an unversioned icuuc.dll used by Qt6Core. Another package
+# can expose ICU 78 on PATH during analysis; bundling it first makes QtCore
+# fail to import because that DLL only exports version-suffixed symbols.
+a.binaries = [entry for entry in a.binaries
+              if Path(entry[0]).name.casefold() not in {"icuuc.dll", "icudt78.dll"}]
 pyz = PYZ(a.pure)
 
 exe = EXE(

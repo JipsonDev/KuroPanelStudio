@@ -8,6 +8,7 @@ import cv2
 import numpy as np
 
 from core.linguistic_composer import linguistic_wrap
+from core.balloon_geometry import enclosed_balloon_mask
 
 
 def detect_balloon_interior(rgb: np.ndarray, padding: int = 8) -> np.ndarray:
@@ -23,6 +24,17 @@ def detect_balloon_interior(rgb: np.ndarray, padding: int = 8) -> np.ndarray:
     height, width = source.shape[:2]
     if width < 12 or height < 12:
         return _safe_rectangle(height, width, padding)
+
+    enclosed = enclosed_balloon_mask(source)
+    if enclosed is not None:
+        inset = max(0, int(padding))
+        if inset:
+            enclosed = cv2.erode(
+                enclosed, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (inset * 2 + 1, inset * 2 + 1)),
+                borderType=cv2.BORDER_CONSTANT, borderValue=0,
+            )
+        if np.any(enclosed):
+            return enclosed
 
     lab = cv2.cvtColor(source[:, :, :3], cv2.COLOR_RGB2LAB).astype(np.float32)
     cy, cx = height // 2, width // 2
@@ -79,7 +91,7 @@ def detect_balloon_interior(rgb: np.ndarray, padding: int = 8) -> np.ndarray:
         kernel_size = inset * 2 + 1
         interior = cv2.erode(
             interior, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (kernel_size, kernel_size)),
-            iterations=1,
+            iterations=1, borderType=cv2.BORDER_CONSTANT, borderValue=0,
         )
     return interior if np.any(interior) else _safe_rectangle(height, width, padding)
 

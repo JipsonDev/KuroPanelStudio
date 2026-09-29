@@ -1,5 +1,5 @@
 param(
-    [string]$Version = "0.1.0"
+    [string]$Version = "0.2.0"
 )
 
 $ErrorActionPreference = "Stop"
@@ -48,8 +48,10 @@ $checksum = "$hash  $installerName`r`n"
 
 $readmeSource = Join-Path $projectRoot "installer\GITHUB_RELEASE_README.md"
 $notesSource = Join-Path $projectRoot "installer\RELEASE_NOTES.md"
-Copy-Item -LiteralPath $readmeSource -Destination (Join-Path $outputDir "README.md") -Force
-Copy-Item -LiteralPath $notesSource -Destination (Join-Path $outputDir "RELEASE_NOTES.md") -Force
+$readme = [IO.File]::ReadAllText($readmeSource).Replace("@VERSION@", $Version)
+$notes = [IO.File]::ReadAllText($notesSource).Replace("@VERSION@", $Version)
+[IO.File]::WriteAllText((Join-Path $outputDir "README.md"), $readme, [Text.UTF8Encoding]::new($false))
+[IO.File]::WriteAllText((Join-Path $outputDir "RELEASE_NOTES.md"), $notes, [Text.UTF8Encoding]::new($false))
 
 $sizeMb = [math]::Round((Get-Item -LiteralPath $installerPath).Length / 1MB, 1)
 $buildInfo = @(

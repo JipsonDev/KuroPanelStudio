@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import copy
 import os
+import subprocess
+import sys
 import uuid
 from time import monotonic, perf_counter
 from pathlib import Path
@@ -10,9 +12,11 @@ import numpy as np
 
 from PySide6.QtCore import QFileSystemWatcher, QPoint, QThreadPool, QTimer, Qt
 from PySide6.QtGui import QAction, QGuiApplication
-from PySide6.QtWidgets import QFileDialog, QDialog, QHBoxLayout, QMainWindow, QMessageBox, QScrollArea, QSplitter, QStackedWidget, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QApplication, QFileDialog, QDialog, QHBoxLayout, QMainWindow, QMessageBox, QProgressDialog, QScrollArea, QSplitter, QStackedWidget, QVBoxLayout, QWidget
 
 from core.cleaning_process_manager import CleaningProcessManager
+from core.app_updater import ReleaseUpdater, UpdateInfo
+from core.app_version import APP_VERSION
 from core.credential_store import CredentialStore
 from core.detection_manager import DetectionManager
 from core.font_profile_manager import FontProfileManager
@@ -41,11 +45,13 @@ from core.typography_manager import DEFAULT_STYLE, EFFECT_STYLE_KEYS, Typography
 from core.workers import ModelTask
 from core.workflow_status import page_workflow_status
 from core.watermark_manager import normalized_watermark, watermark_bytes
+from core.chapter_watermarks import chapter_watermark_settings
 from ui.ai_panel import AIOptionsPanel
 from ui.canvas_view import CanvasShell
 from ui.cleaning_quality_dialog import CleaningQualityDialog
 from ui.effects_panel import BUILTIN_EFFECT_PRESETS, TextEffectsPanel
 from ui.images_panel import ImagesPanel
+from ui.i18n import UiTranslator
 from ui.font_utils import configure_searchable_font_combo, register_profile_fonts
 from ui.inspector_panel import InspectorPanel
 from ui.layers_panel import LayersPanel
@@ -57,6 +63,8 @@ from ui.settings_dialog import SettingsDialog
 from ui.sfx_panel import SFXPanel
 from ui.text_panel import TextOptionsPanel
 from ui.topbar import TopBar
+from ui.workspace import EditorWorkspace
+from ui.task_progress import TaskProgress
 from ui.typography_dialog import TypographyDialog
 from ui.watermark_dialog import WatermarkDialog
 from ui.widgets.controls import ToastNotification
@@ -97,7 +105,7 @@ class MainWindow(QMainWindow):
         self.detector = DetectionManager(self.models_root)
         self.detector.set_resource_policy(self.resource_policy)
         self.detector.set_device_mode(str(performance_settings.get("device_mode", "auto")))
-        self.ocr = OCRManager()
+        self.ocr = OCRManager(cache_path=app_data / "Cache" / "ocr.sqlite3")
         self.ocr.set_resource_policy(self.resource_policy)
         self.translator = TranslationManager()
         self.watermark_asset_path = app_data / "Watermarks" / "active.png"
@@ -139,6 +147,10 @@ class MainWindow(QMainWindow):
         self.current_task: ModelTask | None = None
         self._warmup_task: ModelTask | None = None
         self._release_task: ModelTask | None = None
+        self._update_check_task: ModelTask | None = None
+        self._update_download_task: ModelTask | None = None
+        self._update_progress_dialog: QProgressDialog | None = None
+        self._staged_update: tuple[UpdateInfo, Path] | None = None
         self._active_operation_key = ""
         self._active_operation_name = ""
         self._models_ready = False
@@ -165,6 +177,8 @@ class MainWindow(QMainWindow):
         self.clean_results: dict[str, dict] = {}
         self.page_texts: dict[str, str] = {}
         self.page_styles: dict[str, dict] = {}
+        self._page_failures: dict[str, dict[str, str]] = {}
+        self._active_task_page_key: str | None = None
         self.style_presets: dict[str, dict] = {}
         self.effect_presets: dict[str, dict] = {
             name: TypographyManager.normalized(style)
@@ -253,11 +267,19 @@ class MainWindow(QMainWindow):
         self._build_ui()
         self._build_actions()
         self._set_empty_canvas()
+        app = QApplication.instance()
+        if not hasattr(app, "_kuro_ui_translator"):
+            app._kuro_ui_translator = UiTranslator(app)
+        self.ui_translator = app._kuro_ui_translator
+        self.ui_translator.set_language(self.settings.data["general"].get("ui_language", "es"))
         self.history.reset(self._snapshot())
         self._update_history_actions()
         self._update_provider_statuses()
+        self.ui_translator.refresh(self)
         QTimer.singleShot(150, self._offer_recovery)
         QTimer.singleShot(700, self._import_legacy_profiles_async)
+        if getattr(sys, "frozen", False) and self.settings.data["general"].get("auto_check_updates", True):
+            QTimer.singleShot(3500, self._check_for_updates)
         # Only the high-performance profile preloads at startup. Model creation
         # happens in workers after the first frame, and LaMa is ready before the
         # user reaches cleaning. Low/balanced profiles remain lazy.
@@ -394,6 +416,9 @@ class MainWindow(QMainWindow):
         root_layout.setSpacing(0)
         self.topbar = TopBar()
         root_layout.addWidget(self.topbar)
+        self.task_progress = TaskProgress()
+        self.task_progress.cancel_requested.connect(self._cancel_current_task)
+        root_layout.addWidget(self.task_progress)
         body = QHBoxLayout()
         body.setContentsMargins(0, 0, 0, 0)
         body.setSpacing(0)
@@ -411,7 +436,7 @@ class MainWindow(QMainWindow):
         self._refresh_font_profiles()
         self.tool_panel = QStackedWidget()
         self.tool_panel.setMinimumWidth(280)
-        self.tool_panel.setMaximumWidth(330)
+        self.tool_panel.setMaximumWidth(370)
         self.tool_panel.addWidget(self.ai_panel)
         self.tool_panel.addWidget(self.script_panel)
         self.tool_panel.addWidget(self.text_panel)
@@ -419,17 +444,6 @@ class MainWindow(QMainWindow):
         self.tool_panel.addWidget(self.sfx_panel)
         self.layers = LayersPanel(0)
         self.images_panel = ImagesPanel(self.project.pages, self.images)
-        middle_column = QSplitter(Qt.Vertical)
-        middle_column.setObjectName("AssetsColumn")
-        middle_column.setChildrenCollapsible(False)
-        middle_column.setMinimumWidth(250)
-        middle_column.setMaximumWidth(310)
-        middle_column.setHandleWidth(5)
-        middle_column.addWidget(self.layers)
-        middle_column.addWidget(self.images_panel)
-        middle_column.setSizes([420, 340])
-        middle_column.setStretchFactor(0, 3)
-        middle_column.setStretchFactor(1, 2)
         self.canvas_shell = CanvasShell()
         self.canvas_shell.canvas.set_resource_policy(self.resource_policy)
         self.inspector = InspectorPanel()
@@ -440,29 +454,30 @@ class MainWindow(QMainWindow):
         self.inspector_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self.inspector_scroll.setObjectName("InspectorScroll")
         self.inspector_scroll.setMinimumWidth(270)
-        self.inspector_scroll.setMaximumWidth(330)
+        self.inspector_scroll.setMaximumWidth(370)
         self.inspector_scroll.setWidget(self.inspector)
-        workspace = QSplitter(Qt.Horizontal)
-        workspace.setObjectName("WorkspaceSplitter")
-        workspace.setChildrenCollapsible(False)
-        workspace.setHandleWidth(5)
-        workspace.addWidget(self.tool_panel)
-        workspace.addWidget(middle_column)
-        workspace.addWidget(self.canvas_shell)
-        workspace.addWidget(self.inspector_scroll)
-        workspace.setSizes([300, 275, 760, 300])
-        workspace.setStretchFactor(0, 0)
-        workspace.setStretchFactor(1, 0)
-        workspace.setStretchFactor(2, 1)
-        workspace.setStretchFactor(3, 0)
+        workspace = EditorWorkspace(
+            self.images_panel, self.layers, self.canvas_shell,
+            self.tool_panel, self.inspector_scroll,
+        )
+        workspace.focus_changed.connect(self.topbar.set_focus_mode)
+        workspace.dock_collapsed_changed.connect(self.canvas_shell.set_panel_collapsed)
+        self.canvas_shell.panel_toggle_requested.connect(
+            lambda: workspace.set_dock_collapsed(not workspace.dock_collapsed)
+        )
         body.addWidget(workspace, 1)
         root_layout.addLayout(body, 1)
         self.status = StatusBar()
+        self.task_progress.active_changed.connect(self.status.set_busy)
         self.status.set_refresh_interval(self.resource_policy.status_interval_ms)
         root_layout.addWidget(self.status)
         self.setCentralWidget(root)
         self.workspace = workspace
         self.sidebar.tool_changed.connect(self._sidebar_changed)
+        self.workspace.dock.currentChanged.connect(self._sync_sidebar_from_dock)
+        self.workspace.assets.currentChanged.connect(self._sync_sidebar_from_assets)
+        self.tool_panel.currentChanged.connect(self._sync_sidebar_from_dock)
+        self.sidebar.set_current("Procesar")
         self.ai_panel.action_requested.connect(self._handle_action)
         self.ai_panel.mode_changed.connect(self._ai_mode_changed)
         self.ai_panel.provider_changed.connect(self._save_provider_selection)
@@ -488,6 +503,7 @@ class MainWindow(QMainWindow):
         self.inspector.text_editor.textChanged.connect(self._editor_text_changed)
         self.inspector.text_editor.editing_finished.connect(self._finish_text_editing)
         self.topbar.action_requested.connect(self._handle_action)
+        self.canvas_shell.welcome.action_requested.connect(self._handle_action)
         self.images_panel.page_selected.connect(self._set_page)
         self.canvas_shell.previous_button.clicked.connect(self.previous_page)
         self.canvas_shell.next_button.clicked.connect(self.next_page)
@@ -503,6 +519,7 @@ class MainWindow(QMainWindow):
         self.canvas_shell.canvas.sfx_nodes_changed.connect(self._sfx_nodes_changed)
         self.canvas_shell.canvas.scene.selectionChanged.connect(self._canvas_selection_changed)
         self.layers.region_selected.connect(self._layer_selected)
+        self.layers.detect_requested.connect(self.run_detection)
         self.layers.visibility_changed.connect(self._layer_visibility_changed)
         self.layers.lock_changed.connect(self._layer_lock_changed)
         self.layers.opacity_changed.connect(self._layer_opacity_changed)
@@ -602,8 +619,19 @@ class MainWindow(QMainWindow):
 
     def _adapt_to_window(self) -> None:
         self.topbar.adapt_to_width(self.width())
+        if hasattr(self, "workspace"):
+            self.workspace.adapt_to_width(self.width())
+            self.canvas_shell.set_compact_controls(self.workspace.compact)
 
     def _build_actions(self) -> None:
+        next_pending = QAction("Siguiente página pendiente", self)
+        next_pending.setShortcut("Ctrl+Alt+N")
+        next_pending.triggered.connect(self.images_panel.select_next_pending)
+        self.addAction(next_pending)
+        focus = QAction("Modo de enfoque", self)
+        focus.setShortcut("Ctrl+Shift+F")
+        focus.triggered.connect(lambda: self._handle_action("toggle_focus"))
+        self.addAction(focus)
         open_folder = QAction("Abrir capítulo", self)
         open_folder.triggered.connect(self.open_chapter)
         open_folder.setShortcut("Ctrl+O")
@@ -653,6 +681,22 @@ class MainWindow(QMainWindow):
             self.canvas_shell.canvas.delete_selected_regions()
 
     def _sidebar_changed(self, tool: str) -> None:
+        if tool in {"Páginas", "Capas"}:
+            self.workspace.set_focus_mode(False)
+            self.workspace.set_dock_collapsed(False)
+            self.workspace.assets.setCurrentIndex(0 if tool == "Páginas" else 1)
+            if self.workspace.compact:
+                self.workspace.dock.setCurrentWidget(self.workspace.assets)
+            self.sidebar.set_current(tool)
+            return
+        if tool == "Editar":
+            self.workspace.set_focus_mode(False)
+            self.workspace.set_dock_collapsed(False)
+            self.workspace.dock.setCurrentWidget(self.inspector_scroll)
+            self.canvas_shell.canvas.clear_sfx_nodes()
+            self.sidebar.set_current(tool)
+            return
+        self.workspace.show_tools()
         if hasattr(self, "canvas_shell") and tool != "SFX":
             self.canvas_shell.canvas.clear_sfx_nodes()
         if tool == "Guión":
@@ -671,12 +715,35 @@ class MainWindow(QMainWindow):
         elif tool == "SFX":
             self.tool_panel.setCurrentWidget(self.sfx_panel)
             self._layer_selected(self.layers.current_index())
+        self.sidebar.set_current(tool)
+
+    def _sync_sidebar_from_assets(self, _index: int) -> None:
+        if not self.workspace.compact or self.workspace.dock.currentWidget() is self.workspace.assets:
+            self.sidebar.set_current("Capas" if self.workspace.assets.currentIndex() else "Páginas")
+
+    def _sync_sidebar_from_dock(self, _index: int) -> None:
+        current = self.workspace.dock.currentWidget()
+        if current is self.workspace.assets:
+            self._sync_sidebar_from_assets(self.workspace.assets.currentIndex())
+        elif current is self.inspector_scroll:
+            self.canvas_shell.canvas.clear_sfx_nodes()
+            self.sidebar.set_current("Editar")
+        else:
+            destination = {
+                self.script_panel: "Guión", self.text_panel: "Texto",
+                self.effects_panel: "Efectos", self.sfx_panel: "SFX",
+            }.get(self.tool_panel.currentWidget(), "Procesar")
+            self.sidebar.set_current(destination)
 
     def _handle_action(self, action: str) -> None:
-        if action in {"ocr", "run_ocr_api"}:
+        if action == "toggle_focus":
+            self.workspace.set_focus_mode(not self.workspace.focus_mode)
+        elif action in {"ocr", "run_ocr_api"}:
             self.run_ocr_api()
         elif action == "run_ocr_api_one":
             self.run_ocr_api_one()
+        elif action == "reread_ocr_one":
+            self.run_ocr_api_one(force=True)
         elif action == "run_ocr_api_all":
             self.run_ocr_api_all()
         elif action in {"detect", "run_yolo"}:
@@ -741,6 +808,8 @@ class MainWindow(QMainWindow):
             self.edit_typography()
         elif action == "settings":
             self.open_settings()
+        elif action == "check_updates":
+            self._check_for_updates(manual=True)
         elif action in {"switch_project", "change_project"}:
             self.switch_active_project()
         elif action == "watermark":
@@ -981,7 +1050,11 @@ class MainWindow(QMainWindow):
         self.current_task = task
         self._active_operation_key = f"foreground:{id(task)}"
         self._active_operation_name = title
+        self._active_task_page_key = None if "capítulo" in title.casefold() else self._active_key()
         self.performance.start(self._active_operation_key)
+        self.task_progress.start(title, stage)
+        task.signals.progress.connect(self.task_progress.update_progress)
+        task.signals.stage.connect(self._task_stage)
         if stage:
             task.signals.progress.connect(
                 lambda value, label=stage: self.inspector.set_stage(f"{label} {value}%", value)
@@ -991,6 +1064,17 @@ class MainWindow(QMainWindow):
         task.signals.completed.connect(lambda result: self._task_completed(result, title, message, finished))
         task.signals.failed.connect(self._task_failed)
         self.thread_pool.start(task)
+
+    def _task_stage(self, stage: str, page_id: str) -> None:
+        self.task_progress.set_stage(stage)
+        if page_id:
+            self._active_task_page_key = page_id
+
+    def _cancel_current_task(self) -> None:
+        if str(self.task_progress._owner or "").startswith("folder:") and self._folder_task is not None:
+            self._folder_task.cancel()
+        elif self.current_task is not None:
+            self.current_task.cancel()
 
     def _release_idle_gpu_models(self) -> None:
         minutes = int(self.settings.data.get("performance", {}).get("gpu_idle_minutes", 5))
@@ -1066,7 +1150,7 @@ class MainWindow(QMainWindow):
 
     def _save_provider_selection(self, section: str, platform: str, model: str) -> None:
         self.settings.update_provider(section, platform, model)
-        if section == "translate":
+        if section in {"ocr", "translate"}:
             self._update_provider_statuses()
 
     def _active_key(self) -> str | None:
@@ -1081,10 +1165,18 @@ class MainWindow(QMainWindow):
             return
         self._page_view_states[page_key(page)] = self.canvas_shell.canvas.view_state()
 
-    def _page_workflow_status(self, key: str) -> dict[str, bool]:
-        return page_workflow_status(self.page_regions.get(key, []), self.clean_results.get(key))
+    def _page_workflow_status(self, key: str) -> dict[str, bool | str]:
+        status: dict[str, bool | str] = dict(
+            page_workflow_status(self.page_regions.get(key, []), self.clean_results.get(key))
+        )
+        failures = self._page_failures.get(key, {})
+        status["error"] = bool(failures)
+        if failures:
+            status["error_message"] = "\n".join(f"{step}: {message}" for step, message in failures.items())
+        return status
 
     def _refresh_page_statuses(self) -> None:
+        self.ai_panel.set_chapter_status(len(self.project.pages))
         self.images_panel.set_statuses([
             self._page_workflow_status(page_key(page)) for page in self.project.pages
         ])
@@ -2315,17 +2407,40 @@ class MainWindow(QMainWindow):
             self.layers.set_selected_indices(selected, current)
 
     def _update_provider_statuses(self) -> None:
-        ocr_ready = self.credentials.configured("Alibaba Cloud")
+        provider, model = self.ai_panel.ocr_configuration()
+        endpoint = self.settings.data["ocr"].get("base_url", "")
+        signature = (provider, model.strip(), endpoint)
+        key = self.credentials.get("Alibaba Cloud") or os.environ.get("DASHSCOPE_API_KEY", "")
+        try:
+            OCRManager.normalize_endpoint(endpoint)
+            endpoint_error = ""
+        except ValueError as error:
+            endpoint_error = str(error)
+        if provider != "Alibaba Cloud":
+            ocr_reason = f"Proveedor OCR no disponible: {provider}"
+        elif not str(key).strip():
+            ocr_reason = "Agrega la API key de Alibaba Cloud en Configuración"
+        elif not model.strip():
+            ocr_reason = "Escribe un modelo OCR en Configuración"
+        elif endpoint_error:
+            ocr_reason = endpoint_error
+        elif signature == getattr(self, "_ocr_rejected_config", None):
+            ocr_reason = "Modelo o región no disponible (404). Revisa OCR en Configuración"
+        else:
+            ocr_reason = ""
+        ocr_ready = not ocr_reason
         self.ai_panel.set_status(
-            "ocr", "Alibaba Cloud configurado" if ocr_ready else "Configura Alibaba Cloud",
-            self.ai_panel.STATUS_OK if ocr_ready else self.ai_panel.STATUS_WARNING,
+            "ocr", "Clave y URL listas · modelo sin verificar" if ocr_ready else ocr_reason,
+            self.ai_panel.STATUS_NEUTRAL if ocr_ready else self.ai_panel.STATUS_WARNING,
         )
+        self.ai_panel.set_ready("ocr", ocr_ready, ocr_reason)
         provider = self.settings.data["translate"].get("platform", "Gemini")
-        translation_ready = self.credentials.configured(provider)
+        translation_ready = self.credentials.configured(provider) and bool(self.ai_panel.translate_model.currentText().strip())
         self.ai_panel.set_status(
-            "translation", f"{provider} configurado" if translation_ready else f"Configura {provider}",
+            "translation", f"{provider} configurado" if translation_ready else f"Configura {provider} y su modelo",
             self.ai_panel.STATUS_OK if translation_ready else self.ai_panel.STATUS_WARNING,
         )
+        self.ai_panel.set_ready("translation", translation_ready, f"Configura {provider} y su modelo")
 
     def switch_active_project(self) -> None:
         """Open the project & profile chooser anytime to switch library/project."""
@@ -2349,6 +2464,106 @@ class MainWindow(QMainWindow):
             "Proyecto cambiado",
             f"Se asignó '{self.active_font_profile}' ({self.active_font_type}) al espacio de trabajo actual.",
         )
+
+    def _check_for_updates(self, manual: bool = False) -> None:
+        if not getattr(sys, "frozen", False):
+            if manual:
+                self._toast("Actualizaciones", "Instala la aplicación de Windows para recibir actualizaciones automáticas.")
+            return
+        if self._staged_update is not None:
+            self._offer_update(self._staged_update[0])
+            return
+        if self._update_check_task is not None or self._update_download_task is not None:
+            return
+        task = ModelTask(lambda _progress, _cancelled: ReleaseUpdater().check(APP_VERSION))
+        self._update_check_task = task
+        task.signals.completed.connect(lambda info: self._update_check_finished(info, manual))
+        task.signals.failed.connect(lambda message: self._update_check_failed(message, manual))
+        self.io_pool.start(task)
+
+    def _update_check_finished(self, info: UpdateInfo | None, manual: bool) -> None:
+        self._update_check_task = None
+        if info is not None:
+            self._offer_update(info)
+        elif manual:
+            self._toast("Sin actualizaciones", f"Ya tienes la versión {APP_VERSION}.")
+
+    def _update_check_failed(self, message: str, manual: bool) -> None:
+        self._update_check_task = None
+        if manual:
+            self._toast("No se pudo buscar actualizaciones", message, "error")
+
+    def _offer_update(self, info: UpdateInfo) -> None:
+        dialog = QMessageBox(self)
+        dialog.setWindowTitle("Actualización disponible")
+        dialog.setTextFormat(Qt.PlainText)
+        dialog.setText(f"KuroPanel Studio {info.version} está disponible.\nVersión actual: {APP_VERSION}.")
+        dialog.setInformativeText("Se descargará y verificará el instalador antes de cerrar la aplicación.")
+        install_button = dialog.addButton("Actualizar ahora", QMessageBox.AcceptRole)
+        dialog.addButton("Más tarde", QMessageBox.RejectRole)
+        self.ui_translator.refresh(dialog)
+        dialog.exec()
+        if dialog.clickedButton() is not install_button:
+            return
+        if self.current_task is not None:
+            self._toast("Proceso en curso", "Espera a que termine antes de actualizar.")
+            return
+        if self._staged_update is not None and self._staged_update[0] == info:
+            self._install_update(self._staged_update[1])
+        else:
+            self._download_update(info)
+
+    def _download_update(self, info: UpdateInfo) -> None:
+        destination = self.settings.path.parent / "Updates" / info.filename
+        dialog = QProgressDialog("Descargando actualización…", "Cancelar", 0, 100, self)
+        dialog.setWindowTitle("Actualizando KuroPanel Studio")
+        dialog.setWindowModality(Qt.ApplicationModal)
+        dialog.setMinimumDuration(0)
+        dialog.setAutoClose(False)
+        dialog.setAutoReset(False)
+        self._update_progress_dialog = dialog
+        task = ModelTask(lambda report, cancelled: ReleaseUpdater().download(
+            info, destination, report, cancelled,
+        ))
+        self._update_download_task = task
+        dialog.canceled.connect(task.cancel)
+        task.signals.progress.connect(dialog.setValue)
+        task.signals.completed.connect(lambda path: self._update_download_finished(info, path))
+        task.signals.failed.connect(self._update_download_failed)
+        self.ui_translator.refresh(dialog)
+        dialog.show()
+        self.io_pool.start(task)
+
+    def _update_download_finished(self, info: UpdateInfo, path: Path) -> None:
+        self._update_download_task = None
+        self._staged_update = (info, path)
+        if self._update_progress_dialog is not None:
+            self._update_progress_dialog.close()
+            self._update_progress_dialog = None
+        self._install_update(path)
+
+    def _update_download_failed(self, message: str) -> None:
+        self._update_download_task = None
+        if self._update_progress_dialog is not None:
+            self._update_progress_dialog.close()
+            self._update_progress_dialog = None
+        if message != "Operación cancelada" and message != "Descarga cancelada.":
+            self._toast("No se pudo actualizar", message, "error")
+
+    def _install_update(self, installer: Path) -> None:
+        if not installer.is_file() or not self.close():
+            return
+        language = "english" if self.settings.data["general"].get("ui_language") == "en" else "spanish"
+        flags = getattr(subprocess, "DETACHED_PROCESS", 0) | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+        try:
+            subprocess.Popen(
+                [str(installer), "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART",
+                 "/CLOSEAPPLICATIONS", "/SP-", f"/LANG={language}"],
+                cwd=str(installer.parent), creationflags=flags, close_fds=True,
+            )
+        except OSError as error:
+            self._toast("No se pudo abrir el instalador", str(error), "error")
+            self.show()
 
     def open_settings(self) -> None:
         # Existing imported project fonts must be registered before the profile
@@ -2378,6 +2593,9 @@ class MainWindow(QMainWindow):
         previous_device_mode = str(self.settings.data.get("performance", {}).get("device_mode", "auto"))
         previous_resource_profile = self.resource_policy.name
         self.settings.update_workflow(values)
+        self.ui_translator.set_language(self.settings.data["general"]["ui_language"])
+        self.ocr.set_endpoint(values.get("ocr_base_url", ""))
+        self.ai_panel.ocr_model.setCurrentText(self.settings.data["ocr"]["model"])
         self._psd_auto_sync = bool(values.get("psd_auto_sync", True))
         self._configure_psd_watcher(reset_signatures=False)
         self.resource_policy = build_resource_policy(
@@ -2430,6 +2648,7 @@ class MainWindow(QMainWindow):
         self.ai_panel.translate_model.setCurrentText(values["model"])
         self._configure_autosave_timer()
         self._update_provider_statuses()
+        self.ui_translator.refresh(self)
         self._toast("Configuración guardada", "Credenciales cifradas y flujo de IA actualizado.")
 
     def open_watermark_editor(self) -> None:
@@ -2441,6 +2660,8 @@ class MainWindow(QMainWindow):
             dialog.remove_current_requested.connect(self._remove_watermark_current)
             dialog.remove_chapter_requested.connect(self._remove_watermark_chapter)
             dialog.dialog_closed.connect(self._watermark_dialog_closed)
+            dialog.redistribute_requested.connect(self._redistribute_watermark_current)
+            dialog.redistribute_chapter_requested.connect(self._redistribute_watermark_chapter)
             self.watermark_dialog = dialog
         self.watermark_dialog.set_settings(self.watermark_settings)
         self._watermark_removed_explicitly = False
@@ -2454,10 +2675,15 @@ class MainWindow(QMainWindow):
         self._watermark_removed_explicitly = False
         previous = self.watermark_settings
         updated = normalized_watermark(settings)
+        # Canvas dragging may have changed positions since the dialog opened.
+        # Appearance controls must not restore that stale snapshot.
+        updated["page_positions"] = copy.deepcopy(previous.get("page_positions", {}))
+        updated["positions"] = copy.deepcopy(previous.get("positions"))
         geometry_keys = {
             "png_bytes", "size_mode", "scale_percent", "width_px", "anchor",
             "margin_x", "margin_y", "offset_x", "offset_y", "rotation",
             "repeat", "auto_count", "repeat_count", "avoid_text", "seam_safe", "keep_inside",
+            "distribution", "minimum_gap",
         }
         if self.project.pages and any(previous.get(key) != updated.get(key) for key in geometry_keys):
             updated["page_positions"].pop(self.project.active_page.name, None)
@@ -2467,6 +2693,38 @@ class MainWindow(QMainWindow):
         self._watermark_persist_timer.start()
         if self.project.pages:
             self._history_timer.start()
+
+    def _redistribute_watermark_current(self) -> None:
+        if not self.project.pages or not self._watermark_ready():
+            return
+        self.watermark_settings["page_positions"].pop(self.project.active_page.name, None)
+        self.watermark_settings["positions"] = None
+        if self.watermark_dialog is not None:
+            self.watermark_dialog.set_settings(self.watermark_settings)
+        self._refresh_watermark_preview(force=True)
+        self._history_timer.start()
+
+    def _redistribute_watermark_chapter(self) -> None:
+        if not self.project.pages or not self._watermark_ready():
+            return
+        self.watermark_settings["page_positions"] = {}
+        self.watermark_settings["positions"] = None
+        if self.watermark_dialog is not None:
+            self.watermark_dialog.set_settings(self.watermark_settings)
+        self._refresh_watermark_preview(force=True)
+        self._history_timer.start()
+
+    def _chapter_watermarks(self, preview=False) -> dict:
+        settings = copy.deepcopy(self.watermark_settings)
+        if preview and not settings.get("enabled_pages"):
+            settings["enabled_pages"] = [page.name for page in self.project.pages]
+        elif preview and self.project.active_page.name not in settings["enabled_pages"]:
+            settings["enabled_pages"].append(self.project.active_page.name)
+        return chapter_watermark_settings([
+            dict(name=page.name, width=page.width, height=page.height,
+                 regions=self.page_regions.get(page_key(page), []))
+            for page in self.project.pages
+        ], settings)
 
     def _watermark_positions_changed(self, positions: list[list[int]]) -> None:
         if not self.project.pages or self._restoring_state:
@@ -2572,8 +2830,7 @@ class MainWindow(QMainWindow):
         current_name = self.project.active_page.name
         enabled = current_name in self.watermark_settings.get("enabled_pages", [])
         visible = bool(force or enabled)
-        preview_settings = copy.deepcopy(self.watermark_settings)
-        preview_settings["avoid_regions"] = copy.deepcopy(self.page_regions.get(self._active_key() or "", []))
+        preview_settings = self._chapter_watermarks(preview=force).get(current_name)
         self.canvas_shell.canvas.set_watermark(preview_settings, visible, current_name)
         if self.watermark_dialog is not None:
             self.watermark_dialog.set_scope_status(
@@ -2586,11 +2843,7 @@ class MainWindow(QMainWindow):
             return None
         if not watermark_bytes(self.watermark_settings):
             return None
-        settings = copy.deepcopy(self.watermark_settings)
-        settings["avoid_regions"] = copy.deepcopy(self.page_regions.get(page_key(page), []))
-        if page.name in settings.get("page_positions", {}):
-            settings["positions"] = settings["page_positions"][page.name]
-        return settings
+        return self._chapter_watermarks().get(page.name)
 
     def edit_typography(self) -> None:
         index = self.layers.current_index()
@@ -2645,6 +2898,8 @@ class MainWindow(QMainWindow):
         if hasattr(self, "undo_action"):
             self.undo_action.setEnabled(self.history.can_undo)
             self.redo_action.setEnabled(self.history.can_redo)
+            self.topbar.history_buttons["undo"].setEnabled(self.history.can_undo)
+            self.topbar.history_buttons["redo"].setEnabled(self.history.can_redo)
 
     def _editor_text_changed(self) -> None:
         if not self._restoring_state and self.project.pages:
@@ -2751,29 +3006,88 @@ class MainWindow(QMainWindow):
         self._toast("Rehacer", "Se volvió a aplicar el cambio.")
 
     def _task_completed(self, result, title: str, message: str, finished) -> None:
+        if self.task_progress._owner == "foreground" and self.task_progress._cancel_pending:
+            self._task_failed("Operación cancelada")
+            return
+        page_id = self._active_task_page_key
+        self.ai_panel.set_ocr_usage(self.ocr.usage_stats())
         metric_name = "LaMa" if title == "Limpieza" else ("LaMa del capítulo" if title == "Limpieza de capítulo" else title)
         metric = self.performance.finish(self._active_operation_key, metric_name)
         self._active_operation_key = ""
         self._active_operation_name = ""
+        self._active_task_page_key = None
         self.current_task = None
         self.inspector.set_progress(100, active=False)
+        self.task_progress.finish()
         if metric:
             self.status.set_operation_time(metric.name, metric.seconds)
             self._refresh_performance_monitor()
         if finished:
             finished(result)
+        category = self._operation_category(title)
+        if category:
+            completed = {page_id} if page_id and "capítulo" not in title.casefold() else set()
+            if "capítulo" in title.casefold() and isinstance(result, dict):
+                completed.update((result.get("pages", {}) if category == "Traducción" else result).keys())
+            for key in completed:
+                if key in self._page_failures:
+                    self._page_failures[key].pop(category, None)
+                    if not self._page_failures[key]:
+                        del self._page_failures[key]
+            if completed:
+                self._refresh_page_statuses()
         self._toast(f"{title} completado", message)
 
+    @staticmethod
+    def _operation_category(title: str) -> str:
+        name = title.casefold()
+        if "ocr" in name:
+            return "OCR"
+        if "traducci" in name:
+            return "Traducción"
+        if "limpieza" in name or "máscara" in name:
+            return "Limpieza"
+        if "detecci" in name:
+            return "Detección"
+        if "exportaci" in name:
+            return "Exportación"
+        return ""
+
     def _task_failed(self, message: str) -> None:
+        self.ai_panel.set_ocr_usage(self.ocr.usage_stats())
         operation_name = self._active_operation_name
+        page_id = self._active_task_page_key
         metric_name = "LaMa" if operation_name == "Limpieza" else (
             "LaMa del capítulo" if operation_name == "Limpieza de capítulo" else operation_name or "Error"
         )
         metric = self.performance.finish(self._active_operation_key, metric_name)
         self._active_operation_key = ""
         self._active_operation_name = ""
+        self._active_task_page_key = None
         self.current_task = None
         self.inspector.set_progress(0, active=False)
+        cancelled = message == "Operación cancelada"
+        self.task_progress.finish(error="" if cancelled else message, cancelled=cancelled)
+        if cancelled:
+            if operation_name in {"Máscara de texto", "Limpieza"}:
+                self.cancel_clean_mask_preview(silent=True)
+            if metric:
+                self.status.set_operation_time(metric.name, metric.seconds)
+                self._refresh_performance_monitor()
+            self._toast("Proceso cancelado", "No se aplicaron resultados de la tarea.")
+            return
+        category = self._operation_category(operation_name)
+        if category and page_id:
+            self._page_failures.setdefault(page_id, {})[category] = message.splitlines()[0]
+            self._refresh_page_statuses()
+        if "OCR" in operation_name.upper():
+            self.ai_panel.set_status("ocr", message.splitlines()[0], self.ai_panel.STATUS_WARNING)
+            if "404" in message:
+                provider, model = self.ai_panel.ocr_configuration()
+                self._ocr_rejected_config = (
+                    provider, model.strip(), self.settings.data["ocr"].get("base_url", ""),
+                )
+                self._update_provider_statuses()
         if operation_name in {"Máscara de texto", "Limpieza"}:
             # Every error path must release the editable overlay too.  Model
             # errors previously skipped the normal completion callback.
@@ -3140,10 +3454,18 @@ class MainWindow(QMainWindow):
                 if cancelled():
                     break
                 pages.append(ProjectManager._page_from_path(path))
-                progress(int(index * 100 / total))
+                progress(int(index * 100 / total), f"Página {index} de {total} · leyendo capítulo")
             return pages
         task = ModelTask(scan)
         self._folder_task = task
+        if self.current_task is None:
+            self.task_progress.start("Cargar capítulo", "Leyendo imágenes…", owner=f"folder:{token}")
+        task.signals.progress.connect(
+            lambda value, owner=f"folder:{token}": self.task_progress.update_progress(value, owner=owner)
+        )
+        task.signals.stage.connect(
+            lambda value, _page_id, owner=f"folder:{token}": self.task_progress.set_stage(value, owner=owner)
+        )
         task.signals.completed.connect(lambda pages: self._chapter_scanned(folder, pages, token))
         task.signals.failed.connect(lambda message: self._chapter_scan_failed(message, token))
         self.io_pool.start(task)
@@ -3152,15 +3474,28 @@ class MainWindow(QMainWindow):
         if token != self._folder_load_token:
             return
         self._folder_task = None
-        self._toast("No se pudo cargar el capítulo", message)
+        cancelled = message == "Operación cancelada"
+        self.task_progress.finish(
+            error="" if cancelled else message, owner=f"folder:{token}", cancelled=cancelled,
+        )
+        if not cancelled:
+            self._toast("No se pudo cargar el capítulo", message)
 
     def _chapter_scanned(self, folder: Path, pages: list, token: int) -> None:
         if token != self._folder_load_token:
             return
+        if self.task_progress._owner == f"folder:{token}" and self.task_progress._cancel_pending:
+            self._chapter_scan_failed("Operación cancelada", token)
+            return
         self._folder_task = None
+        self.task_progress.finish(
+            error="La carpeta no contiene imágenes compatibles." if not pages else "",
+            owner=f"folder:{token}",
+        )
         if not pages:
             self._toast("Sin imágenes", "La carpeta no contiene imágenes compatibles.")
             return
+        self._page_failures.clear()
         self.project.pages = pages
         self.project.active_index = 0
         self._configure_psd_watcher(reset_signatures=True)
@@ -3225,20 +3560,19 @@ class MainWindow(QMainWindow):
         )
 
     def run_ocr_api(self) -> None:
-        # The page action promises to OCR every box. Re-read even completed
-        # regions so a box moved after OCR cannot retain dialogue from its old
-        # position. _merge_ocr_results preserves manual translations/applied
-        # text that differ from the previous OCR source.
-        self._run_ocr_for_regions(self.regions, force=True)
+        self._run_ocr_for_regions(self.regions)
 
-    def run_ocr_api_one(self) -> None:
+    def run_ocr_api_one(self, force: bool = False) -> None:
         index = self.layers.current_index()
         if not 0 <= index < len(self.regions):
             self._toast("Selecciona una caja", "Haz clic en una caja antes de ejecutar OCR individual.")
             return
-        self._run_ocr_for_regions([self.regions[index]], force=True)
+        self._run_ocr_for_regions([self.regions[index]], force=force)
 
     def _run_ocr_for_regions(self, target_regions: list[dict], force: bool = False) -> None:
+        if self.current_task is not None:
+            self._toast("Proceso en curso", "Espera a que termine la operación actual.")
+            return
         if not self.project.pages or self.project.active_page.path is None:
             self._toast("Abre un capítulo", "Selecciona una carpeta con imágenes antes de ejecutar OCR.")
             return
@@ -3248,17 +3582,22 @@ class MainWindow(QMainWindow):
         if not force:
             target_regions = [
                 region for region in target_regions
-                if not str(region.get("text", "")).strip() or bool(region.get("ocr_stale", False))
+                if OCRManager.needs_recognition(region)
             ]
             if not target_regions:
                 self.ai_panel.set_status("ocr", "OCR ya completado · sin solicitudes nuevas", self.ai_panel.STATUS_OK)
                 self._toast("OCR ya disponible", "Todas las cajas de esta página ya contienen OCR.")
                 return
+        self._update_provider_statuses()
+        if not self.ai_panel.is_ready("ocr"):
+            self.open_settings()
+            return
         provider, model = self.ai_panel.ocr_configuration()
         key = self.credentials.get("Alibaba Cloud" if provider == "Qwen API" else provider)
         try:
+            self.ocr.set_endpoint(self.settings.data["ocr"].get("base_url", ""))
             self.ocr.validate(provider, key)
-        except RuntimeError as error:
+        except (RuntimeError, ValueError) as error:
             self._toast("OCR mediante API", str(error))
             return
         page = self.project.active_page
@@ -3336,6 +3675,7 @@ class MainWindow(QMainWindow):
             source = OCRManager.normalize_cjk_text(str(target.get("text", "")))
             target["text"] = source
             target["ocr_stale"] = False
+            target["ocr_checked"] = True
             if not old_translation.strip() or old_translation == old_source:
                 target["translation"] = source
             if (
@@ -3346,6 +3686,9 @@ class MainWindow(QMainWindow):
                 target["applied_text"] = str(target.get("translation") or source)
 
     def run_ocr_api_all(self) -> None:
+        if self.current_task is not None:
+            self._toast("Proceso en curso", "Espera a que termine la operación actual.")
+            return
         if not self.project.pages:
             self._toast("Abre un capítulo", "Carga imágenes antes de ejecutar OCR por lote.")
             return
@@ -3355,7 +3698,7 @@ class MainWindow(QMainWindow):
             key = page_key(page)
             missing = [
                 region for region in self.page_regions.get(key, [])
-                if not str(region.get("text", "")).strip() or bool(region.get("ocr_stale", False))
+                if OCRManager.needs_recognition(region)
             ]
             if page.path and missing:
                 targets: dict[str, dict] = {}
@@ -3375,11 +3718,16 @@ class MainWindow(QMainWindow):
                 return
             self._toast("Sin cajas de texto", "Detecta o dibuja cajas en las páginas primero.")
             return
+        self._update_provider_statuses()
+        if not self.ai_panel.is_ready("ocr"):
+            self.open_settings()
+            return
         provider, model = self.ai_panel.ocr_configuration()
         key = self.credentials.get("Alibaba Cloud" if provider == "Qwen API" else provider)
         try:
+            self.ocr.set_endpoint(self.settings.data["ocr"].get("base_url", ""))
             self.ocr.validate(provider, key)
-        except RuntimeError as error:
+        except (RuntimeError, ValueError) as error:
             self._toast("OCR mediante API", str(error))
             return
 
@@ -3390,9 +3738,13 @@ class MainWindow(QMainWindow):
                 manga = bool(self.page_styles.get(page_id, {}).get("ocr", {}).get("manga_mode", False))
                 ordered = TypographyManager.ordered(missing, manga)
                 offset, span = page_index * 100 / len(work), 100 / len(work)
+                page_stage = f"Página {page_index + 1} de {len(work)} · OCR"
+                progress(int(offset), page_stage, page_id)
                 results[page_id] = self.ocr.run_regions(
                     page.path, ordered, provider, model, key,
-                    lambda value, base=offset, amount=span: progress(int(base + value * amount / 100)),
+                    lambda value, base=offset, amount=span, label=page_stage, current=page_id: progress(
+                        int(base + value * amount / 100), label, current,
+                    ),
                     cancelled, copy.deepcopy(self._source_layer_states(page_id)),
                 )
                 if cancelled():
@@ -3590,12 +3942,16 @@ class MainWindow(QMainWindow):
                 ]
                 texts = [str(region["text"]) for region in ordered]
                 offset, span = page_index * 100 / len(pages), 100 / len(pages)
+                page_stage = f"Página {page_index + 1} de {len(pages)} · traducción"
+                progress(int(offset), page_stage, key)
                 result = self.translator.translate_with_context(
                     texts, provider, model, api_key,
                     configuration.get("source_language", "ZH"), configuration.get("target_language", "ES"),
                     translation_profile.get("glossary", []), translation_profile.get("prompt", ""),
                     "\n".join(context_blocks)[-5000:],
-                    lambda value, base=offset, amount=span: progress(int(base + value * amount / 100)),
+                    lambda value, base=offset, amount=span, label=page_stage, current=key: progress(
+                        int(base + value * amount / 100), label, current,
+                    ),
                     cancelled,
                 )
                 values = list(result.get("translations", []))
@@ -3788,7 +4144,7 @@ class MainWindow(QMainWindow):
         changed = 0
         for region in updated:
             old = previous_by_id.get(str(region.get("id", "")))
-            if old is None or not str(region.get("text", "")).strip():
+            if old is None or not (region.get("ocr_checked") or str(region.get("text", "")).strip()):
                 continue
             if any(int(old.get(key, 0)) != int(region.get(key, 0)) for key in geometry):
                 region["ocr_stale"] = True
@@ -3955,10 +4311,14 @@ class MainWindow(QMainWindow):
                     return {}
                 start = int((index - 1) * 100 / len(pages))
                 span = max(1, int(100 / len(pages)))
+                page_stage = f"Página {index} de {len(pages)} · limpieza"
+                progress(start, page_stage, page_key(page))
                 results[str(page.path)] = self.cleaner.clean(
                     page.path,
                     self.page_regions[str(page.path)],
-                    lambda value, offset=start, amount=span: progress(min(99, offset + int(value * amount / 100))),
+                    lambda value, offset=start, amount=span, label=page_stage, current=page_key(page): progress(
+                        min(99, offset + int(value * amount / 100)), label, current,
+                    ),
                     cancelled,
                     copy.deepcopy(self._source_layer_states(page_key(page))),
                 )
@@ -4185,21 +4545,25 @@ class MainWindow(QMainWindow):
         def export_chapter(progress, cancelled):
             from core.export_manager import export_page
             exported = 0
+            watermark_plan = chapter_watermark_settings([
+                dict(name=page.name, width=page.width, height=page.height,
+                     regions=regions_by_page.get(page_key(page), [])) for page in pages
+            ], watermark_settings)
             for index, page in enumerate(pages, start=1):
                 if cancelled():
                     break
+                progress(
+                    int((index - 1) * 100 / len(pages)),
+                    f"Página {index} de {len(pages)} · exportación", page_key(page),
+                )
                 key = page_key(page)
                 output = destination / f"{Path(page.name).stem}{extension}"
                 page_styles = copy.deepcopy(styles_by_page.get(key, {}))
-                if page.name in watermark_settings.get("enabled_pages", []) and watermark_bytes(watermark_settings):
-                    page_watermark = copy.deepcopy(watermark_settings)
-                    page_watermark["avoid_regions"] = copy.deepcopy(regions_by_page.get(key, []))
-                    if page.name in page_watermark.get("page_positions", {}):
-                        page_watermark["positions"] = page_watermark["page_positions"][page.name]
-                    page_styles["watermark"] = page_watermark
+                if page.name in watermark_plan:
+                    page_styles["watermark"] = watermark_plan[page.name]
                 export_page(output, page, regions_by_page.get(key, []), clean_by_page.get(key), page_styles, format_name)
                 exported += 1
-                progress(int(index * 100 / len(pages)))
+                progress(int(index * 100 / len(pages)), f"Página {index} de {len(pages)} · exportación", key)
             return exported
 
         self._start_task(export_chapter, "Exportación del capítulo", f"Se exportarán {len(pages)} páginas a resolución original.")
@@ -4284,6 +4648,7 @@ class MainWindow(QMainWindow):
                 self._prefetch_task = None
             self.prefetch_pool.clear()
             self.images.clear()
+            self._page_failures.clear()
             self.project.pages = state["pages"]
             self.project.active_index = state["active_index"]
             self._configure_psd_watcher(reset_signatures=True)
@@ -4368,6 +4733,10 @@ class MainWindow(QMainWindow):
 
     def closeEvent(self, event) -> None:
         self._remember_displayed_page_view()
+        if self._update_check_task is not None:
+            self._update_check_task.cancel()
+        if self._update_download_task is not None:
+            self._update_download_task.cancel()
         if self._prefetch_task is not None:
             self._prefetch_task.cancel()
         self.prefetch_pool.clear()

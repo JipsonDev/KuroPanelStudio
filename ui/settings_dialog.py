@@ -3,9 +3,10 @@ from __future__ import annotations
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (QCheckBox, QComboBox, QDialog, QDialogButtonBox, QFormLayout,
                                QGroupBox, QHBoxLayout, QLabel, QLineEdit, QTabWidget,
-                               QScrollArea, QSpinBox, QVBoxLayout, QWidget)
+                               QMessageBox, QScrollArea, QSpinBox, QVBoxLayout, QWidget)
 from ui.profile_settings import ProfileSettingsWidget
 from core.performance_manager import resource_policy
+from core.ocr_manager import OCRManager, OCRConfigurationError, ALIBABA_COMPATIBLE_URL
 
 
 class SettingsDialog(QDialog):
@@ -20,6 +21,24 @@ class SettingsDialog(QDialog):
         tabs.setElideMode(Qt.ElideRight)
         tabs.tabBar().setUsesScrollButtons(True)
         layout.addWidget(tabs)
+
+        interface = QWidget(); interface_form = QFormLayout(interface)
+        self.ui_language = QComboBox()
+        self.ui_language.setProperty("kuro_i18n_choices", True)
+        self.ui_language.addItem("Español", "es")
+        self.ui_language.addItem("English", "en")
+        language_index = self.ui_language.findData(
+            settings.get("general", {}).get("ui_language", "es")
+        )
+        self.ui_language.setCurrentIndex(max(0, language_index))
+        interface_form.addRow("Idioma de la interfaz", self.ui_language)
+        interface_hint = QLabel("Cambia los menús y controles de KuroPanel Studio. No modifica los idiomas de OCR ni de traducción.")
+        interface_hint.setWordWrap(True); interface_hint.setObjectName("Muted")
+        interface_form.addRow(interface_hint)
+        self.auto_check_updates = QCheckBox("Buscar actualizaciones automáticamente al iniciar")
+        self.auto_check_updates.setChecked(bool(settings.get("general", {}).get("auto_check_updates", True)))
+        interface_form.addRow(self.auto_check_updates)
+        tabs.addTab(interface, "Interfaz")
 
         providers = QWidget(); form = QFormLayout(providers)
         self.key_fields: dict[str, QLineEdit] = {}
@@ -47,6 +66,18 @@ class SettingsDialog(QDialog):
         tabs.addTab(providers, "Credenciales")
 
         workflow = QWidget(); workflow_form = QFormLayout(workflow)
+        self.ocr_model = QLineEdit(settings.get("ocr", {}).get("model", "qwen-vl-ocr"))
+        self.ocr_base_url = QLineEdit(settings.get("ocr", {}).get("base_url", ""))
+        self.ocr_base_url.setPlaceholderText(ALIBABA_COMPATIBLE_URL.removesuffix("/chat/completions"))
+        workflow_form.addRow("Modelo OCR", self.ocr_model)
+        workflow_form.addRow("URL de Alibaba OCR", self.ocr_base_url)
+        ocr_hint = QLabel(
+            "Copia la URL base de tu región y espacio de trabajo desde Model Studio. "
+            "La clave y el modelo deben estar disponibles allí. Vacío usa el servidor internacional."
+        )
+        ocr_hint.setWordWrap(True)
+        ocr_hint.setObjectName("Muted")
+        workflow_form.addRow(ocr_hint)
         self.translation_provider = QComboBox(); self.translation_provider.addItems(list(self.PROVIDERS))
         self.translation_provider.setCurrentText(settings["translate"].get("platform", "Gemini"))
         self.translation_model = QLineEdit(settings["translate"].get("model", "gemini-2.5-flash"))
@@ -74,6 +105,7 @@ class SettingsDialog(QDialog):
         performance = QWidget(); performance_form = QFormLayout(performance)
         performance_values = settings.get("performance", {})
         self.resource_profile = QComboBox()
+        self.resource_profile.setProperty("kuro_i18n_choices", True)
         self.resource_profile.addItem("Automático según el equipo", "auto")
         self.resource_profile.addItem("Bajo consumo", "low")
         self.resource_profile.addItem("Equilibrado", "balanced")
@@ -81,6 +113,7 @@ class SettingsDialog(QDialog):
         profile_index = self.resource_profile.findData(str(performance_values.get("resource_profile", "auto")))
         self.resource_profile.setCurrentIndex(max(0, profile_index))
         self.device_mode = QComboBox()
+        self.device_mode.setProperty("kuro_i18n_choices", True)
         self.device_mode.addItem("Automático (recomendado)", "auto")
         self.device_mode.addItem("GPU", "gpu")
         self.device_mode.addItem("CPU", "cpu")
@@ -126,7 +159,7 @@ class SettingsDialog(QDialog):
             )
             profile_scroll = QScrollArea(); profile_scroll.setObjectName("SettingsScroll")
             profile_scroll.setWidgetResizable(True); profile_scroll.setWidget(self.profile_settings)
-            tabs.insertTab(0, profile_scroll, "Perfiles de fuentes")
+            tabs.insertTab(1, profile_scroll, "Perfiles de fuentes")
             tabs.setCurrentIndex(0)
 
         buttons = QDialogButtonBox(QDialogButtonBox.Save | QDialogButtonBox.Cancel)
@@ -160,12 +193,16 @@ class SettingsDialog(QDialog):
 
     def values(self) -> dict:
         values = {
+            "ocr_model": self.ocr_model.text().strip(),
+            "ocr_base_url": self.ocr_base_url.text().strip(),
             "keys": {name: field.text().strip() for name, field in self.key_fields.items()},
             "provider": self.translation_provider.currentText(),
             "model": self.translation_model.text().strip(),
             "source_language": self.source_language.text().strip(),
             "target_language": self.target_language.text().strip(),
             "autosave_minutes": int(self.autosave_interval.currentText()),
+            "ui_language": self.ui_language.currentData(),
+            "auto_check_updates": self.auto_check_updates.isChecked(),
             "psd_auto_sync": self.psd_auto_sync.isChecked(),
             "resource_profile": self.resource_profile.currentData(),
             "device_mode": self.device_mode.currentData(),
@@ -175,3 +212,13 @@ class SettingsDialog(QDialog):
         if self.profile_settings is not None:
             values["active_type"], values["active_project"] = self.profile_settings.values()
         return values
+
+    def accept(self) -> None:
+        try:
+            OCRManager.normalize_endpoint(self.ocr_base_url.text())
+            if not self.ocr_model.text().strip():
+                raise OCRConfigurationError("Escribe el identificador del modelo OCR.")
+        except (OCRConfigurationError, ValueError) as error:
+            QMessageBox.warning(self, "Configuración OCR", str(error))
+            return
+        super().accept()

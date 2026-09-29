@@ -256,6 +256,7 @@ class InspectorPanel(QFrame):
     def set_layer_text(self, index: int, source: str, translated: str, number: int | None = None) -> None:
         box_number = int(number if number is not None else index + 1)
         self.text_section.setText(f"Caja #{box_number:02} · OCR y traducción")
+        self.ocr_source.setProperty("kuro_i18n_ignore", bool(source))
         self.ocr_source.setText(
             f"#{box_number:02}  {source}" if source
             else f"#{box_number:02}  Sin OCR. Puedes escribir directamente el texto final."
@@ -267,6 +268,7 @@ class InspectorPanel(QFrame):
 
     def clear_layer_text(self) -> None:
         self.text_section.setText("Texto de la capa")
+        self.ocr_source.setProperty("kuro_i18n_ignore", False)
         self.ocr_source.setText("Selecciona una caja para ver su OCR original.")
         self.text_editor.blockSignals(True)
         self.text_editor.clear()

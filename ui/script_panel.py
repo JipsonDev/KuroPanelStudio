@@ -89,6 +89,7 @@ class DialogueScriptCard(QFrame):
 
         role = str(region.get("font_role") or "Diálogo")
         self.role_label = QLabel(role)
+        self.role_label.setProperty("kuro_i18n_ignore", True)
         self.role_label.setStyleSheet("color: #7E9BB6; font-size: 11px; font-weight: 600;")
         header_row.addWidget(self.role_label)
 
@@ -112,6 +113,7 @@ class DialogueScriptCard(QFrame):
         orig_text = str(region.get("text", "")).strip()
         if orig_text:
             self.orig_box = QLabel(orig_text)
+            self.orig_box.setProperty("kuro_i18n_ignore", True)
             self.orig_box.setWordWrap(True)
             self.orig_box.setTextInteractionFlags(Qt.TextSelectableByMouse)
             self.orig_box.setStyleSheet(

@@ -79,7 +79,7 @@ class RetouchQualityTests(unittest.TestCase):
         )
         self.assertTrue(panel.retouch_rows["paint"].lock_button.isEnabled())
 
-    def test_page_list_does_not_decode_or_render_thumbnails(self) -> None:
+    def test_page_list_defers_thumbnail_decoding_for_missing_pages(self) -> None:
         pages = [Page(f"{index:03}.png") for index in range(180)]
         panel = ImagesPanel(pages, ImageManager())
         requested: list[tuple[int, int]] = []
@@ -91,7 +91,8 @@ class RetouchQualityTests(unittest.TestCase):
 
         self.assertEqual(requested, [])
         first_row = panel.list.itemWidget(panel.list.item(0))
-        self.assertFalse(hasattr(first_row, "thumbnail"))
+        self.assertTrue(hasattr(first_row, "thumbnail"))
+        self.assertIsNotNone(first_row.thumbnail.pixmap())
         panel.close()
 
     def test_progressive_page_preview_keeps_original_scene_geometry_and_cache(self) -> None:

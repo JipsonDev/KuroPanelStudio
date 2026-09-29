@@ -1,10 +1,30 @@
+param(
+    [ValidatePattern('^\d+\.\d+\.\d+$')]
+    [string]$Version = "0.2.0"
+)
+
 $ErrorActionPreference = "Stop"
 $projectRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
-$python = Join-Path $projectRoot ".venv-gpu\Scripts\python.exe"
+$gpuPython = Join-Path $projectRoot ".venv-gpu\Scripts\python.exe"
+$cpuPython = Join-Path $projectRoot ".venv\Scripts\python.exe"
+$python = if (Test-Path -LiteralPath $gpuPython) { $gpuPython } else { $cpuPython }
 
 if (-not (Test-Path -LiteralPath $python)) {
-    throw "No se encontro el entorno .venv-gpu."
+    throw "No se encontro .venv-gpu ni .venv."
 }
+
+$versionPath = Join-Path $projectRoot "assets\build_version.json"
+$versionInfoPath = Join-Path $projectRoot "assets\windows_version_info.txt"
+$previousVersion = [IO.File]::ReadAllBytes($versionPath)
+$previousVersionInfo = [IO.File]::ReadAllBytes($versionInfoPath)
+$parts = $Version.Split('.')
+$json = "{`n  `"version`": `"$Version`"`n}`n"
+[IO.File]::WriteAllText($versionPath, $json, [Text.UTF8Encoding]::new($false))
+$versionInfo = [IO.File]::ReadAllText($versionInfoPath)
+$versionInfo = [regex]::Replace($versionInfo, 'filevers=\(\d+,\s*\d+,\s*\d+,\s*\d+\)', "filevers=($($parts[0]), $($parts[1]), $($parts[2]), 0)")
+$versionInfo = [regex]::Replace($versionInfo, 'prodvers=\(\d+,\s*\d+,\s*\d+,\s*\d+\)', "prodvers=($($parts[0]), $($parts[1]), $($parts[2]), 0)")
+$versionInfo = [regex]::Replace($versionInfo, "(StringStruct\(u'(?:FileVersion|ProductVersion)', u')\d+\.\d+\.\d+(')", "`${1}$Version`$2")
+[IO.File]::WriteAllText($versionInfoPath, $versionInfo, [Text.UTF8Encoding]::new($false))
 
 Push-Location $projectRoot
 try {
@@ -24,4 +44,6 @@ try {
 }
 finally {
     Pop-Location
+    [IO.File]::WriteAllBytes($versionPath, $previousVersion)
+    [IO.File]::WriteAllBytes($versionInfoPath, $previousVersionInfo)
 }

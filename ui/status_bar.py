@@ -4,7 +4,7 @@ import threading
 
 import psutil
 from PySide6.QtCore import QProcess, QTimer
-from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel, QWidget
+from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel, QMenu, QSizePolicy, QToolButton, QWidget
 
 
 class StatusBar(QFrame):
@@ -12,18 +12,33 @@ class StatusBar(QFrame):
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
-        self.setObjectName("TopBar")
-        self.setFixedHeight(31)
-        layout = QHBoxLayout(self); layout.setContentsMargins(12, 0, 12, 0); layout.setSpacing(14)
-        self.resources = QLabel(); self.resources.setStyleSheet("color:#00CFE8; font-size:10px;")
-        layout.addWidget(self.resources)
-        self.operation = QLabel("Sin operaciones medidas"); self.operation.setObjectName("Muted")
-        layout.addWidget(self.operation)
-        layout.addStretch()
-        self.metadata = QLabel("Sin imagen"); self.metadata.setObjectName("Muted"); layout.addWidget(self.metadata)
-        layout.addStretch()
-        version = QLabel("v0.1.0"); version.setObjectName("Muted"); layout.addWidget(version)
-        sync = QLabel("●  Todo sincronizado"); sync.setStyleSheet("color:#38D477; font-size:10px;"); layout.addWidget(sync)
+        self.setObjectName("StatusBar")
+        self.setFixedHeight(38)
+        layout = QHBoxLayout(self); layout.setContentsMargins(14, 0, 14, 0); layout.setSpacing(12)
+        # Keep collecting diagnostics, but expose them on demand instead of
+        # filling the status strip with four constantly changing counters.
+        self.resources = QLabel()
+        self.operation = QLabel("Sin operaciones medidas")
+        self._page_details = "Sin imagen"
+        self.activity = QLabel("●  Listo")
+        self.activity.setStyleSheet("color:#44E58A; font-size:12px; font-weight:600;")
+        layout.addWidget(self.activity)
+        layout.addStretch(1)
+        self.metadata = QLabel("Sin imagen")
+        self.metadata.setObjectName("StatusPage")
+        self.metadata.setMinimumWidth(0)
+        self.metadata.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
+        layout.addWidget(self.metadata, 3)
+        layout.addStretch(1)
+        self.details = QToolButton()
+        self.details.setObjectName("StatusDetails")
+        self.details.setText("Detalles")
+        self.details.setToolTip("Ver uso de recursos y tiempos de procesamiento")
+        self.details.setPopupMode(QToolButton.InstantPopup)
+        self.details_menu = QMenu(self.details)
+        self.details_menu.aboutToShow.connect(self._populate_details_menu)
+        self.details.setMenu(self.details_menu)
+        layout.addWidget(self.details)
         self._nvml = None
         self._gpu_handle = None
         self._gpu_snapshot = "GPU —   VRAM —"
@@ -92,6 +107,24 @@ class StatusBar(QFrame):
         duration = f"{milliseconds:.0f} ms" if milliseconds < 1000 else f"{seconds:.2f} s"
         self.operation.setText(f"Última: {name} · {duration}")
 
+    def set_busy(self, active: bool) -> None:
+        self.activity.setText("●  Procesando" if active else "●  Listo")
+        self.activity.setStyleSheet(
+            f"color:{'#FFC928' if active else '#44E58A'}; font-size:12px; font-weight:600;"
+        )
+
+    def _populate_details_menu(self) -> None:
+        self.details_menu.clear()
+        for line in (self._page_details, self.resources.text(), self.operation.text()):
+            action = self.details_menu.addAction(line)
+            action.setEnabled(False)
+        if self._performance_tooltip:
+            self.details_menu.addSeparator()
+            for line in self._performance_tooltip.splitlines():
+                if line:
+                    action = self.details_menu.addAction(line)
+                    action.setEnabled(False)
+
     def set_performance_snapshot(self, metrics: dict, cache_stats: dict, profile: str) -> None:
         """Expose rolling timings and decoded-page memory without adding UI clutter."""
         profile_names = {
@@ -118,4 +151,6 @@ class StatusBar(QFrame):
         self.resources.setToolTip(self._performance_tooltip)
 
     def set_page(self, name: str, width: int, height: int, size: str) -> None:
-        self.metadata.setText(f"{name}   |   {width} × {height} px   |   {size}")
+        self._page_details = f"{name} · {width} × {height} px · {size}"
+        self.metadata.setText(f"{name} · {width} × {height} px")
+        self.metadata.setToolTip(self._page_details)

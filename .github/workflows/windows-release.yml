@@ -1,0 +1,47 @@
+name: Windows release
+
+on:
+  push:
+    tags:
+      - 'v[0-9]*.[0-9]*.[0-9]*'
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          lfs: true
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+          cache-dependency-path: requirements-release.txt
+      - name: Install build dependencies
+        shell: pwsh
+        run: |
+          python -m venv .venv
+          .\.venv\Scripts\python.exe -m pip install --upgrade pip
+          .\.venv\Scripts\python.exe -m pip install -r requirements-release.txt pyinstaller pytest
+          choco install innosetup -y --no-progress
+      - name: Test application
+        shell: pwsh
+        run: .\.venv\Scripts\python.exe -m pytest -q
+      - name: Build app and installer
+        shell: pwsh
+        run: |
+          $version = '${{ github.ref_name }}'.Substring(1)
+          .\build_windows.ps1 -Version $version
+          .\build_installer.ps1 -Version $version
+      - name: Publish GitHub Release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $tag = '${{ github.ref_name }}'
+          $version = $tag.Substring(1)
+          $folder = "github-release/KuroPanelStudio-v$version"
+          gh release create $tag "$folder/KuroPanelStudio-Setup-$version-Windows-x64.exe" "$folder/SHA256SUMS.txt" --verify-tag --generate-notes

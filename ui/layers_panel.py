@@ -3,7 +3,8 @@ from __future__ import annotations
 from PySide6.QtCore import QPoint, QItemSelectionModel, QSize, QTimer, Qt, Signal
 from PySide6.QtWidgets import (
     QAbstractItemView, QCheckBox, QFrame, QHBoxLayout, QInputDialog, QLabel, QLineEdit,
-    QListWidget, QListWidgetItem, QScrollArea, QSizePolicy, QSlider, QVBoxLayout, QWidget,
+    QListWidget, QListWidgetItem, QMenu, QScrollArea, QSizePolicy, QSlider, QVBoxLayout,
+    QWidget, QToolButton,
 )
 
 from ui.widgets.controls import CollapsibleSection, ModernButton, SectionTitle
@@ -54,11 +55,16 @@ class ImageLayerItem(QFrame):
         self.editable = bool(editable)
         self.setObjectName("ImageLayerRow")
         self.setProperty("active", False)
+        self.setMinimumWidth(0)
         if self.editable:
             self.setCursor(Qt.PointingHandCursor)
-        layout = QHBoxLayout(self)
-        layout.setContentsMargins(5 if self.editable else 7, 6, 5 if self.editable else 6, 6)
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(5 if self.editable else 9, 7, 5 if self.editable else 9, 7)
+        outer.setSpacing(7)
+        layout = QHBoxLayout()
+        layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(4 if self.editable else 7)
+        outer.addLayout(layout)
 
         glyph = QLabel()
         glyph.setObjectName("ImageLayerGlyph")
@@ -71,8 +77,14 @@ class ImageLayerItem(QFrame):
         details.setSpacing(1)
         self.title = QLabel(name)
         self.title.setObjectName("LayerName")
+        self.title.setToolTip(name)
+        self.title.setMinimumWidth(0)
+        self.title.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
         self.subtitle = QLabel(description)
         self.subtitle.setObjectName("Caption")
+        self.subtitle.setToolTip(description)
+        self.subtitle.setMinimumWidth(0)
+        self.subtitle.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
         details.addWidget(self.title)
         details.addWidget(self.subtitle)
         layout.addLayout(details, 1)
@@ -80,19 +92,16 @@ class ImageLayerItem(QFrame):
         self.opacity = QSlider(Qt.Horizontal)
         self.opacity.setRange(0, 100)
         self.opacity.setValue(100)
-        self.opacity.setFixedWidth(40 if self.editable else 56)
+        self.opacity.setMinimumWidth(0)
         self.opacity.setToolTip(f"Opacidad de {name.lower()}")
         self.opacity.valueChanged.connect(self._opacity_changed)
-        layout.addWidget(self.opacity)
         self.percent = QLabel("100%")
         self.percent.setObjectName("LayerOpacity")
-        self.percent.setFixedWidth(28)
-        self.percent.setVisible(not self.editable)
-        layout.addWidget(self.percent)
+        self.percent.setFixedWidth(32)
         if self.editable:
             # Per-layer opacity lives in the shared inspector below the rows.
-            # Repeating a slider in every narrow row made the panel cramped.
-            self.opacity.setVisible(False)
+            self.opacity.hide()
+            self.percent.hide()
 
         self.eye = ModernButton("", icon_name="eye")
         self.eye.setObjectName("LayerEye")
@@ -106,6 +115,15 @@ class ImageLayerItem(QFrame):
             self.lock_button.setFixedSize(23, 27)
             self.lock_button.clicked.connect(self._toggle_lock)
             layout.addWidget(self.lock_button)
+        else:
+            opacity_row = QHBoxLayout()
+            opacity_row.setSpacing(8)
+            caption = QLabel("OPACIDAD")
+            caption.setObjectName("Caption")
+            opacity_row.addWidget(caption)
+            opacity_row.addWidget(self.opacity, 1)
+            opacity_row.addWidget(self.percent)
+            outer.addLayout(opacity_row)
         self.patch_count = 0
 
     def set_state(self, available: bool, visible: bool, opacity: int, locked: bool = False) -> None:
@@ -139,6 +157,7 @@ class ImageLayerItem(QFrame):
         if attention:
             detail += f" · {int(attention)} por revisar"
         self.subtitle.setText(detail)
+        self.subtitle.setToolTip(detail)
 
     def set_active(self, active: bool) -> None:
         self.setProperty("active", bool(active))
@@ -205,6 +224,7 @@ class LayerItem(QFrame):
         details.setSpacing(2)
         self.name_label = QLabel(_layer_name(index, region))
         self.name_label.setObjectName("LayerName")
+        self.name_label.setProperty("kuro_i18n_ignore", True)
         self.name_label.setMinimumWidth(0)
         self.name_label.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
         self.name_label.setTextInteractionFlags(Qt.NoTextInteraction)
@@ -330,6 +350,7 @@ class LayerItem(QFrame):
 
 
 class LayersPanel(QFrame):
+    detect_requested = Signal()
     region_selected = Signal(int)
     visibility_changed = Signal(int, bool)
     lock_changed = Signal(int, bool)
@@ -388,6 +409,8 @@ class LayersPanel(QFrame):
         self.retouch_section.header.setToolTip(
             "Mostrar u ocultar las capas no destructivas de limpieza y restauración"
         )
+        self.retouch_section.header.setMinimumWidth(0)
+        self.retouch_section.header.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Fixed)
         layout.addWidget(self.retouch_section)
         self._active_retouch = "automatic"
 
@@ -451,6 +474,8 @@ class LayersPanel(QFrame):
         psd_sync_layout.setSpacing(6)
         self.psd_sync_status = QLabel("Esperando cambios")
         self.psd_sync_status.setObjectName("Muted")
+        self.psd_sync_status.setMinimumWidth(0)
+        self.psd_sync_status.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
         self.psd_sync_status.setToolTip("El PSD se recarga después de guardarlo en Photoshop")
         psd_sync_layout.addWidget(self.psd_sync_status, 1)
         self.psd_auto_sync = QCheckBox("Auto")
@@ -485,7 +510,7 @@ class LayersPanel(QFrame):
         layout.addWidget(self.search)
 
         toolbar = QHBoxLayout()
-        toolbar.setSpacing(5)
+        toolbar.setSpacing(7)
         self.rename_button = self._tool_button("edit", "Renombrar capa", self._rename_current)
         self.duplicate_button = self._tool_button("copy", "Duplicar capa", self._duplicate_current)
         self.visibility_button = self._tool_button("eye", "Mostrar u ocultar selección", self._toggle_selected_visibility)
@@ -493,16 +518,43 @@ class LayersPanel(QFrame):
         self.up_button = self._tool_button("arrow-up", "Subir en el orden", lambda: self._move_current(-1))
         self.down_button = self._tool_button("arrow-down", "Bajar en el orden", lambda: self._move_current(1))
         self.delete_button = self._tool_button("trash", "Eliminar capa", self._delete_current, danger=True)
-        for button in (
-            self.rename_button, self.duplicate_button, self.visibility_button, self.lock_button,
-            self.up_button, self.down_button, self.delete_button,
+        self.rename_button.setText("Renombrar")
+        self.rename_button.setFixedHeight(34)
+        self.rename_button.setMinimumWidth(0)
+        self.rename_button.setMaximumWidth(16777215)
+        self.rename_button.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Fixed)
+        toolbar.addWidget(self.rename_button, 1)
+        self.more_button = QToolButton()
+        self.more_button.setObjectName("LayerMore")
+        self.more_button.setText("Más")
+        self.more_button.setIcon(icon("more", "#D5DEEA", 16))
+        self.more_button.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
+        self.more_button.setPopupMode(QToolButton.InstantPopup)
+        self.more_button.setFixedHeight(34)
+        self.more_button.setFixedWidth(72)
+        self.more_button.setToolTip("Más acciones de capa")
+        self.more_menu = QMenu(self.more_button)
+        self.more_actions = {}
+        for key, title, callback in (
+            ("duplicate", "Duplicar capa", self._duplicate_current),
+            ("visibility", "Mostrar u ocultar", self._toggle_selected_visibility),
+            ("lock", "Bloquear o desbloquear", self._toggle_selected_lock),
+            ("up", "Subir capa", lambda: self._move_current(-1)),
+            ("down", "Bajar capa", lambda: self._move_current(1)),
+            ("delete", "Eliminar capa", self._delete_current),
         ):
-            toolbar.addWidget(button)
-        toolbar.addStretch()
+            if key == "delete":
+                self.more_menu.addSeparator()
+            action = self.more_menu.addAction(title)
+            action.triggered.connect(callback)
+            self.more_actions[key] = action
+        self.more_button.setMenu(self.more_menu)
+        toolbar.addWidget(self.more_button)
         layout.addLayout(toolbar)
 
         self.layers = QListWidget()
         self.layers.setObjectName("LayersList")
+        self.layers.setMinimumHeight(170)
         self.layers.setVerticalScrollMode(QAbstractItemView.ScrollPerPixel)
         self.layers.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self.layers.setSelectionMode(QAbstractItemView.ExtendedSelection)
@@ -520,11 +572,25 @@ class LayersPanel(QFrame):
         )
         layout.addWidget(self.layers, 1)
 
-        self.empty_label = QLabel("Las cajas de texto aparecerán aquí")
+        self.empty_state = QFrame()
+        self.empty_state.setObjectName("LayerEmptyState")
+        empty_layout = QVBoxLayout(self.empty_state)
+        empty_layout.setContentsMargins(12, 12, 12, 12)
+        empty_layout.setSpacing(10)
+        empty_layout.addStretch()
+        self.empty_label = QLabel("Aún no hay cajas de texto")
         self.empty_label.setObjectName("Muted")
         self.empty_label.setAlignment(Qt.AlignCenter)
         self.empty_label.setWordWrap(True)
-        layout.addWidget(self.empty_label)
+        empty_layout.addWidget(self.empty_label)
+        self.empty_action = ModernButton("Detectar cajas", "Primary", icon_name="scan")
+        self.empty_action.setMinimumWidth(0)
+        self.empty_action.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Fixed)
+        self.empty_action.setToolTip("Buscar cajas de texto en la página actual")
+        self.empty_action.clicked.connect(self.detect_requested)
+        empty_layout.addWidget(self.empty_action)
+        empty_layout.addStretch()
+        layout.addWidget(self.empty_state, 1)
 
         opacity_row = QHBoxLayout()
         opacity_label = QLabel("OPACIDAD")
@@ -543,6 +609,7 @@ class LayersPanel(QFrame):
         if count:
             self.set_regions([{"confidence": 1.0} for _ in range(count)])
         else:
+            self.layers.hide()
             self._update_actions()
 
         self.set_image_layers(False, False, {})
@@ -559,6 +626,11 @@ class LayersPanel(QFrame):
         clean = state.get("clean", {})
         self.original_layer.set_state(
             original_available, original.get("visible", True), original.get("opacity", 100),
+        )
+        self.empty_action.setEnabled(original_available)
+        self.empty_label.setText(
+            "Aún no hay cajas de texto" if original_available
+            else "Abre una página para detectar texto"
         )
         self.clean_layer.set_state(
             clean_available, clean.get("visible", True), clean.get("opacity", 100),
@@ -678,6 +750,7 @@ class LayersPanel(QFrame):
     ) -> None:
         self.psd_sync_bar.setVisible(bool(available))
         self.psd_sync_status.setText(text)
+        self.psd_sync_status.setToolTip(text)
         self.psd_auto_sync.blockSignals(True)
         self.psd_auto_sync.setChecked(bool(auto))
         self.psd_auto_sync.blockSignals(False)
@@ -729,7 +802,8 @@ class LayersPanel(QFrame):
         if structure_unchanged:
             self.layers.clearSelection()
         self.count_label.setText(str(len(regions)))
-        self.empty_label.setVisible(not regions)
+        self.empty_state.setVisible(not regions)
+        self.layers.setVisible(bool(regions))
         selected_row = -1
         if not structure_unchanged:
             self.layers.clear()
@@ -898,6 +972,14 @@ class LayersPanel(QFrame):
         self.up_button.setEnabled(enabled and len(selected) <= 1 and row > 0)
         self.down_button.setEnabled(enabled and len(selected) <= 1 and row < len(self._regions) - 1)
         self.opacity.setEnabled(enabled)
+        for key, button in (
+            ("duplicate", self.duplicate_button),
+            ("visibility", self.visibility_button), ("lock", self.lock_button),
+            ("up", self.up_button), ("down", self.down_button),
+            ("delete", self.delete_button),
+        ):
+            self.more_actions[key].setEnabled(button.isEnabled())
+        self.more_button.setEnabled(any(action.isEnabled() for action in self.more_actions.values()))
 
     def _rename_current(self) -> None:
         row = self.current_index()

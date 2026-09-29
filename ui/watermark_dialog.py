@@ -11,7 +11,7 @@ from PySide6.QtWidgets import (
 )
 
 from core.watermark_manager import DEFAULT_WATERMARK, normalized_watermark
-from ui.widgets.controls import ModernButton, SectionTitle
+from ui.widgets.controls import ModernButton, SectionTitle, CollapsibleSection
 
 
 ANCHORS = (
@@ -28,6 +28,8 @@ class WatermarkDialog(QDialog):
     remove_current_requested = Signal()
     remove_chapter_requested = Signal()
     dialog_closed = Signal()
+    redistribute_requested = Signal()
+    redistribute_chapter_requested = Signal()
 
     def __init__(self, settings: dict | None = None, parent=None) -> None:
         super().__init__(parent)
@@ -42,18 +44,58 @@ class WatermarkDialog(QDialog):
 
         outer = QVBoxLayout(self); outer.setContentsMargins(0, 0, 0, 0)
         scroll = QScrollArea(); scroll.setWidgetResizable(True); scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-        content = QFrame(); content.setObjectName("AIPanel"); scroll.setWidget(content); outer.addWidget(scroll)
+        content = QFrame(); content.setObjectName("AIPanel"); scroll.setWidget(content); outer.addWidget(scroll, 1)
         root = QVBoxLayout(content); root.setContentsMargins(14, 14, 14, 14); root.setSpacing(9)
         root.addWidget(SectionTitle("Archivo PNG"))
         self.drop_zone = QLabel("Arrastra un PNG aquí\no pulsa para seleccionarlo")
         self.drop_zone.setObjectName("WatermarkDropZone")
         self.drop_zone.setAlignment(Qt.AlignCenter); self.drop_zone.setMinimumHeight(126)
-        self.drop_zone.setStyleSheet("border:1px dashed #28738A; border-radius:9px; background:#0A151E; color:#8FA6B8;")
+        self.drop_zone.setStyleSheet("border:1px dashed #626262; border-radius:9px; background:#202020; color:#B8B8B8;")
         root.addWidget(self.drop_zone)
         choose = ModernButton("Seleccionar PNG…", "Primary", icon_name="images")
         choose.clicked.connect(self._choose_png); root.addWidget(choose)
         self.source_label = QLabel("Sin archivo seleccionado")
         self.source_label.setObjectName("Muted"); self.source_label.setWordWrap(True); root.addWidget(self.source_label)
+
+        root.addWidget(SectionTitle("Distribución"))
+        self.repeat = QCheckBox("Repartir por el capítulo completo")
+        self.auto_count = QCheckBox("Cantidad automática según la altura del capítulo")
+        self.repeat_x = self._spin(0, 10000, " px")
+        self.repeat_y = self._spin(0, 10000, " px")
+        self.repeat_count = self._spin(1, 100, " marca(s)")
+        root.addWidget(self.repeat)
+        self.distribution = QComboBox()
+        self.distribution.addItem("Columna alineada", "column")
+        self.distribution.addItem("Alternar izquierda y derecha", "alternating")
+        root.addWidget(self.distribution)
+        self.minimum_gap = self._spin(0, 10000, " px")
+        root.addWidget(QLabel("SEPARACIÓN MÍNIMA ENTRE MARCAS")); root.addWidget(self.minimum_gap)
+        root.addWidget(self.auto_count)
+        root.addWidget(QLabel("CANTIDAD TOTAL EN EL CAPÍTULO")); root.addWidget(self.repeat_count)
+        repeat_hint = QLabel("Las páginas forman una tira continua: la separación se mantiene entre archivos. La cantidad es para todo el capítulo, no para cada página.")
+        repeat_hint.setObjectName("Muted"); repeat_hint.setWordWrap(True); root.addWidget(repeat_hint)
+        self.avoid_text = QCheckBox("Evitar cajas de texto detectadas")
+        root.addWidget(self.avoid_text)
+        self.seam_safe = QCheckBox("Dejar espacio en las uniones de páginas")
+        self.seam_safe.setVisible(False)
+        self.preview_visible = QCheckBox("Mostrar previsualización durante la edición")
+        self.preview_visible.setChecked(True)
+        self.preview_visible.setVisible(False)
+        canvas_hint = QLabel("En el lienzo: arrastra una marca para moverla · Ctrl + clic o Supr para borrarla.")
+        canvas_hint.setObjectName("Muted"); canvas_hint.setWordWrap(True); root.addWidget(canvas_hint)
+
+        self.redistribute = ModernButton("Redistribuir esta página", icon_name="refresh")
+        self.redistribute.setToolTip("Reemplaza las posiciones manuales de esta página por el reparto automático.")
+        self.redistribute.clicked.connect(self.redistribute_requested.emit)
+        root.addWidget(self.redistribute)
+        self.redistribute_chapter = ModernButton("Redistribuir todo el capítulo", icon_name="refresh")
+        self.redistribute_chapter.setToolTip("Reemplaza las posiciones manuales por un reparto continuo del capítulo.")
+        self.redistribute_chapter.clicked.connect(self.redistribute_chapter_requested.emit)
+        root.addWidget(self.redistribute_chapter)
+        self.advanced = CollapsibleSection("Tamaño, posición y apariencia")
+        root.addWidget(self.advanced)
+        main_root = root
+        root = self.advanced.body_layout
 
         root.addWidget(SectionTitle("Tamaño"))
         self.size_mode = QComboBox()
@@ -86,7 +128,7 @@ class WatermarkDialog(QDialog):
             ("DESPLAZAMIENTO X", self.offset_x), ("DESPLAZAMIENTO Y", self.offset_y),
         ):
             root.addWidget(QLabel(label)); root.addWidget(field)
-        self.keep_inside = QCheckBox("Mantener completamente dentro de la página")
+        self.keep_inside = QCheckBox("Mantener dentro de la página")
         root.addWidget(self.keep_inside)
 
         root.addWidget(SectionTitle("Apariencia"))
@@ -99,27 +141,13 @@ class WatermarkDialog(QDialog):
         root.addWidget(QLabel("ROTACIÓN")); root.addWidget(self.rotation)
         root.addWidget(QLabel("MODO DE FUSIÓN")); root.addWidget(self.blend)
 
-        root.addWidget(SectionTitle("Distribución vertical"))
-        self.repeat = QCheckBox("Repetir automáticamente en una columna vertical")
-        self.auto_count = QCheckBox("Calcular una cantidad segura según el tamaño de la página")
-        self.repeat_x = self._spin(0, 10000, " px")
-        self.repeat_y = self._spin(0, 10000, " px")
-        self.repeat_count = self._spin(1, 100, " marca(s)")
-        root.addWidget(self.repeat)
-        root.addWidget(self.auto_count)
-        root.addWidget(QLabel("CANTIDAD POR PÁGINA")); root.addWidget(self.repeat_count)
-        repeat_hint = QLabel("Las marcas se distribuyen con separación uniforme según la altura real de cada página.")
-        repeat_hint.setObjectName("Muted"); repeat_hint.setWordWrap(True); root.addWidget(repeat_hint)
-        self.avoid_text = QCheckBox("Evitar cajas de texto detectadas")
-        root.addWidget(self.avoid_text)
-        self.seam_safe = QCheckBox("Separar marcas en las uniones entre páginas")
-        root.addWidget(self.seam_safe)
-        self.preview_visible = QCheckBox("Mostrar previsualización durante la edición")
-        self.preview_visible.setChecked(True)
-        self.preview_visible.setVisible(False)
-        canvas_hint = QLabel("En el lienzo: arrastra una marca para moverla · Ctrl + clic o Supr para borrarla.")
-        canvas_hint.setObjectName("Muted"); canvas_hint.setWordWrap(True); root.addWidget(canvas_hint)
+        root = main_root
 
+        root.addStretch()
+        footer = QFrame()
+        outer.addWidget(footer)
+        root = QVBoxLayout(footer)
+        root.setContentsMargins(14, 10, 14, 14)
         root.addWidget(SectionTitle("Aplicar"))
         apply_row = QHBoxLayout()
         current = ModernButton("Página actual", "Primary")
@@ -135,12 +163,12 @@ class WatermarkDialog(QDialog):
         remove_row.addWidget(remove_current); remove_row.addWidget(remove_chapter); root.addLayout(remove_row)
         self.status = QLabel("Carga un PNG para comenzar.")
         self.status.setObjectName("FontAssignmentStatus"); self.status.setWordWrap(True); root.addWidget(self.status)
-        root.addStretch()
 
         self._value_widgets = [
             self.size_mode, self.scale_percent, self.width_px, self.margin_x, self.margin_y,
             self.offset_x, self.offset_y, self.keep_inside, self.opacity, self.rotation,
             self.blend, self.repeat, self.auto_count, self.repeat_count, self.avoid_text, self.seam_safe,
+            self.distribution, self.minimum_gap,
         ]
         self.repeat.toggled.connect(self._update_size_visibility)
         self.auto_count.toggled.connect(self._update_size_visibility)
@@ -167,6 +195,8 @@ class WatermarkDialog(QDialog):
         self.repeat_y.setValue(config["repeat_spacing_y"]); self.repeat_count.setValue(config["repeat_count"])
         self.auto_count.setChecked(config["auto_count"]); self.avoid_text.setChecked(config["avoid_text"])
         self.seam_safe.setChecked(config["seam_safe"])
+        self.distribution.setCurrentIndex(self.distribution.findData(config["distribution"]))
+        self.minimum_gap.setValue(config["minimum_gap"])
         self.preview_visible.setChecked(True)
         self.anchor_buttons[config["anchor"]].setChecked(True)
         self._update_source_preview(); self._update_size_visibility(); self._loading = False
@@ -180,6 +210,7 @@ class WatermarkDialog(QDialog):
             "offset_x": self.offset_x.value(), "offset_y": self.offset_y.value(),
             "keep_inside": self.keep_inside.isChecked(), "opacity": self.opacity.value(),
             "rotation": self.rotation.value(), "blend_mode": self.blend.currentData(),
+            "distribution": self.distribution.currentData(), "minimum_gap": self.minimum_gap.value(),
             "repeat": self.repeat.isChecked(), "auto_count": self.auto_count.isChecked(),
             "repeat_spacing_x": self.repeat_x.value(),
             "repeat_spacing_y": self.repeat_y.value(), "repeat_count": self.repeat_count.value(),
@@ -189,7 +220,9 @@ class WatermarkDialog(QDialog):
 
     def set_scope_status(self, current_enabled: bool, enabled_count: int, total: int, visible_count: int = 0) -> None:
         current = "activa en esta página" if current_enabled else "solo en previsualización"
-        distribution = f" · {visible_count} marca(s) distribuidas" if visible_count else ""
+        distribution = f" · {visible_count} marca(s) visibles"
+        if self.repeat.isChecked():
+            distribution += " en esta página · reparto continuo del capítulo"
         self.status.setText(f"Marca {current} · {enabled_count} de {total} página(s) configuradas{distribution}.")
 
     def _update_size_visibility(self, *_args) -> None:
@@ -197,7 +230,8 @@ class WatermarkDialog(QDialog):
         self.scale_percent.setEnabled(percent); self.width_px.setEnabled(not percent)
         self.auto_count.setEnabled(self.repeat.isChecked())
         self.repeat_count.setEnabled(self.repeat.isChecked() and not self.auto_count.isChecked())
-        self.avoid_text.setEnabled(self.repeat.isChecked())
+        self.distribution.setEnabled(self.repeat.isChecked())
+        self.minimum_gap.setEnabled(self.repeat.isChecked())
         self.seam_safe.setEnabled(self.repeat.isChecked())
 
     def _emit(self, *_args) -> None:

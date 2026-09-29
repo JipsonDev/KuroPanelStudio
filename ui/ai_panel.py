@@ -1,13 +1,86 @@
 """Compact AI controls that preserve the editor's original panel rhythm."""
 from __future__ import annotations
 
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import QSize, Qt, Signal
 from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (QButtonGroup, QComboBox, QFrame, QGridLayout, QGroupBox,
-                               QHBoxLayout, QLabel, QRadioButton, QScrollArea, QSlider,
-                               QSizePolicy, QSpinBox, QStackedWidget, QVBoxLayout, QWidget)
+                               QHBoxLayout, QLabel, QScrollArea, QSlider,
+                               QSizePolicy, QSpinBox, QStackedWidget, QToolButton,
+                               QVBoxLayout, QWidget)
 
-from ui.widgets.controls import ModernButton, SectionTitle, Toggle
+from ui.widgets.controls import ModernButton, SectionTitle, Toggle, CollapsibleSection
+from ui.widgets.icons import icon
+
+
+class ActionCardHeader(QFrame):
+    clicked = Signal()
+
+    def mouseReleaseEvent(self, event) -> None:
+        if event.button() == Qt.LeftButton:
+            self.clicked.emit()
+        super().mouseReleaseEvent(event)
+
+
+class ActionCard(QWidget):
+    """Large disclosure card with the icon and explanatory line from the editor reference."""
+
+    def __init__(self, title: str, subtitle: str, icon_name: str) -> None:
+        super().__init__()
+        container = QVBoxLayout(self)
+        container.setContentsMargins(0, 0, 0, 0)
+        container.setSpacing(0)
+        self.summary = ActionCardHeader()
+        self.summary.setObjectName("ActionCardHeader")
+        self.summary.setCursor(Qt.PointingHandCursor)
+        summary_layout = QHBoxLayout(self.summary)
+        summary_layout.setContentsMargins(12, 9, 12, 9)
+        summary_layout.setSpacing(11)
+        glyph = QLabel()
+        glyph.setObjectName("ActionCardIcon")
+        glyph.setAlignment(Qt.AlignCenter)
+        glyph.setFixedSize(28, 30)
+        glyph.setPixmap(icon(icon_name, "#E9F0FA", 22).pixmap(22, 22))
+        summary_layout.addWidget(glyph)
+        copy = QVBoxLayout()
+        copy.setContentsMargins(0, 0, 0, 0)
+        copy.setSpacing(3)
+        self.header = QToolButton()
+        self.header.setObjectName("ActionCardButton")
+        self.header.setText(title)
+        self.header.setToolButtonStyle(Qt.ToolButtonTextOnly)
+        self.header.setCheckable(True)
+        self.header.setCursor(Qt.PointingHandCursor)
+        self.header.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
+        self.header.setAccessibleName(title)
+        copy.addWidget(self.header, 0, Qt.AlignLeft)
+        caption = QLabel(subtitle)
+        caption.setObjectName("ActionCardSubtitle")
+        copy.addWidget(caption)
+        summary_layout.addLayout(copy, 1)
+        self.chevron = QLabel()
+        self.chevron.setFixedSize(18, 18)
+        summary_layout.addWidget(self.chevron)
+        container.addWidget(self.summary)
+        self.body = QFrame()
+        self.body.setObjectName("ActionCardBody")
+        self.body_layout = QVBoxLayout(self.body)
+        self.body_layout.setContentsMargins(12, 10, 12, 12)
+        self.body_layout.setSpacing(9)
+        self.body.hide()
+        container.addWidget(self.body)
+        self.header.toggled.connect(self.set_expanded)
+        self.summary.clicked.connect(self.header.click)
+        self.set_expanded(False)
+
+    def set_expanded(self, expanded: bool) -> None:
+        self.header.blockSignals(True)
+        self.header.setChecked(expanded)
+        self.header.blockSignals(False)
+        self.chevron.setPixmap(icon("chevron-down" if expanded else "chevron-right", "#AAB8CC", 16).pixmap(16, 16))
+        self.body.setVisible(expanded)
+
+    def is_expanded(self) -> bool:
+        return not self.body.isHidden()
 
 
 class AIOptionsPanel(QScrollArea):
@@ -25,9 +98,9 @@ class AIOptionsPanel(QScrollArea):
     _SPIN_WIDTH = 105
     _SPIN_HEIGHT = 34
 
-    STATUS_OK = "#43D98A"
-    STATUS_WARNING = "#FFB84D"
-    STATUS_NEUTRAL = "#AAB8C5"
+    STATUS_OK = "#20D985"
+    STATUS_WARNING = "#D7B754"
+    STATUS_NEUTRAL = "#94A3B8"
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -36,47 +109,85 @@ class AIOptionsPanel(QScrollArea):
         self.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
         self.setFrameShape(QFrame.NoFrame)
         self.setMinimumWidth(250)
-        self.setMaximumWidth(310)
+        self.setMaximumWidth(370)
         content = QFrame()
         content.setObjectName("AIPanel")
         content.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
         self.setWidget(content)
         root = QVBoxLayout(content)
-        root.setContentsMargins(6, 10, 6, 10)
-        root.setSpacing(0)
-        self.group = QGroupBox("Herramientas IA")
+        root.setContentsMargins(14, 14, 14, 16)
+        root.setSpacing(14)
+        self.group = QGroupBox("")
         self.group.setObjectName("AIGroup")
         self.group.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
         root.addWidget(self.group)
         layout = QVBoxLayout(self.group)
-        layout.setContentsMargins(10, 12, 10, 10)
-        layout.setSpacing(7)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(14)
 
         self._mode_index = {key: i for i, (key, _) in enumerate(self.MODES)}
         self._status_labels: dict[str, QLabel] = {}
         self._style_widgets: dict[str, dict] = {}
         self._primary_buttons: dict[str, ModernButton] = {}
+        self._primary_titles: dict[str, str] = {}
+        self._primary_actions: dict[str, tuple[str, str, str]] = {}
+        self._ready: dict[str, bool] = {}
+        self._action_footers: dict[str, QFrame] = {}
         self.current_mode = "ocr"
 
-        modes = QGridLayout()
+        self.chapter_card = QFrame()
+        self.chapter_card.setObjectName("ChapterReadyCard")
+        chapter_row = QHBoxLayout(self.chapter_card)
+        chapter_row.setContentsMargins(12, 11, 11, 11)
+        chapter_row.setSpacing(10)
+        self.chapter_icon = QLabel()
+        self.chapter_icon.setObjectName("ChapterReadyIcon")
+        self.chapter_icon.setAlignment(Qt.AlignCenter)
+        self.chapter_icon.setFixedSize(26, 26)
+        self.chapter_icon.setPixmap(icon("check", "#07111F", 16).pixmap(16, 16))
+        chapter_row.addWidget(self.chapter_icon)
+        chapter_copy = QVBoxLayout()
+        chapter_copy.setSpacing(1)
+        chapter_title = QLabel("Capítulo cargado")
+        chapter_title.setObjectName("ChapterReadyTitle")
+        chapter_copy.addWidget(chapter_title)
+        self.chapter_count = QLabel("")
+        self.chapter_count.setObjectName("Muted")
+        chapter_copy.addWidget(self.chapter_count)
+        chapter_row.addLayout(chapter_copy, 1)
+        self.chapter_dismiss = QToolButton()
+        self.chapter_dismiss.setObjectName("ChapterDismiss")
+        self.chapter_dismiss.setIcon(icon("x", "#8FA0B8", 15))
+        self.chapter_dismiss.setIconSize(QSize(15, 15))
+        self.chapter_dismiss.setToolTip("Ocultar aviso de capítulo")
+        self.chapter_dismiss.setCursor(Qt.PointingHandCursor)
+        self.chapter_dismiss.clicked.connect(self.chapter_card.hide)
+        chapter_row.addWidget(self.chapter_dismiss, 0, Qt.AlignTop)
+        root.insertWidget(0, self.chapter_card)
+        self.chapter_card.hide()
+
+        self.mode_selector = QWidget()
+        modes = QGridLayout(self.mode_selector)
         modes.setContentsMargins(0, 0, 0, 0)
-        modes.setHorizontalSpacing(6)
+        modes.setHorizontalSpacing(10)
         modes.setVerticalSpacing(2)
         self.mode_group = QButtonGroup(self)
-        self.mode_buttons: dict[str, QRadioButton] = {}
+        self.mode_buttons: dict[str, QToolButton] = {}
         for index, (key, text) in enumerate(self.MODES):
-            radio = QRadioButton(text)
+            radio = QToolButton()
+            radio.setText(text)
             radio.setObjectName("AIMode")
             radio.setToolTip(f"Cambiar al modo {text.replace('&', '')}")
+            radio.setAccessibleName(text.replace("&", ""))
+            radio.setCheckable(True)
+            radio.setCursor(Qt.PointingHandCursor)
+            radio.setMinimumHeight(40)
             radio.toggled.connect(lambda checked, value=key: checked and self._set_mode(value))
             self.mode_group.addButton(radio, index)
             self.mode_buttons[key] = radio
-            radio.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Fixed)
-            if index == 2:
-                modes.addWidget(radio, 1, 0, 1, 2)
-            else:
-                modes.addWidget(radio, 0, index)
-        layout.addLayout(modes)
+            radio.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+            modes.addWidget(radio, 0, index)
+        layout.addWidget(self.mode_selector)
 
         self.pages = QStackedWidget()
         self.pages.setObjectName("AIModePages")
@@ -85,8 +196,31 @@ class AIOptionsPanel(QScrollArea):
         self.pages.addWidget(self._translation_page())
         self.pages.addWidget(self._clean_page())
         layout.addWidget(self.pages)
+        # The scope and primary action stay in view while the settings scroll.
+        self.action_footer = QStackedWidget(self)
+        self.action_footer.setObjectName("AIActionFooter")
+        self.action_footer.setFixedHeight(108)
+        for key, _ in self.MODES:
+            self.action_footer.addWidget(self._action_footers[key])
+        self.setViewportMargins(0, 0, 0, self.action_footer.height())
         self.mode_buttons["ocr"].setChecked(True)
         root.addStretch()
+
+    def resizeEvent(self, event) -> None:
+        super().resizeEvent(event)
+        if hasattr(self, "action_footer"):
+            self.action_footer.setGeometry(
+                0, self.height() - self.action_footer.height(),
+                self.width(), self.action_footer.height(),
+            )
+            self.action_footer.raise_()
+
+    def set_mode_selector_visible(self, visible: bool) -> None:
+        self.mode_selector.setVisible(visible)
+
+    def set_chapter_status(self, count: int) -> None:
+        self.chapter_count.setText(f"{count} imagen{'es' if count != 1 else ''} disponible{'s' if count != 1 else ''}.")
+        self.chapter_card.setVisible(count > 0)
 
     # ------------------------------------------------------------------ #
     # Configuration in/out
@@ -155,14 +289,25 @@ class AIOptionsPanel(QScrollArea):
         if label is not None:
             label.setText(f"\u25cf  {text}")
             label.setToolTip(text)
-            label.setStyleSheet(f"color:{color}; font-size:10px;")
+            label.setStyleSheet(f"color:{color}; font-size:12px;")
 
     def set_ready(self, mode: str, ready: bool, reason: str = "") -> None:
-        """Enable/disable a page's primary action, e.g. while a provider is unauthenticated."""
+        """Offer configuration as the primary action until a provider is usable."""
+        self._ready[mode] = bool(ready)
         button = self._primary_buttons.get(mode)
         if button is not None:
-            button.setEnabled(ready)
+            if ready:
+                button.setText(self._primary_titles[mode])
+                glyph = {"ocr": "script", "translation": "languages", "clean": "eraser"}.get(mode, "settings")
+            else:
+                button.setText("Configurar OCR" if mode == "ocr" else "Configurar traducción")
+                glyph = "settings"
+            button.setIcon(icon(glyph, "#07111F", 20))
             button.setToolTip(reason if not ready else "")
+            getattr(self, f"{mode}_scope").setEnabled(ready)
+
+    def is_ready(self, mode: str) -> bool:
+        return self._ready.get(mode, True)
 
     # ------------------------------------------------------------------ #
     # Shared builders
@@ -173,8 +318,74 @@ class AIOptionsPanel(QScrollArea):
         page.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
         layout = QVBoxLayout(page)
         layout.setContentsMargins(0, 3, 0, 0)
-        layout.setSpacing(7)
+        layout.setSpacing(12)
         return page, layout
+
+    def _heading(self, layout, title, description, icon_name=None):
+        heading_block = QWidget()
+        block = QVBoxLayout(heading_block)
+        block.setContentsMargins(0, 0, 0, 0)
+        block.setSpacing(5)
+        row = QHBoxLayout()
+        row.setSpacing(8)
+        if icon_name:
+            glyph = QLabel()
+            glyph.setObjectName("WorkflowIcon")
+            glyph.setPixmap(icon(icon_name, "#E9F0FA", 17).pixmap(17, 17))
+            glyph.setAlignment(Qt.AlignCenter)
+            glyph.setFixedSize(26, 26)
+            row.addWidget(glyph)
+        heading = QLabel(title)
+        heading.setObjectName("WorkflowHeading")
+        row.addWidget(heading)
+        if icon_name:
+            info = QLabel()
+            info.setPixmap(icon("info", "#94A3B8", 14).pixmap(14, 14))
+            info.setToolTip(description)
+            row.addWidget(info)
+        row.addStretch()
+        block.addLayout(row)
+        hint = QLabel(description)
+        hint.setObjectName("Muted")
+        hint.setWordWrap(True)
+        block.addWidget(hint)
+        layout.addWidget(heading_block)
+
+    def _scope_action(self, layout, mode, title, actions):
+        footer = QFrame()
+        footer.setObjectName("AIActionFooterPage")
+        footer_layout = QVBoxLayout(footer)
+        footer_layout.setContentsMargins(14, 9, 14, 11)
+        footer_layout.setSpacing(7)
+        scope = self._combo(["Caja seleccionada", "Página actual", "Todo el capítulo"])
+        scope.setProperty("kuro_i18n_choices", True)
+        for index in range(scope.count()):
+            scope.setItemData(index, index)
+        scope.setAccessibleName(f"Alcance de {title}")
+        scope.setCurrentIndex(1)
+        footer_layout.addWidget(scope)
+        button = ModernButton(title, "Primary", icon_name={
+            "ocr": "script", "translation": "languages", "clean": "eraser",
+        }.get(mode))
+        button.setMinimumHeight(36)
+        button.clicked.connect(lambda: self._request_primary_action(mode, scope.currentIndex()))
+        if mode == "clean":
+            scope.currentIndexChanged.connect(
+                lambda index: button.setText("Limpiar capítulo" if index == 2 else title)
+            )
+        footer_layout.addWidget(button)
+        self._primary_buttons[mode] = button
+        self._primary_titles[mode] = title
+        self._primary_actions[mode] = actions
+        self._ready[mode] = True
+        self._action_footers[mode] = footer
+        return scope
+
+    def _request_primary_action(self, mode: str, scope_index: int) -> None:
+        if self._ready.get(mode, True):
+            self.action_requested.emit(self._primary_actions[mode][scope_index])
+        else:
+            self.action_requested.emit("settings")
 
     @classmethod
     def _combo(cls, values: list[str]) -> QComboBox:
@@ -194,7 +405,7 @@ class AIOptionsPanel(QScrollArea):
         status.setMinimumWidth(0)
         status.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
         status.setToolTip(text)
-        status.setStyleSheet(f"color:{color}; font-size:10px;")
+        status.setStyleSheet(f"color:{color}; font-size:12px;")
         self._status_labels[mode] = status
         return status
 
@@ -231,10 +442,11 @@ class AIOptionsPanel(QScrollArea):
     # ------------------------------------------------------------------ #
     def _ocr_page(self) -> QWidget:
         page, layout = self._page_layout()
+        self._heading(layout, "Leer texto (OCR)", "Detecta las cajas y reconoce solo el texto pendiente.", "scan")
+        self.ocr_settings = ActionCard("Proveedor y modelo", "Configura el motor de OCR", "chip")
+        config = self.ocr_settings.body_layout
         self.ocr_provider = self._combo(["Alibaba Cloud"])
-        layout.addWidget(QLabel("PROVEEDOR OCR"))
-        layout.addWidget(self.ocr_provider)
-        layout.addWidget(QLabel("NOMBRE DEL MODELO"))
+        config.addWidget(QLabel("Modelo"))
         self.ocr_model = self._combo([
             "qwen-vl-ocr",
             "qwen-vl-ocr-latest",
@@ -257,24 +469,78 @@ class AIOptionsPanel(QScrollArea):
         self.ocr_model.lineEdit().editingFinished.connect(
             lambda: self.provider_changed.emit("ocr", *self.ocr_configuration())
         )
-        layout.addWidget(self.ocr_model)
-        model_hint = QLabel("Puedes pegar aquí un modelo nuevo sin modificar el código.")
+        config.addWidget(self.ocr_model)
+        model_hint = QLabel("Selecciona un modelo o escribe el identificador disponible en tu cuenta.")
         model_hint.setObjectName("Muted")
         model_hint.setWordWrap(True)
-        layout.addWidget(model_hint)
+        config.addWidget(model_hint)
         layout.addWidget(self._status("ocr", "Configura las credenciales del proveedor", self.STATUS_WARNING))
-        layout.addWidget(QLabel("ALCANCE"))
-        self._action_row(layout, (
-            ("Una caja", "run_ocr_api_one", "Ejecuta OCR solo en la caja seleccionada"),
-            ("Página", "run_ocr_api", "Ejecuta OCR en todas las cajas de la página actual"),
-            ("Todo el capítulo", "run_ocr_api_all", "Ejecuta OCR en todas las páginas del capítulo"),
-        ))
-        layout.addWidget(self._divider())
+        action_stack = QVBoxLayout()
+        action_stack.setSpacing(9)
+        provider_row = QHBoxLayout()
+        provider_row.setSpacing(9)
+        provider_row.addWidget(self.ocr_provider, 1)
+        provider_options = ModernButton("", icon_name="settings")
+        provider_options.setAccessibleName("Configurar proveedor OCR")
+        provider_options.setToolTip("Abrir proveedor y modelo")
+        provider_options.setFixedSize(38, 38)
+        provider_options.clicked.connect(lambda: self.ocr_settings.set_expanded(True))
+        provider_row.addWidget(provider_options)
+        action_stack.addLayout(provider_row)
+        detect = ModernButton("Detectar cajas de texto", icon_name="scan")
+        detect.setObjectName("DetectAction")
+        detect.clicked.connect(lambda: self.action_requested.emit("run_yolo"))
+        detect.setMinimumHeight(38)
+        action_stack.addWidget(detect)
+        self.ocr_scope = self._scope_action(action_stack, "ocr", "Leer texto", ("run_ocr_api_one", "run_ocr_api", "run_ocr_api_all"))
+        layout.addLayout(action_stack)
+        reread = ModernButton("Releer caja seleccionada")
+        reread.setToolTip("Realiza una nueva solicitud al proveedor, aunque haya OCR guardado")
+        reread.clicked.connect(lambda: self.action_requested.emit("reread_ocr_one"))
+        config.addWidget(reread)
+        savings_hint = QLabel("Se reutiliza el OCR guardado. Releer caja realiza una nueva solicitud.")
+        savings_hint.setWordWrap(True)
+        savings_hint.setObjectName("Muted")
+        config.addWidget(savings_hint)
+        self.ocr_usage = QLabel("Sesión OCR: sin solicitudes")
+        self.ocr_usage.setWordWrap(True)
+        self.ocr_usage.setObjectName("Muted")
+        config.addWidget(self.ocr_usage)
+        layout.addWidget(self.ocr_settings)
         self._add_text_options(layout, mode="ocr", include_mask=False, include_manga=True)
+        self.detection_settings = ActionCard("Ajustes de detección", "Sensibilidad, idioma y filtros", "sliders")
+        detection_hint = QLabel("La detección usa el modelo local. Puedes detectar cajas antes de leer el texto.")
+        detection_hint.setObjectName("Muted")
+        detection_hint.setWordWrap(True)
+        self.detection_settings.body_layout.addWidget(detection_hint)
+        self.detection_settings.body_layout.addWidget(
+            ModernButton("Detectar cajas de texto", icon_name="scan")
+        )
+        self.detection_settings.body_layout.itemAt(1).widget().clicked.connect(
+            lambda: self.action_requested.emit("run_yolo")
+        )
+        layout.addWidget(self.detection_settings)
+        layout.addStretch()
         return page
+
+    def set_ocr_usage(self, stats: dict) -> None:
+        requests = stats.get("requests", 0)
+        reported = stats.get("reported_responses", 0)
+        tokens = (
+            f"{stats.get('input_tokens', 0):,} entrada · {stats.get('output_tokens', 0):,} salida"
+            if reported else "tokens no reportados"
+        )
+        self.ocr_usage.setText(f"Sesión OCR: {requests} solicitud(es)\n{tokens}")
+        self.ocr_usage.setToolTip(
+            f"Tokens informados por {reported} respuesta(s). Las solicitudes fallidas pueden no informar consumo. "
+            "Este contador se reinicia al cerrar la aplicación y no representa el saldo ni la factura de Alibaba."
+        )
 
     def _translation_page(self) -> QWidget:
         page, layout = self._page_layout()
+        self._heading(layout, "Traducir diálogo", "Traduce el texto reconocido usando el glosario del proyecto.", "languages")
+        self.translation_settings = ActionCard("Proveedor y modelo", "Configura el motor de traducción", "chip")
+        config = self.translation_settings.body_layout
         self.translate_provider = self._combo([
             "Alibaba Cloud", "Gemini", "OpenAI", "DeepSeek", "DeepL",
         ])
@@ -288,23 +554,26 @@ class AIOptionsPanel(QScrollArea):
         self.translate_provider.currentTextChanged.connect(lambda: self.provider_changed.emit("translate", *self.translate_configuration()))
         self.translate_provider.currentTextChanged.connect(self._sync_translation_model)
         self.translate_model.currentTextChanged.connect(lambda: self.provider_changed.emit("translate", *self.translate_configuration()))
-        layout.addWidget(self.translate_provider)
-        layout.addWidget(self.translate_model)
+        config.addWidget(QLabel("Modelo"))
+        config.addWidget(self.translate_model)
         layout.addWidget(self._status("translation", "Proveedor no autenticado", self.STATUS_WARNING))
+        provider_row = QHBoxLayout()
+        provider_row.setSpacing(9)
+        provider_row.addWidget(self.translate_provider, 1)
+        provider_options = ModernButton("", icon_name="settings")
+        provider_options.setAccessibleName("Configurar proveedor de traducción")
+        provider_options.setFixedSize(38, 38)
+        provider_options.clicked.connect(lambda: self.translation_settings.set_expanded(True))
+        provider_row.addWidget(provider_options)
+        layout.addLayout(provider_row)
         self.translation_context = QLabel("Sin proyecto de traducción asignado")
         self.translation_context.setObjectName("Muted")
         self.translation_context.setWordWrap(True)
         layout.addWidget(self.translation_context)
-        layout.addWidget(QLabel("ALCANCE"))
-        translation_buttons = self._action_row(layout, (
-            ("Una caja", "run_translation_one", "Traduce solo la caja seleccionada"),
-            ("Página", "run_translation", "Traduce todas las cajas de la página actual"),
-            ("Todo el capítulo", "run_translation_all", "Traduce todas las páginas del capítulo"),
-        ))
-        translation_buttons[1].setObjectName("Primary")
-        self._primary_buttons["translation"] = translation_buttons[1]
-        layout.addWidget(self._divider())
+        self.translation_scope = self._scope_action(layout, "translation", "Traducir texto", ("run_translation_one", "run_translation", "run_translation_all"))
+        layout.addWidget(self.translation_settings)
         self._add_text_options(layout, mode="translation", include_mask=False, include_manga=True)
+        layout.addStretch()
         return page
 
     def set_translation_context(self, project: str, term_count: int) -> None:
@@ -327,22 +596,27 @@ class AIOptionsPanel(QScrollArea):
 
     def _clean_page(self) -> QWidget:
         page, layout = self._page_layout()
+        page_layout = layout
+        self._heading(layout, "Limpiar página", "Prepara la máscara, revisa los trazos y aplica la limpieza.", "eraser")
+        self.clean_settings = ActionCard("Motor de limpieza", "Modelo local y rendimiento", "chip")
         # Do not expose the old remote selector: it never had an implementation.
         self.clean_provider = self._combo(["Local (AI)"])
         self.clean_model = self._combo(["LaMa \u00b7 lama.onnx"])
         self.clean_provider.currentTextChanged.connect(lambda: self.provider_changed.emit("clean", *self.clean_configuration()))
         self.clean_model.currentTextChanged.connect(lambda: self.provider_changed.emit("clean", *self.clean_configuration()))
-        layout.addWidget(self.clean_provider)
-        layout.addWidget(self.clean_model)
+        self.clean_settings.body_layout.addWidget(QLabel("Modelo local"))
+        self.clean_settings.body_layout.addWidget(self.clean_model)
         layout.addWidget(self._status("clean", "LaMa se cargará al primer uso", self.STATUS_NEUTRAL))
-        layout.addWidget(QLabel("ALCANCE"))
-        cleaning_buttons = self._action_row(layout, (
-            ("Una caja", "run_clean_one", "Limpia solo la caja seleccionada"),
-            ("Página", "run_clean", "Detecta la máscara de todas las cajas de la página"),
-            ("Todo el capítulo", "run_clean_all", "Limpia todas las imágenes del capítulo"),
-        ))
-        cleaning_buttons[1].setObjectName("Primary")
-        self._primary_buttons["clean"] = cleaning_buttons[1]
+        provider_row = QHBoxLayout()
+        provider_row.setSpacing(9)
+        provider_row.addWidget(self.clean_provider, 1)
+        provider_options = ModernButton("", icon_name="settings")
+        provider_options.setAccessibleName("Configurar motor de limpieza")
+        provider_options.setFixedSize(38, 38)
+        provider_options.clicked.connect(lambda: self.clean_settings.set_expanded(True))
+        provider_row.addWidget(provider_options)
+        layout.addLayout(provider_row)
+        self.clean_scope = self._scope_action(layout, "clean", "Preparar limpieza", ("run_clean_one", "run_clean", "run_clean_all"))
         self.mask_preview_hint = QLabel("Primero revisa la máscara roja. Puedes borrar falsos positivos antes de aplicar LaMa.")
         self.mask_preview_hint.setObjectName("Muted")
         self.mask_preview_hint.setWordWrap(True)
@@ -378,9 +652,13 @@ class AIOptionsPanel(QScrollArea):
         self.quality_button.setToolTip("Comparar original, máscara protegida y resultado caja por caja")
         self.quality_button.clicked.connect(lambda: self.action_requested.emit("open_clean_quality"))
         self.quality_button.setEnabled(False)
+        self.quality_button.hide()
         layout.addWidget(self.quality_button)
         self.set_mask_preview_active(False)
-        layout.addWidget(SectionTitle("Retoque manual"))
+        layout.addWidget(self.clean_settings)
+        self.retouch_section = ActionCard("Retoque manual", "Pinceles, restauración y máscara", "brush")
+        layout.addWidget(self.retouch_section)
+        layout = self.retouch_section.body_layout
         brush_row = QHBoxLayout()
         brush_row.setSpacing(6)
         self.retouch_button = ModernButton("", icon_name="brush")
@@ -468,6 +746,7 @@ class AIOptionsPanel(QScrollArea):
         layout.addWidget(brush_help)
         layout.addWidget(self._divider())
         self._add_text_options(layout, mode="clean", include_mask=False, include_manga=False)
+        page_layout.addStretch()
         return page
 
     def set_retouch_color(self, color: QColor) -> None:
@@ -479,6 +758,8 @@ class AIOptionsPanel(QScrollArea):
 
     def sync_brush_mode(self, mode: str | None) -> None:
         """Reflect the active canvas tool without causing recursive actions."""
+        if mode is not None:
+            self.retouch_section.set_expanded(True)
         for button, active in (
             (self.retouch_button, mode == "paint"),
             (self.clone_button, mode == "clone"),
@@ -491,6 +772,7 @@ class AIOptionsPanel(QScrollArea):
             button.blockSignals(False)
 
     def set_mask_preview_active(self, active: bool) -> None:
+        self.mask_preview_hint.setVisible(bool(active))
         for widget in (
             getattr(self, "mask_erase_button", None),
             getattr(self, "apply_mask_button", None),
@@ -498,6 +780,7 @@ class AIOptionsPanel(QScrollArea):
         ):
             if widget is not None:
                 widget.setEnabled(bool(active))
+                widget.setVisible(bool(active))
         if not active and hasattr(self, "mask_erase_button"):
             self.mask_erase_button.blockSignals(True)
             self.mask_erase_button.setChecked(False)
@@ -505,6 +788,7 @@ class AIOptionsPanel(QScrollArea):
 
     def set_quality_available(self, available: bool, attention: int = 0) -> None:
         self.quality_button.setEnabled(bool(available))
+        self.quality_button.setVisible(bool(available))
         self.quality_button.setText(
             f"Control de calidad · {int(attention)} por revisar"
             if attention else "Control de calidad"
@@ -522,6 +806,10 @@ class AIOptionsPanel(QScrollArea):
     # retouch layer; OCR has no independent mask thickness or margin.
     # ------------------------------------------------------------------ #
     def _add_text_options(self, layout: QVBoxLayout, mode: str, include_mask: bool, include_manga: bool) -> None:
+        if mode != "clean":
+            section = ActionCard("Lectura y portapapeles", "Opciones de copia y formato", "clipboard")
+            layout.addWidget(section)
+            layout = section.body_layout
         layout.addSpacing(2)
         layout.addWidget(SectionTitle("Ajustes del pincel" if mode == "clean" else "Flujo y lectura"))
         if mode == "ocr":
@@ -640,6 +928,13 @@ class AIOptionsPanel(QScrollArea):
     def _set_mode(self, mode: str) -> None:
         self.current_mode = mode
         self.pages.setCurrentIndex(self._mode_index[mode])
+        if hasattr(self, "action_footer"):
+            self.action_footer.setCurrentIndex(self._mode_index[mode])
+        for index in range(self.pages.count()):
+            self.pages.widget(index).setSizePolicy(
+                QSizePolicy.Ignored,
+                QSizePolicy.Preferred if index == self._mode_index[mode] else QSizePolicy.Ignored,
+            )
         # A mode change should always reveal its controls from the beginning;
         # retaining the previous page's scroll offset made tools look missing.
         self.verticalScrollBar().setValue(0)

@@ -20,6 +20,7 @@ logging.basicConfig(
 
 class WorkerSignals(QObject):
     progress = Signal(int)
+    stage = Signal(str, str)
     partial = Signal(object)
     completed = Signal(object)
     failed = Signal(str)
@@ -39,11 +40,16 @@ class ModelTask(QRunnable):
 
     def run(self) -> None:
         try:
-            result = self.operation(self.signals.progress.emit, lambda: self._cancelled)
+            def report(value: int, stage: str = "", page_key: str = "") -> None:
+                if stage:
+                    self.signals.stage.emit(stage, page_key)
+                self.signals.progress.emit(int(value))
+
+            result = self.operation(report, lambda: self._cancelled)
             if self._cancelled:
                 self.signals.failed.emit("Operación cancelada")
             else:
                 self.signals.completed.emit(result)
         except Exception as error:
             logging.exception("Fallo en una tarea de modelo")
-            self.signals.failed.emit(str(error))
+            self.signals.failed.emit("Operación cancelada" if self._cancelled else str(error))

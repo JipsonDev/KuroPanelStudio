@@ -39,6 +39,12 @@ def main() -> int:
     app = QApplication(sys.argv)
     app.setApplicationName("KuroPanel Studio")
     app.setOrganizationName("KuroPanel")
+    from core.settings_manager import SettingsManager
+    ui_language = SettingsManager(
+        Path(os.environ.get("LOCALAPPDATA", str(Path.cwd())))
+        / "ManhuaSuiteEditor" / "settings.json"
+    ).data["general"]["ui_language"]
+    english_ui = ui_language == "en"
     icon_path = Path(__file__).resolve().parent / "assets" / "icons" / "app_icon.ico"
     if icon_path.is_file():
         app.setWindowIcon(QIcon(str(icon_path)))
@@ -59,16 +65,17 @@ def main() -> int:
     painter.drawText(32, 88, "KuroPanel Studio")
     painter.setPen(QColor("#AFC2CA"))
     painter.setFont(QFont("Segoe UI", 10))
-    painter.drawText(34, 120, "Preparando el espacio de trabajo…")
+    painter.drawText(34, 120, "Preparing workspace…" if english_ui else "Preparando el espacio de trabajo…")
     painter.setPen(QColor("#263941"))
     painter.drawLine(34, 151, 486, 151)
     painter.setPen(QColor("#6E8A94"))
-    painter.drawText(34, 183, "OCR · limpieza · traducción · typpeo")
+    painter.drawText(34, 183, "OCR · cleaning · translation · typesetting" if english_ui else "OCR · limpieza · traducción · rotulación")
     painter.end()
     splash = QSplashScreen(splash_image)
     splash.show()
     splash.showMessage(
-        "Cargando interfaz…", Qt.AlignmentFlag.AlignBottom | Qt.AlignmentFlag.AlignLeft,
+        "Loading interface…" if english_ui else "Cargando interfaz…",
+        Qt.AlignmentFlag.AlignBottom | Qt.AlignmentFlag.AlignLeft,
         QColor("#D7E5EA"),
     )
     app.processEvents()
@@ -76,7 +83,8 @@ def main() -> int:
     from ui.main_window import MainWindow
 
     splash.showMessage(
-        "Restaurando configuración…", Qt.AlignmentFlag.AlignBottom | Qt.AlignmentFlag.AlignLeft,
+        "Restoring settings…" if english_ui else "Restaurando configuración…",
+        Qt.AlignmentFlag.AlignBottom | Qt.AlignmentFlag.AlignLeft,
         QColor("#D7E5EA"),
     )
     app.processEvents()

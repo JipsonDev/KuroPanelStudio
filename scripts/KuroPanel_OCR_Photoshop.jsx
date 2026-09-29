@@ -14,9 +14,16 @@ Usage:
         return;
     }
 
-    var PROJECT_ROOT = "C:/Users/Jipson/Documents/ChatGPT/ManhwaSuiteEditor";
+    var PROJECT_ROOT = new File($.fileName).parent.parent.fsName.replace(/\\/g, "/");
     var PYTHON_EXE = PROJECT_ROOT + "/.venv-gpu/Scripts/python.exe";
+    if (!(new File(PYTHON_EXE)).exists) {
+        PYTHON_EXE = PROJECT_ROOT + "/.venv/Scripts/python.exe";
+    }
     var BRIDGE = PROJECT_ROOT + "/scripts/photoshop_ocr_bridge.py";
+    if (!(new File(PYTHON_EXE)).exists || !(new File(BRIDGE)).exists) {
+        alert("No se encontró Python o el puente OCR. Ejecuta este JSX desde la carpeta scripts del proyecto.");
+        return;
+    }
 
     function px(value) {
         return Math.round(value.as("px"));

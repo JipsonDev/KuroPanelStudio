@@ -1,0 +1,11 @@
+# Windows release runtime. ONNX models are bundled, so PyTorch and Ultralytics
+# are not needed in the shipped application.
+PySide6>=6.7
+psutil>=5.9
+pillow>=10.0
+psd-tools[composite]>=1.17,<2
+numpy>=1.26
+opencv-python>=4.10
+requests>=2.31
+pyphen>=0.16
+onnxruntime>=1.19

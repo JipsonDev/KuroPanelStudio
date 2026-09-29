@@ -164,6 +164,7 @@ class ProfileSettingsWidget(QWidget):
         self.preview.setAlignment(Qt.AlignCenter)
         self.preview.setMinimumHeight(48)
         self.font_weight = QComboBox()
+        self.font_weight.setProperty("kuro_i18n_choices", True)
         for label, weight in (
             ("Normal (400)", 400), ("Seminegrita (600)", 600), ("Negrita / Bold (700)", 700),
             ("Extra negrita (800)", 800), ("Black (900)", 900),
@@ -180,6 +181,7 @@ class ProfileSettingsWidget(QWidget):
         emphasis_layout.addWidget(self.font_strikeout)
         emphasis_layout.addStretch()
         self.font_case = QComboBox()
+        self.font_case.setProperty("kuro_i18n_choices", True)
         self.font_case.addItem("Como fue escrito (Original)", "original")
         self.font_case.addItem("TODO MAYÚSCULAS", "upper")
         self.font_case.addItem("todo minúsculas", "lower")

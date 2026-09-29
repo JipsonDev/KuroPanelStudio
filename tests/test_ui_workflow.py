@@ -72,7 +72,7 @@ class UIWorkflowTests(unittest.TestCase):
         self.assertNotIn("_ocr_request_token", upper)
         self.assertNotIn("_ocr_request_token", lower)
 
-    def test_page_ocr_rechecks_existing_regions(self) -> None:
+    def test_page_ocr_does_not_force_paid_rereading(self) -> None:
         calls = []
 
         class WindowStub:
@@ -83,7 +83,7 @@ class UIWorkflowTests(unittest.TestCase):
                 calls.append((regions, force))
 
         MainWindow.run_ocr_api(WindowStub())
-        self.assertEqual(calls, [(WindowStub.regions, True)])
+        self.assertEqual(calls, [(WindowStub.regions, False)])
 
     def test_moved_box_marks_its_ocr_crop_as_stale(self) -> None:
         previous = [{
@@ -939,10 +939,10 @@ class UIWorkflowTests(unittest.TestCase):
         }
         for mode, actions in expected.items():
             panel.mode_buttons[mode].setChecked(True)
-            page = panel.pages.currentWidget()
-            for button in page.findChildren(QPushButton):
-                if button.text() in {"Una caja", "Página", "Capítulo", "Todo el capítulo"}:
-                    button.click()
+            scope = getattr(panel, f"{mode}_scope")
+            for index in range(3):
+                scope.setCurrentIndex(index)
+                panel._primary_buttons[mode].click()
             self.assertTrue(actions.issubset(set(emitted)))
 
     def test_font_picker_lists_every_family_and_resolves_typed_search(self) -> None:

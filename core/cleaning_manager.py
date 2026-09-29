@@ -17,6 +17,10 @@ import onnxruntime as ort
 from PIL import Image
 
 from core.model_paths import ModelPaths
+from core.glyph_completion import (
+    complete_anchored_glyph_fragments, complete_boundary_glyphs,
+)
+from core.bubble_mask import colour_connected_balloon_mask
 from core.performance_manager import (
     adaptive_gpu_batch, cuda_memory_mb, normalize_device_mode,
     preload_onnx_cuda, register_cuda_dll_directories,
@@ -38,7 +42,7 @@ class CleaningManager:
     # of boxes scale poorly on CPU.
     DETECTION_CONTEXT = 80
     INPAINT_CONTEXT = 64
-    MASK_PIPELINE_VERSION = 35
+    MASK_PIPELINE_VERSION = 42
 
     def __init__(self, models_root: Path) -> None:
         self.paths = ModelPaths(models_root)
@@ -1079,6 +1083,120 @@ class CleaningManager:
         return cv2.bitwise_and(completed, cv2.bitwise_not(protected_border))
 
     @staticmethod
+    def _recover_dark_text_on_light_panel(rgb: np.ndarray, selection: np.ndarray) -> np.ndarray:
+        """Recover dense black glyphs missed by the OCR mask on a light panel.
+
+        Require several small, high-contrast components. Large frame strokes,
+        balloon outlines and isolated rays are not text evidence. This path is
+        deliberately limited to a light local background; coloured artwork
+        continues through the neural mask and manual review.
+        """
+        recovered = np.zeros(selection.shape, dtype=np.uint8)
+        if rgb.shape[:2] != selection.shape or not np.any(selection):
+            return recovered
+        sx, sy, sw, sh = cv2.boundingRect(selection)
+        if min(sw, sh) < 24:
+            return recovered
+        # With no surrounding panel context, repeated illustration strokes
+        # may appear as a dense line of text (for example impact rays on both
+        # sides of a full-page selection). Leave such cases to the OCR mask.
+        if sw >= rgb.shape[1] * 0.95 and sh >= rgb.shape[0] * 0.95:
+            return recovered
+        selected = selection > 0
+        gray = cv2.cvtColor(rgb, cv2.COLOR_RGB2GRAY)
+        if float(np.median(gray[selected])) < 190.0:
+            return recovered
+        side_pad = max(8, min(12, int(sw * 0.04)))
+        search = selection.copy()
+        search[sy:sy + sh, max(0, sx - side_pad):min(selection.shape[1], sx + sw + side_pad)] = 255
+        kernel_size = max(15, min(37, (min(sw, sh) // 6) | 1))
+        background = cv2.morphologyEx(
+            gray, cv2.MORPH_CLOSE,
+            cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (kernel_size, kernel_size)),
+        )
+        ink = np.where(
+            (search > 0) & (gray < 135) & (background > 190)
+            & ((background.astype(np.int16) - gray.astype(np.int16)) > 40),
+            255, 0,
+        ).astype(np.uint8)
+        count, labels, stats, _ = cv2.connectedComponentsWithStats(ink, 8)
+        accepted = []
+        max_width = max(24, min(85, int(sw * 0.23)))
+        # A single CJK line can occupy most of a tight YOLO box. Requiring
+        # glyphs to be shorter than half the box discarded whole characters.
+        max_height = max(40, min(120, int(sh * 0.90)))
+        for label in range(1, count):
+            x, y, width, height, area = (int(value) for value in stats[label])
+            if not 3 <= area <= max(160, int(sw * sh * 0.045)):
+                continue
+            # A component crossing the search-box boundary may be the balloon
+            # outline. Only complete interior glyphs belong to this path;
+            # detached punctuation is considered separately below.
+            if x < sx or x + width > sx + sw or y < sy or y + height > sy + sh:
+                continue
+            if y <= sy + 2 and area < 100:
+                # Short outline/ray fragments may enter at a tight text-box
+                # edge. The neural path still handles clipped punctuation.
+                continue
+            if width > max_width or height > max_height:
+                continue
+            if max(width, height) / max(1, min(width, height)) > 9.0:
+                continue
+            accepted.append(label)
+        if len(accepted) < 8:
+            return recovered
+        recovered[np.isin(labels, accepted)] = 255
+        ink_fraction = np.count_nonzero(recovered) / max(1, np.count_nonzero(selected))
+        if not 0.008 <= ink_fraction <= 0.32:
+            return np.zeros_like(recovered)
+        # A stitched page can cut the last character at the physical image
+        # edge. When a full text row reaches that edge, admit its final
+        # text-sized component only if nearby interior glyphs support it.
+        if sx + sw >= selection.shape[1] - 4:
+            for label in range(1, count):
+                if label in accepted:
+                    continue
+                x, y, width, height, area = (int(value) for value in stats[label])
+                if not (x < sx + sw and x + width >= selection.shape[1] - 1
+                        and x >= sx + sw - 35 and sy + 3 <= y
+                        and y + height <= sy + sh - 3):
+                    continue
+                if not (8 <= area <= max(160, int(sw * sh * 0.045))
+                        and width <= max_width and height <= max_height):
+                    continue
+                nearby = recovered[
+                    max(sy, y - 5):min(sy + sh, y + height + 5),
+                    max(sx, x - 38):x,
+                ]
+                if np.count_nonzero(nearby) >= 20:
+                    recovered[labels == label] = 255
+        # YOLO sometimes stops just before a detached final exclamation mark.
+        # Admit only tiny punctuation in a narrow, light-background side band
+        # aligned with the established text; never grow the whole rectangle.
+        bounds = cv2.boundingRect(recovered)
+        _, text_y, _, text_height = bounds
+        for label in range(1, count):
+            if label in accepted:
+                continue
+            x, y, width, height, area = (int(value) for value in stats[label])
+            outside_left = x + width <= sx and x >= sx - side_pad
+            outside_right = x >= sx + sw and x < sx + sw + side_pad
+            if not (outside_left or outside_right):
+                continue
+            if not (3 <= area <= 65 and width <= 6 and height <= 25):
+                continue
+            if y < sy + 3 or y + height > sy + sh - 3:
+                continue
+            if y + height < text_y - 5 or y > text_y + text_height + 5:
+                continue
+            recovered[labels == label] = 255
+        recovered = cv2.dilate(
+            recovered, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5)),
+            iterations=1,
+        )
+        return recovered
+
+    @staticmethod
     def _refine_neural_mask_by_colour(
         rgb: np.ndarray,
         neural_mask: np.ndarray,
@@ -1379,19 +1497,35 @@ class CleaningManager:
         )
         if not core_contours:
             return empty, None
-        points = np.concatenate(core_contours, axis=0)
-        if points.shape[0] < 3:
-            return empty, None
-        filled_core = np.zeros_like(contracted_candidates)
-        cv2.drawContours(
-            filled_core, [cv2.convexHull(points)], -1, 255, thickness=cv2.FILLED
-        )
-        # Grow once by the same radius used to contract, matching the JSX
-        # contract/grow cycle. The hull already closes glyph holes.
-        interior = cv2.dilate(filled_core, contract_kernel, iterations=1)
+        # Contraction can split dense lettering within ONE balloon. Rejoin
+        # those fragments only inside their original background component;
+        # a common hull across neighbouring balloons would include artwork.
+        _, background_labels = cv2.connectedComponents(light, 8)
+        background_ids = np.unique(background_labels[contracted_candidates > 0])
+        interior = np.zeros_like(light)
+        for background_id in background_ids:
+            if background_id == 0:
+                continue
+            belonging = background_labels == background_id
+            core = np.where(belonging & (contracted_candidates > 0), 255, 0).astype(np.uint8)
+            contours, _ = cv2.findContours(core, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+            if not contours:
+                continue
+            points = np.concatenate(contours, axis=0)
+            if len(points) < 3:
+                continue
+            hull = np.zeros_like(light)
+            cv2.drawContours(hull, [cv2.convexHull(points)], -1, 255, cv2.FILLED)
+            grown = cv2.dilate(hull, contract_kernel, iterations=1)
+            outline, _ = cv2.findContours(belonging.astype(np.uint8), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+            silhouette = np.zeros_like(light)
+            cv2.drawContours(silhouette, outline, -1, 255, cv2.FILLED)
+            cv2.bitwise_or(interior, cv2.bitwise_and(grown, silhouette), dst=interior)
         component = cv2.bitwise_and(light, interior)
         component_fraction = np.count_nonzero(component) / selection_area
         component_pixels = rgb[component > 0].astype(np.float32)
+        if not len(component_pixels):
+            return empty, None
         fill = np.median(component_pixels, axis=0)
         spread = np.linalg.norm(component_pixels - fill, axis=1)
         if float(np.percentile(spread, 90)) > 16.0 or float(fill.min()) < 232.0:
@@ -2588,6 +2722,7 @@ class CleaningManager:
             None
         ] * len(context_boxes)
         solid_needs_detector = [False] * len(context_boxes)
+        connected_masks = [False] * len(context_boxes)
         # Resolve flat balloons first. Their contour-derived mask already
         # captures black/coloured CJK and protects impact rays, so sending
         # those boxes through ocr.onnx again only adds latency and can remove
@@ -2599,7 +2734,12 @@ class CleaningManager:
             crop = page[cy1:cy2, cx1:cx2]
             selection = np.zeros(crop.shape[:2], dtype=np.uint8)
             selection[y1 - cy1:y2 - cy1, x1 - cx1:x2 - cx1] = 255
-            solid_mask, fill = self._solid_balloon_text_mask(crop, selection)
+            connected = colour_connected_balloon_mask(crop, selection)
+            if connected is not None:
+                connected_masks[index] = True
+                solid_mask, fill = connected
+            else:
+                solid_mask, fill = self._solid_balloon_text_mask(crop, selection)
             return index, solid_mask, fill
 
         workers = {"low": 2, "balanced": min(os.cpu_count() or 4, 8), "high": min(os.cpu_count() or 8, 12)}.get(self.resource_profile, 4)
@@ -2634,8 +2774,9 @@ class CleaningManager:
                     # white page wedge was mistaken for dialogue; validate
                     # those cases with the neural line locator.
                     needs_detector = (
-                        mask_fraction > 0.22
+                        not connected_masks[index] and (mask_fraction > 0.22
                         or boundary_pixels > max(20, int((x2 - x1) * 0.04))
+                        )
                     )
                     solid_needs_detector[index] = needs_detector
                     if needs_detector:
@@ -2704,7 +2845,7 @@ class CleaningManager:
                 # silhouette and keeps only components anchored inside it.
                 # It is safer and more complete than intersecting again with
                 # a neural line seed that may omit coloured glyphs.
-                final_mask = cv2.bitwise_and(fallback_mask, selection)
+                final_mask = fallback_mask.copy() if connected_masks[index] else cv2.bitwise_and(fallback_mask, selection)
                 if solid_needs_detector[index]:
                     detected = detected_masks[index]
                     context_rgb = page[
@@ -2724,8 +2865,6 @@ class CleaningManager:
                     # For a suspicious geometric mask, doing nothing is safer
                     # than repainting an entire page/balloon wedge.
                     final_mask = guided
-                if not np.any(final_mask):
-                    return index, None
                 method = "solid_fill"
             else:
                 detected = detected_masks[index]
@@ -2751,6 +2890,21 @@ class CleaningManager:
                     if inferred_fill is not None:
                         fill_color = inferred_fill
                         method = "solid_fill"
+            context_rgb = page[
+                cy1:cy1 + selection.shape[0], cx1:cx1 + selection.shape[1]
+            ]
+            # Connected balloon masks already cover complete glyphs and enforce
+            # a contour inset; generic boundary recovery must not expand it.
+            if not connected_masks[index]:
+                final_mask = complete_boundary_glyphs(
+                    context_rgb, final_mask, selection, detected_masks[index]
+                )
+                dark_text = self._recover_dark_text_on_light_panel(context_rgb, selection)
+                if np.any(dark_text):
+                    final_mask = cv2.bitwise_or(final_mask, dark_text)
+                final_mask = complete_anchored_glyph_fragments(
+                    context_rgb, final_mask, selection
+                )
             if not np.any(final_mask):
                 return index, None
             mx, my, width, height = cv2.boundingRect(final_mask)
@@ -2887,6 +3041,10 @@ class CleaningManager:
             tx1, ty1 = max(0, int(target.get("x", x))), max(0, int(target.get("y", y)))
             tx2 = min(page_width, tx1 + max(1, int(target.get("width", width))))
             ty2 = min(page_height, ty1 + max(1, int(target.get("height", height))))
+            # The reviewed glyph mask may extend beyond a tight detector box.
+            # Preserve its complete extent when exporting the cleaned patch.
+            tx1, ty1 = min(tx1, x), min(ty1, y)
+            tx2, ty2 = max(tx2, x2), max(ty2, y2)
             valid_targets.append((tx1, ty1, tx2, ty2, method))
             if method == "solid_fill" and isinstance(fill_value, (list, tuple)) and len(fill_value) >= 3:
                 pixels = np.ascontiguousarray(page[y:y2, x:x2].copy())
@@ -2958,8 +3116,12 @@ class CleaningManager:
                 ix2, iy2 = min(x2, px + width), min(y2, py + height)
                 if ix2 <= ix1 or iy2 <= iy1:
                     continue
-                pixels[iy1 - y1:iy2 - y1, ix1 - x1:ix2 - x1] = cleaned[iy1 - py:iy2 - py, ix1 - px:ix2 - px]
                 source_mask = exact_mask[iy1 - py:iy2 - py, ix1 - px:ix2 - px]
+                np.copyto(
+                    pixels[iy1 - y1:iy2 - y1, ix1 - x1:ix2 - x1],
+                    cleaned[iy1 - py:iy2 - py, ix1 - px:ix2 - px],
+                    where=(source_mask > 0)[:, :, None],
+                )
                 destination_mask = patch_mask[iy1 - y1:iy2 - y1, ix1 - x1:ix2 - x1]
                 np.maximum(destination_mask, source_mask, out=destination_mask)
             if np.any(patch_mask):

@@ -15,7 +15,7 @@ DEFAULT_SETTINGS = {
         "glossary": "",
         "prompt": "",
     },
-    "ocr": {"platform": "Alibaba Cloud", "model": "qwen-vl-ocr"},
+    "ocr": {"platform": "Alibaba Cloud", "model": "qwen-vl-ocr", "base_url": ""},
     # Legacy key fields are read for migration only. New secrets live in the
     # per-user DPAPI CredentialStore and are never written here.
     "global_keys": {
@@ -24,7 +24,8 @@ DEFAULT_SETTINGS = {
     "clean": {"platform": "Local (AI)", "model": "LaMa · lama.onnx", "debug_mask": False, "local_aggressiveness": 90},
     "general": {
         "export_json_current_only": False, "autosave_minutes": 2,
-        "backup_limit": 10, "psd_auto_sync": True,
+        "backup_limit": 10, "psd_auto_sync": True, "ui_language": "es",
+        "auto_check_updates": True,
     },
     "performance": {
         "resource_profile": "auto", "device_mode": "auto",
@@ -40,12 +41,10 @@ class SettingsManager:
         self.path = path
         self.data = self._load()
         self.needs_save = False
-        # Previous builds forced this dated identifier over the alias selected
-        # by the user. The international endpoint used by the reference editor
-        # accepts the stable qwen-vl-ocr name directly.
-        if self.data["ocr"].get("model") == "qwen-vl-ocr-2025-11-20":
-            self.data["ocr"]["model"] = "qwen-vl-ocr"
+        if self.data["general"].get("ui_language") not in {"es", "en"}:
+            self.data["general"]["ui_language"] = "es"
             self.needs_save = True
+        # Preserve explicit model versions: availability varies by region.
         if self.data["translate"].get("platform") not in {
             "Alibaba Cloud", "Gemini", "OpenAI", "DeepSeek", "DeepL",
         }:
@@ -85,11 +84,20 @@ class SettingsManager:
         self.save()
 
     def update_workflow(self, values: dict) -> None:
+        if "ocr_base_url" in values:
+            self.data["ocr"]["base_url"] = str(values["ocr_base_url"]).strip()
+        if "ocr_model" in values:
+            self.data["ocr"]["model"] = str(values["ocr_model"]).strip()
         self.data["translate"].update({
             "platform": values["provider"], "model": values["model"],
             "source_language": values["source_language"], "target_language": values["target_language"],
         })
         self.data["general"]["autosave_minutes"] = int(values["autosave_minutes"])
+        if "ui_language" in values:
+            language = str(values["ui_language"]).lower()
+            self.data["general"]["ui_language"] = language if language in {"es", "en"} else "es"
+        if "auto_check_updates" in values:
+            self.data["general"]["auto_check_updates"] = bool(values["auto_check_updates"])
         if "psd_auto_sync" in values:
             self.data["general"]["psd_auto_sync"] = bool(values["psd_auto_sync"])
         if "device_mode" in values:

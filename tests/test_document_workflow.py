@@ -18,7 +18,7 @@ from core.detection_manager import DetectionManager, TextRegion, _OnnxTextDetect
 from core.export_manager import compose_page, export_page
 from core.font_profile_manager import FontProfileManager
 from core.history_manager import HistoryManager
-from core.ocr_manager import ALIBABA_COMPATIBLE_URL, OCRManager
+from core.ocr_manager import ALIBABA_COMPATIBLE_URL, OCRManager, OCRNetworkError
 from core.project_io import load_project_bundle, page_key, save_project_bundle
 from core.project_manager import Page, ProjectManager
 from core.psd_manager import inspect_psd, render_psd
@@ -754,7 +754,7 @@ class DocumentWorkflowTests(unittest.TestCase):
             self.assertEqual(images_per_call, [1, 1, 1])
             self.assertEqual([item["text"] for item in result], ["lectura independiente"] * 3)
 
-    def test_ocr_retries_only_suspicious_empty_coloured_crop(self) -> None:
+    def test_ocr_empty_coloured_crop_does_not_trigger_another_paid_call(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             source = Path(temp) / "page.png"
             page = Image.new("RGB", (300, 140), (255, 255, 255))
@@ -801,8 +801,8 @@ class DocumentWorkflowTests(unittest.TestCase):
                     lambda _value: None, lambda: False,
                 )
 
-            self.assertEqual(calls, 3)
-            self.assertEqual([item["text"] for item in result], ["color recuperado", "negro"])
+            self.assertEqual(calls, 2)
+            self.assertEqual([item["text"] for item in result], ["", "negro"])
 
     def test_long_page_ocr_keeps_every_region_independent_and_ordered(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
@@ -841,7 +841,7 @@ class DocumentWorkflowTests(unittest.TestCase):
             self.assertEqual([item["id"] for item in result], [item["id"] for item in regions])
             self.assertEqual([item["text"] for item in result], ["texto"] * 42)
 
-    def test_ocr_retries_windows_10054_and_keeps_the_result(self) -> None:
+    def test_ocr_windows_10054_waits_for_explicit_retry(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             source = Path(temp) / "page.png"
             Image.fromarray(np.full((80, 120, 3), 255, dtype=np.uint8)).save(source)
@@ -866,11 +866,16 @@ class DocumentWorkflowTests(unittest.TestCase):
                 patch("core.ocr_manager.requests.Session", return_value=FakeSession()),
                 patch("core.ocr_manager.time.sleep", return_value=None),
             ):
-                result = OCRManager().run_regions(
+                manager = OCRManager()
+                args = (
                     source, [{"id": "1", "x": 10, "y": 10, "width": 50, "height": 30}],
                     "Alibaba Cloud", "qwen-vl-ocr", "key",
                     lambda _value: None, lambda: False,
                 )
+                with self.assertRaises(OCRNetworkError):
+                    manager.run_regions(*args)
+                self.assertEqual(attempts, 1)
+                result = manager.run_regions(*args)
 
             self.assertEqual(attempts, 2)
             self.assertEqual(result[0]["text"], "recuperado")

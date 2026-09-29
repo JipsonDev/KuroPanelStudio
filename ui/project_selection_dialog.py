@@ -209,11 +209,13 @@ class ProjectSelectionDialog(QDialog):
         selected = self.selected_project()
         self.open_button.setEnabled(selected is not None)
         if selected is None:
+            self.summary_title.setProperty("kuro_i18n_ignore", False)
             self.summary_title.setText("Selecciona un proyecto")
             self.summary_meta.setText("Aquí verás las fuentes y el glosario asociados.")
             self.summary_fonts.clear()
             return
         project_type, project = selected
+        self.summary_title.setProperty("kuro_i18n_ignore", True)
         fonts = self.manager.font_entries(project_type, project)
         glossary = self.manager.translation_profile(project_type, project).get("glossary", [])
         self.summary_title.setText(project)

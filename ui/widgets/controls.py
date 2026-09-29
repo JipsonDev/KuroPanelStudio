@@ -13,8 +13,8 @@ class ModernButton(QPushButton):
             self.setObjectName(role)
         self.setCursor(Qt.PointingHandCursor)
         if icon_name:
-            self.setIcon(icon(icon_name, "#F5F7FA" if role in {"Primary", "Coral", "ToolActive"} else "#AAB8C5"))
-            self.setIconSize(QSize(16, 16))
+            self.setIcon(icon(icon_name, "#07111F" if role in {"Primary", "Coral"} else "#D5DEEA", 20))
+            self.setIconSize(QSize(20, 20))
 
 
 class SectionTitle(QLabel):
@@ -34,6 +34,8 @@ class CollapsibleSection(QWidget):
         layout.setSpacing(5)
         self.header = QToolButton()
         self.header.setObjectName("DisclosureHeader")
+        from PySide6.QtWidgets import QSizePolicy
+        self.header.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         self.header.setText(title)
         self.header.setCheckable(True)
         self.header.setChecked(expanded)
@@ -83,17 +85,19 @@ class SidebarButton(QToolButton):
         self.setObjectName("SidebarButton")
         self.setText(text)
         self.setToolButtonStyle(Qt.ToolButtonTextUnderIcon)
-        self.setFixedSize(54, 58)
+        self.setCheckable(True)
+        self.setAccessibleName(text)
+        self.setFixedSize(74, 64)
         self.setToolTip(text)
-        self.setIcon(icon(icon_name, "#AAB8C5", 18))
-        self.setIconSize(QSize(18, 18))
-        self.setStyleSheet("padding: 5px 2px 4px 2px;")
+        self.setIcon(icon(icon_name, "#B8C7DD", 22))
+        self.setIconSize(QSize(22, 22))
         self.setCursor(Qt.PointingHandCursor)
         self.clicked.connect(lambda: self.selected.emit(self.tool_name))
 
     def set_active(self, active: bool) -> None:
+        self.setChecked(active)
         self.setObjectName("SidebarActive" if active else "SidebarButton")
-        self.setIcon(icon(self.icon_name, "#F5F7FA" if active else "#AAB8C5", 18))
+        self.setIcon(icon(self.icon_name, "#07111F" if active else "#B8C7DD", 22))
         self.style().unpolish(self)
         self.style().polish(self)
 

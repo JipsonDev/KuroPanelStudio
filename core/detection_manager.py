@@ -65,31 +65,45 @@ class _OnnxTextDetector:
         options.intra_op_num_threads = max(1, int(threads))
         options.inter_op_num_threads = 1
         options.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
+        if use_dml and not use_cuda:
+            options.enable_mem_pattern = False
+            options.execution_mode = ort.ExecutionMode.ORT_SEQUENTIAL
         self.session = ort.InferenceSession(str(path), sess_options=options, providers=providers)
-        self.input_name = self.session.get_inputs()[0].name
+        model_input = self.session.get_inputs()[0]
+        self.input_name = model_input.name
+        shape = getattr(model_input, "shape", [None, 3, 640, 640])
+        self.batch_size = shape[0] if isinstance(shape[0], int) and shape[0] > 0 else None
         # Ultralytics' default inference size used by the reference editor.
         self.size = 640
+        self.input_height = shape[2] if isinstance(shape[2], int) and shape[2] > 0 else self.size
+        self.input_width = shape[3] if isinstance(shape[3], int) and shape[3] > 0 else self.size
         self.cv2 = cv2
-        self.uses_cuda = self.session.get_providers()[0] in {"CUDAExecutionProvider", "DmlExecutionProvider"}
+        self.provider = self.session.get_providers()[0]
+        self.uses_cuda = self.provider in {"CUDAExecutionProvider", "DmlExecutionProvider"}
+        if device_mode == "gpu" and not self.uses_cuda:
+            raise RuntimeError("YOLO no pudo inicializar la GPU; selecciona CPU o Automático.")
 
     def predict_boxes(self, images: list[np.ndarray], confidence: float, iou: float) -> list[list[tuple[np.ndarray, float]]]:
         if not images:
             return []
-        tensors: list[np.ndarray] = []
+        batch_size = getattr(self, "batch_size", None)
+        if batch_size and len(images) > batch_size:
+            return [boxes for start in range(0, len(images), batch_size)
+                    for boxes in self.predict_boxes(images[start:start + batch_size], confidence, iou)]
+        input_h = getattr(self, "input_height", self.size)
+        input_w = getattr(self, "input_width", self.size)
+        tensor = np.full((batch_size or len(images), 3, input_h, input_w), 114.0, dtype=np.float32)
         transforms: list[tuple[int, int, float, int, int]] = []
-        for image in images:
+        for index, image in enumerate(images):
             height, width = image.shape[:2]
-            scale = min(self.size / max(1, width), self.size / max(1, height))
+            scale = min(input_w / max(1, width), input_h / max(1, height))
             resized_w, resized_h = max(1, round(width * scale)), max(1, round(height * scale))
             resized = self.cv2.resize(image, (resized_w, resized_h), interpolation=self.cv2.INTER_LINEAR)
-            left = (self.size - resized_w) // 2
-            top = (self.size - resized_h) // 2
-            padded = np.full((self.size, self.size, 3), 114, dtype=np.uint8)
-            padded[top:top + resized_h, left:left + resized_w] = resized
-            tensors.append(np.transpose(padded, (2, 0, 1)))
+            left = (input_w - resized_w) // 2
+            top = (input_h - resized_h) // 2
+            tensor[index, :, top:top + resized_h, left:left + resized_w] = resized.transpose(2, 0, 1)
             transforms.append((height, width, scale, left, top))
 
-        tensor = np.ascontiguousarray(np.stack(tensors), dtype=np.float32)
         tensor *= 1.0 / 255.0
         raw_batch = np.asarray(self.session.run(None, {self.input_name: tensor})[0])
         outputs: list[list[tuple[np.ndarray, float]]] = []
@@ -97,7 +111,8 @@ class _OnnxTextDetector:
             if prediction.shape[0] <= 8:
                 prediction = prediction.T
             scores = prediction[:, 4]
-            keep = scores >= float(confidence)
+            keep = (scores >= float(confidence)) & np.isfinite(prediction).all(axis=1)
+            keep &= (prediction[:, 2] > 0) & (prediction[:, 3] > 0)
             prediction, scores = prediction[keep], scores[keep]
             if not len(prediction):
                 outputs.append([])
@@ -117,7 +132,8 @@ class _OnnxTextDetector:
                 box[[1, 3]] = (box[[1, 3]] - top) / scale
                 box[[0, 2]] = np.clip(box[[0, 2]], 0, width)
                 box[[1, 3]] = np.clip(box[[1, 3]], 0, height)
-                detected.append((box, float(scores[index])))
+                if box[2] > box[0] and box[3] > box[1]:
+                    detected.append((box, float(scores[index])))
             outputs.append(detected)
         return outputs
 
@@ -225,7 +241,8 @@ class DetectionManager:
                             self.paths.yolo_onnx, self.device_mode, self.cpu_threads,
                         )
                         self._device = "cuda" if self._model.uses_cuda else "cpu"
-                        self.runtime_label = "GPU · ONNX CUDA" if self._model.uses_cuda else f"CPU · ONNX · {self.cpu_threads} núcleos"
+                        backend = "DirectML" if self._model.provider == "DmlExecutionProvider" else "CUDA"
+                        self.runtime_label = f"GPU · ONNX {backend}" if self._model.uses_cuda else f"CPU · ONNX · {self.cpu_threads} núcleos"
                         self._loaded_mode = self.device_mode
                         self.last_used = monotonic()
                         return self._model
@@ -289,6 +306,8 @@ class DetectionManager:
         self, image_path: Path, progress: Callable[[int], None], cancelled: Callable[[], bool],
         source_states: dict[str, dict] | None = None,
     ) -> list[dict]:
+        if cancelled():
+            return []
         if not image_path.exists():
             raise FileNotFoundError("La imagen activa ya no existe.")
         stat = image_path.stat()
@@ -306,11 +325,7 @@ class DetectionManager:
         regions: list[TextRegion] = []
         with load_source_image(image_path, source_states) as image:
             width, height = image.size
-            stride = max(1, self.tile_height - self.tile_overlap)
-            starts = list(range(0, height, stride))
-            if starts and starts[-1] + self.tile_height < height:
-                starts.append(max(0, height - self.tile_height))
-            starts = list(dict.fromkeys(starts))
+            starts = self._tile_starts(height, self.tile_height, self.tile_overlap)
             memory = cuda_memory_mb() if self._device != "cpu" else None
             if isinstance(model, _OnnxTextDetector):
                 if memory:
@@ -319,6 +334,8 @@ class DetectionManager:
                     batch_limit = {"low": 1, "balanced": 2, "high": 4}.get(self.resource_profile, 2)
             else:
                 batch_limit = adaptive_gpu_batch(memory[0] if memory else None)[0] if memory else 1
+            if isinstance(model, _OnnxTextDetector) and getattr(model, "batch_size", None):
+                batch_limit = model.batch_size
             for offset in range(0, len(starts), batch_limit):
                 if cancelled():
                     return []
@@ -337,7 +354,8 @@ class DetectionManager:
                             regions.append(TextRegion(x1, y1 + top, x2 - x1, y2 - y1, float(score)))
                 else:
                     predictions = model.predict(
-                        strips if len(strips) > 1 else strips[0],
+                        # Ultralytics accepts OpenCV-style BGR numpy arrays.
+                        [np.ascontiguousarray(strip[:, :, ::-1]) for strip in strips],
                         conf=self.confidence,
                         iou=0.35,
                         verbose=False,
@@ -350,13 +368,19 @@ class DetectionManager:
                                 x1, y1, x2, y2 = (int(value) for value in box)
                                 regions.append(TextRegion(x1, y1 + top, x2 - x1, y2 - y1, float(score)))
                 progress(int(min(len(starts), offset + len(batch_starts)) * 100 / len(starts)))
-        self.last_used = monotonic()
-        # Match the reference workflow: discard accidental page-sized boxes,
-        # suppress duplicates from overlapping strips, then join text lines.
-        page_area = max(1, width * height)
-        regions = [item for item in regions if (item.width * item.height) / page_area <= 0.15]
-        regions = self._deduplicate(regions)
-        regions = self._merge_same_balloon_lines(regions)
+            self.last_used = monotonic()
+            if cancelled():
+                return []
+            # A cropped single balloon may legitimately cover >15% of the
+            # image. Keep such detections only with supporting balloon geometry.
+            page_area = max(1, width * height)
+            regions = [item for item in regions if item.width > 0 and item.height > 0
+                       and ((item.width * item.height) / page_area <= 0.15
+                            or self._shared_balloon(image, item, item) is True)]
+            regions = self._deduplicate(regions)
+            regions = self._merge_same_balloon_lines(regions, image, cancelled)
+        if cancelled():
+            return []
         result = tuple(region.to_dict() for region in regions)
         self._result_cache[cache_key] = result
         while len(self._result_cache) > self._cache_limit:
@@ -364,35 +388,55 @@ class DetectionManager:
         return [dict(region) for region in result]
 
     @staticmethod
+    def _tile_starts(height: int, tile_height: int, overlap: int) -> list[int]:
+        """Cover the page without a redundant tail or a tiny rescaled final strip."""
+        if tile_height <= 0 or not 0 <= overlap < tile_height:
+            raise ValueError("La franja debe ser positiva y el solapamiento menor que su altura.")
+        last = max(0, height - tile_height)
+        starts = list(range(0, last + 1, tile_height - overlap))
+        if starts[-1] != last:
+            starts.append(last)
+        return starts
+
+    @staticmethod
     def _deduplicate(regions: list[TextRegion]) -> list[TextRegion]:
         """Reference NMS: IoU 0.35 or 75% containment of the weaker box."""
+        ordered = sorted(regions, key=lambda item: item.confidence, reverse=True)
+        if not ordered:
+            return []
+        boxes = np.array([(r.x, r.y, r.x + r.width, r.y + r.height) for r in ordered], dtype=np.float64)
+        areas = np.maximum(0, boxes[:, 2] - boxes[:, 0]) * np.maximum(0, boxes[:, 3] - boxes[:, 1])
+        pending = np.arange(len(ordered))
         accepted: list[TextRegion] = []
-        for candidate in sorted(regions, key=lambda item: item.confidence, reverse=True):
-            candidate_area = candidate.width * candidate.height
-            duplicate = False
-            for current in accepted:
-                overlap_x = max(0, min(candidate.x + candidate.width, current.x + current.width) - max(candidate.x, current.x))
-                overlap_y = max(0, min(candidate.y + candidate.height, current.y + current.height) - max(candidate.y, current.y))
-                intersection = overlap_x * overlap_y
-                union = candidate_area + current.width * current.height - intersection
-                containment = intersection / max(1, candidate_area)
-                if (union and intersection / union > 0.35) or containment > 0.75:
-                    duplicate = True
-                    break
-            if not duplicate:
-                accepted.append(candidate)
+        while pending.size:
+            current = pending[0]
+            accepted.append(ordered[current])
+            remaining = pending[1:]
+            overlap = np.maximum(0, np.minimum(boxes[current, 2:], boxes[remaining, 2:])
+                                 - np.maximum(boxes[current, :2], boxes[remaining, :2]))
+            intersection = overlap[:, 0] * overlap[:, 1]
+            union = areas[current] + areas[remaining] - intersection
+            duplicate = (intersection / np.maximum(1, union) > 0.35)
+            duplicate |= intersection / np.maximum(1, areas[remaining]) > 0.75
+            pending = remaining[~duplicate]
         return sorted(accepted, key=lambda item: (item.y, item.x))
 
     @staticmethod
-    def _merge_same_balloon_lines(regions: list[TextRegion]) -> list[TextRegion]:
+    def _merge_same_balloon_lines(
+        regions: list[TextRegion], image: Image.Image | None = None,
+        cancelled: Callable[[], bool] | None = None,
+    ) -> list[TextRegion]:
         """Join adjacent detected lines only when they clearly form one balloon.
 
         YOLO sometimes returns one box per line inside a bubble. The limits are
         deliberately conservative so nearby but independent bubbles stay apart.
         """
         regions = list(regions)
+        evidence_cache: dict[tuple, bool | None] = {}
         changed = True
         while changed:
+            if cancelled and cancelled():
+                return []
             changed = False
             regions.sort(key=lambda item: (item.y, item.x))
             for first_index, first in enumerate(regions):
@@ -400,7 +444,19 @@ class DetectionManager:
                     second = regions[second_index]
                     if second.y > first.y + first.height + 40:
                         break
-                    if not DetectionManager._are_adjacent_lines(first, second):
+                    adjacent = DetectionManager._are_adjacent_lines(first, second)
+                    if image is not None:
+                        overlap = min(first.x + first.width, second.x + second.width) - max(first.x, second.x)
+                        if overlap < min(first.width, second.width) * .25:
+                            continue
+                        key = (first.x, first.y, first.width, first.height,
+                               second.x, second.y, second.width, second.height)
+                        if key not in evidence_cache:
+                            evidence_cache[key] = DetectionManager._shared_balloon(image, first, second)
+                        evidence = evidence_cache[key]
+                        if evidence is False or (evidence is None and not adjacent):
+                            continue
+                    elif not adjacent:
                         continue
                     x1 = min(first.x, second.x)
                     y1 = min(first.y, second.y)
@@ -415,6 +471,33 @@ class DetectionManager:
                 if changed:
                     break
         return sorted(regions, key=lambda item: (item.y, item.x))
+
+    @staticmethod
+    def _shared_balloon(image: Image.Image, first: TextRegion, second: TextRegion) -> bool | None:
+        """Positive contour evidence can join lines with wider spacing.
+
+        Separate closed contours veto a merge; missing/open contours leave
+        the existing conservative five-pixel adjacency rule in place.
+        """
+        from core.balloon_geometry import enclosed_balloon_mask
+        left = max(0, min(first.x, second.x) - 80)
+        top = max(0, min(first.y, second.y) - 80)
+        right = min(image.width, max(first.x + first.width, second.x + second.width) + 80)
+        bottom = min(image.height, max(first.y + first.height, second.y + second.height) + 80)
+        if right <= left or bottom <= top or (right - left) * (bottom - top) > 1_000_000:
+            return None
+        rgb = np.asarray(image.crop((left, top, right, bottom)))
+        selections = []
+        for region in (first, second):
+            selection = np.zeros(rgb.shape[:2], np.uint8)
+            selection[max(0, region.y - top):min(bottom, region.y + region.height) - top,
+                      max(0, region.x - left):min(right, region.x + region.width) - left] = 255
+            selections.append(selection)
+        first_mask = enclosed_balloon_mask(rgb, selections[0])
+        second_mask = first_mask if first is second else enclosed_balloon_mask(rgb, selections[1])
+        if first_mask is None or second_mask is None:
+            return None
+        return bool(np.any((first_mask > 0) & (second_mask > 0)))
 
     @staticmethod
     def _are_adjacent_lines(first: TextRegion, second: TextRegion) -> bool:

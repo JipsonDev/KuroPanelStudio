@@ -15,7 +15,7 @@ from PySide6.QtWidgets import (QFrame, QGraphicsPixmapItem, QGraphicsRectItem, Q
                                QGraphicsEllipseItem, QGraphicsItem, QGraphicsLineItem, QGraphicsPathItem,
                                QGraphicsSimpleTextItem, QGraphicsTextItem, QGraphicsView,
                                QGraphicsBlurEffect, QGraphicsDropShadowEffect,
-                               QHBoxLayout, QLabel, QVBoxLayout, QWidget)
+                               QHBoxLayout, QLabel, QStackedLayout, QVBoxLayout, QWidget)
 
 from core.stroke_engine import StrokeEngine
 from core.retouch_layers import normalized_layer_states, patch_layer
@@ -27,9 +27,10 @@ from core.sfx_transform import (
     mesh_offset_for_position,
 )
 from core.text_layout import fit_rectangular_text, layout_signature
-from core.watermark_manager import prepare_watermark, watermark_positions
+from core.watermark_manager import prepare_watermark, watermark_positions, watermark_vertical_bounds, normalized_watermark
 from ui.widgets.controls import ModernButton
 from ui.widgets.icons import icon
+from ui.welcome_panel import WelcomePanel
 
 
 class EffectsTextItem(QGraphicsTextItem):
@@ -110,6 +111,7 @@ class WatermarkPixmapItem(QGraphicsPixmapItem):
         self._safe_max_y = safe_max_y
         self._on_changed = on_changed
         self._on_deleted = on_deleted
+        self._drag_start_position = None
         self.setAcceptedMouseButtons(Qt.AllButtons)
         self.setFlag(QGraphicsItem.ItemIsSelectable, True)
         self.setFlag(QGraphicsItem.ItemIsMovable, True)
@@ -141,13 +143,18 @@ class WatermarkPixmapItem(QGraphicsPixmapItem):
                 if selected is not self:
                     selected.setSelected(False)
         self.setSelected(True)
+        self._drag_start_position = self.pos()
         self.setCursor(Qt.ClosedHandCursor)
         super().mousePressEvent(event)
 
     def mouseReleaseEvent(self, event) -> None:
         super().mouseReleaseEvent(event)
         self.setCursor(Qt.OpenHandCursor)
-        self._on_changed()
+        # A simple click must not freeze the whole automatic page layout as
+        # manual coordinates (especially while its loading preview is visible).
+        if self._drag_start_position is not None and self.pos() != self._drag_start_position:
+            self._on_changed()
+        self._drag_start_position = None
 
     def set_interactive(self, enabled: bool) -> None:
         self.setAcceptedMouseButtons(Qt.AllButtons if enabled else Qt.NoButton)
@@ -494,6 +501,7 @@ class ComparisonDividerItem(QGraphicsLineItem):
 
 
 class CanvasView(QGraphicsView):
+    page_available = Signal(bool)
     zoom_changed = Signal(int)
     folder_dropped = Signal(str)
     regions_changed = Signal(object)
@@ -685,6 +693,7 @@ class CanvasView(QGraphicsView):
         # Layout/mask caches are keyed by pixmap identity and bounded by the
         # resource policy. Keeping them makes returning to a page cheap and
         # avoids rebuilding every text layer after each navigation.
+        self.page_available.emit(True)
         self._trim_typesetting_caches()
         self.clear_watermark()
         self.clear_sfx_nodes()
@@ -750,6 +759,10 @@ class CanvasView(QGraphicsView):
 
 
     def clear_page(self) -> None:
+        self.page_available.emit(False)
+        if self._empty_hint is not None:
+            self.scene.removeItem(self._empty_hint)
+            self._empty_hint = None
         self._text_render_generation += 1
         self._text_batch_active = False
         self._clear_typesetting_caches()
@@ -925,7 +938,10 @@ class CanvasView(QGraphicsView):
         self.clear_watermark()
         if not visible or not settings or self._pixmap_item.pixmap().isNull():
             return
-        page_size = (self._pixmap_item.pixmap().width(), self._pixmap_item.pixmap().height())
+        # During loading the pixmap contains only a reduced top crop. All
+        # overlays use original scene coordinates, never thumbnail dimensions.
+        bounds = self.scene.sceneRect()
+        page_size = (round(bounds.width()), round(bounds.height()))
         mark = prepare_watermark(page_size, settings)
         if mark is None:
             return
@@ -935,14 +951,13 @@ class CanvasView(QGraphicsView):
         pixmap = QPixmap.fromImage(image)
         config = dict(settings)
         page_positions = settings.get("page_positions", {})
-        config["positions"] = page_positions[page_name] if page_name in page_positions else None
+        if not settings.get("chapter_resolved"):
+            config["positions"] = page_positions[page_name] if page_name in page_positions else settings.get("positions")
         positions = watermark_positions(page_size, rgba.size, config)
         safe_min_y = 0.0
         safe_max_y = float(max(0, page_size[1] - rgba.height))
-        if settings.get("repeat") and settings.get("seam_safe", True) and settings.get("keep_inside", True):
-            edge = max(int(settings.get("margin_y", 0)), rgba.height * 2, min(400, round(page_size[0] * 0.12)))
-            safe_min_y = float(min(edge, int(safe_max_y)))
-            safe_max_y = float(max(safe_min_y, int(safe_max_y) - edge))
+        if settings.get("keep_inside", True):
+            safe_min_y, safe_max_y = watermark_vertical_bounds(page_size, rgba.size, normalized_watermark(settings))
         # A repeated preview remains interactive even on very long webtoons.
         for x, y in positions[:600]:
             item = WatermarkPixmapItem(
@@ -3155,6 +3170,8 @@ class CanvasView(QGraphicsView):
 
 
 class CanvasShell(QFrame):
+    panel_toggle_requested = Signal()
+
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.setObjectName("CanvasShell")
@@ -3168,6 +3185,7 @@ class CanvasShell(QFrame):
             button = ModernButton(label, icon_name=icon_name)
             button.setObjectName("CanvasTool")
             button.setToolTip(tip)
+            button.setAccessibleName(tip)
             button.setFixedHeight(29)
             if action: button.clicked.connect(action)
             toolbar.addWidget(button)
@@ -3181,11 +3199,28 @@ class CanvasShell(QFrame):
         self.compare_button.setObjectName("CanvasCompare")
         self.compare_button.setCheckable(True)
         self.compare_button.setToolTip("Original a la izquierda · limpieza a la derecha · arrastra el divisor")
+        self.compare_button.setAccessibleName("Comparar original y limpieza")
         self.compare_button.toggled.connect(self.canvas.set_comparison_mode)
         toolbar.addWidget(self.compare_button)
         toolbar.addStretch()
+        self.panel_button = ModernButton("", icon_name="layers")
+        self.panel_button.setObjectName("CanvasTool")
+        self.panel_button.setFixedSize(34, 29)
+        self.panel_button.setAccessibleName("Ocultar o mostrar panel de herramientas")
+        self.panel_button.setToolTip("Ocultar panel para ampliar el lienzo")
+        self.panel_button.clicked.connect(self.panel_toggle_requested)
+        self.panel_button.hide()
+        toolbar.addWidget(self.panel_button)
         layout.addLayout(toolbar)
-        layout.addWidget(self.canvas, 1)
+        self.welcome = WelcomePanel()
+        self.welcome.path_dropped.connect(self.canvas.folder_dropped)
+        stage = QWidget()
+        self.stage_layout = QStackedLayout(stage)
+        self.stage_layout.setContentsMargins(0, 0, 0, 0)
+        self.stage_layout.addWidget(self.welcome)
+        self.stage_layout.addWidget(self.canvas)
+        self.canvas.page_available.connect(lambda ready: self.stage_layout.setCurrentWidget(self.canvas if ready else self.welcome))
+        layout.addWidget(stage, 1)
         navigation = QHBoxLayout()
         navigation.setSpacing(6)
         navigation.addStretch()
@@ -3197,6 +3232,8 @@ class CanvasShell(QFrame):
         self.next_button.setIcon(icon("chevron-right"))
         self.previous_button.setToolTip("Página anterior")
         self.next_button.setToolTip("Página siguiente")
+        self.previous_button.setAccessibleName("Página anterior")
+        self.next_button.setAccessibleName("Página siguiente")
         navigation.addWidget(self.previous_button)
         self.page_label = QLabel("—  /  —")
         self.page_label.setObjectName("CanvasPageLabel")
@@ -3206,3 +3243,12 @@ class CanvasShell(QFrame):
         navigation.addStretch()
         layout.addLayout(navigation)
         self.canvas.zoom_changed.connect(lambda value: self.zoom_label.setText(f"{value}%"))
+
+    def set_compact_controls(self, compact: bool) -> None:
+        self.compare_button.setText("" if compact else "Comparar")
+        self.panel_button.setVisible(compact)
+
+    def set_panel_collapsed(self, collapsed: bool) -> None:
+        self.panel_button.setToolTip(
+            "Mostrar panel de herramientas" if collapsed else "Ocultar panel para ampliar el lienzo"
+        )

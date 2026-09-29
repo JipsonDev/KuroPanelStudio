@@ -7,6 +7,8 @@ from pathlib import Path
 import numpy as np
 from PIL import Image
 
+from core.watermark_layout import balanced_positions
+
 
 DEFAULT_WATERMARK = {
     "source_name": "",
@@ -28,6 +30,8 @@ DEFAULT_WATERMARK = {
     "rotation": 0,
     "blend_mode": "normal",
     "repeat": False,
+    "distribution": "column",
+    "minimum_gap": 48,
     "auto_count": True,
     "repeat_count": 3,
     "repeat_spacing_x": 0,
@@ -82,6 +86,10 @@ def normalized_watermark(value: dict | None) -> dict:
     result["blend_mode"] = str(result.get("blend_mode", "normal")).lower()
     if result["blend_mode"] not in {"normal", "multiply", "screen", "overlay"}:
         result["blend_mode"] = "normal"
+    result["distribution"] = str(result.get("distribution", "column"))
+    if result["distribution"] not in {"column", "alternating"}:
+        result["distribution"] = "column"
+    result["minimum_gap"] = max(0, min(10000, int(result.get("minimum_gap", 48))))
     result["repeat"] = bool(result.get("repeat", False))
     result["auto_count"] = bool(result.get("auto_count", True))
     result["repeat_count"] = max(1, min(100, int(result.get("repeat_count", 3))))
@@ -108,40 +116,16 @@ def automatic_watermark_count(page_size: tuple[int, int], mark_size: tuple[int, 
     return max(1, min(12, int(round(page_height / target_interval))))
 
 
-def _avoid_reading_regions(
-    positions: list[tuple[int, int]], page_size: tuple[int, int], mark_size: tuple[int, int], regions: list[dict],
-    minimum_y: int = 0, maximum_y: int | None = None,
-) -> list[tuple[int, int]]:
-    if not positions or not regions:
-        return positions
-    page_width, page_height = page_size
-    mark_width, mark_height = mark_size
-    maximum_y = max(minimum_y, page_height - mark_height) if maximum_y is None else max(minimum_y, maximum_y)
-    padding = max(16, min(mark_width, mark_height) // 4)
-
-    def overlaps(x: int, y: int, region: dict) -> bool:
-        return not (
-            x + mark_width + padding <= region["x"] or x >= region["x"] + region["width"] + padding
-            or y + mark_height + padding <= region["y"] or y >= region["y"] + region["height"] + padding
-        )
-
-    placed: list[tuple[int, int]] = []
-    for x, ideal_y in positions:
-        candidates = [ideal_y]
-        for region in regions:
-            if not (x + mark_width + padding <= region["x"] or x >= region["x"] + region["width"] + padding):
-                candidates.extend((region["y"] - mark_height - padding, region["y"] + region["height"] + padding))
-        valid = []
-        for candidate_y in candidates:
-            candidate_y = max(minimum_y, min(int(candidate_y), maximum_y))
-            if any(overlaps(x, candidate_y, region) for region in regions):
-                continue
-            if any(abs(candidate_y - used_y) < mark_height + padding for used_x, used_y in placed if used_x == x):
-                continue
-            valid.append(candidate_y)
-        if valid:
-            placed.append((max(0, min(int(x), max(0, page_width - mark_width))), min(valid, key=lambda y: abs(y - ideal_y))))
-    return sorted(placed, key=lambda position: position[1])
+def watermark_vertical_bounds(page_size, mark_size, config):
+    """Shared export/drag limits, reducing excessive margins symmetrically."""
+    available = max(0, page_size[1] - mark_size[1])
+    if config.get("chapter_resolved"):
+        return 0, available
+    edge = config["margin_y"]
+    if config["repeat"] and config["seam_safe"]:
+        edge = max(edge, mark_size[1] * 2, min(400, round(page_size[0] * .12)))
+    edge = min(edge, available // 2)
+    return edge, available - edge
 
 
 def watermark_bytes(value: dict | None) -> bytes:
@@ -180,6 +164,11 @@ def prepare_watermark(page_size: tuple[int, int], value: dict | None) -> Image.I
     source = source.resize((target_width, target_height), Image.Resampling.LANCZOS)
     if config["rotation"]:
         source = source.rotate(-config["rotation"], expand=True, resample=Image.Resampling.BICUBIC)
+    if config["keep_inside"]:
+        # Rotation can make the requested width taller than a short page.
+        available_width = max(1, page_width - 2 * min(config["margin_x"], (page_width - 1) // 2))
+        available_height = max(1, _page_height - 2 * min(config["margin_y"], (_page_height - 1) // 2))
+        source.thumbnail((available_width, available_height), Image.Resampling.LANCZOS)
     if config["opacity"] < 100:
         source.putalpha(source.getchannel("A").point(lambda alpha: alpha * config["opacity"] // 100))
     return source
@@ -193,47 +182,48 @@ def watermark_positions(
     mark_width, mark_height = mark_size
     if config.get("positions") is not None:
         positions = [(int(position[0]), int(position[1])) for position in config["positions"]]
-        if config["repeat"] and config["seam_safe"] and config["keep_inside"]:
-            edge_margin = max(config["margin_y"], mark_height * 2, min(400, round(page_width * 0.12)))
-            maximum_y = max(0, page_height - mark_height)
-            minimum_y = min(edge_margin, maximum_y)
-            maximum_y = max(minimum_y, maximum_y - edge_margin)
-            positions = [(x, max(minimum_y, min(y, maximum_y))) for x, y in positions]
+        if config["keep_inside"]:
+            lower, upper = watermark_vertical_bounds(page_size, mark_size, config)
+            positions = [(max(0, min(x, max(0, page_width - mark_width))),
+                          max(lower, min(y, upper))) for x, y in positions]
         return positions
+    if config["keep_inside"] and (mark_width > page_width or mark_height > page_height):
+        return []
     if config["repeat"]:
         horizontal = config["anchor"].split("-")[-1] if "-" in config["anchor"] else "center"
-        if horizontal == "left":
-            x = config["margin_x"]
-        elif horizontal == "right":
-            x = page_width - config["margin_x"] - mark_width
-        else:
-            x = (page_width - mark_width) // 2
-        x += config["offset_x"]
+        left = config["margin_x"] + config["offset_x"]
+        right = page_width - config["margin_x"] - mark_width + config["offset_x"]
+        x = left if horizontal == "left" else right if horizontal == "right" else (page_width - mark_width) // 2 + config["offset_x"]
         if config["keep_inside"]:
-            x = max(0, min(x, max(0, page_width - mark_width)))
+            def inside(position):
+                return max(0, min(position, max(0, page_width - mark_width)))
+            x, left, right = inside(x), inside(left), inside(right)
+        lower, upper = watermark_vertical_bounds(page_size, mark_size, config)
+        if not config["keep_inside"]:
+            lower += config["offset_y"]
+            upper += config["offset_y"]
         count = automatic_watermark_count(page_size, mark_size) if config["auto_count"] else config["repeat_count"]
-        edge_margin = config["margin_y"]
-        if config["seam_safe"]:
-            edge_margin = max(edge_margin, mark_height * 2, min(400, round(page_width * 0.12)))
-        start_y = edge_margin + config["offset_y"]
-        end_y = page_height - edge_margin - mark_height + config["offset_y"]
-        lower = 0
-        upper = max(0, page_height - mark_height)
-        if config["keep_inside"]:
-            lower = min(edge_margin, upper) if config["seam_safe"] else 0
-            upper = max(lower, page_height - mark_height - edge_margin) if config["seam_safe"] else upper
-            start_y = max(lower, min(start_y, upper))
-            end_y = max(lower, min(end_y, upper))
-        if count == 1:
-            vertical = config["anchor"].split("-")[0] if "-" in config["anchor"] else "middle"
-            y = start_y if vertical == "top" else end_y if vertical == "bottom" else (start_y + end_y) / 2
-            positions = [(int(x), int(round(y)))]
-            return _avoid_reading_regions(positions, page_size, mark_size, config["avoid_regions"], lower, upper) if config["avoid_text"] else positions
-        positions = [
-            (int(x), int(round(start_y + (end_y - start_y) * index / (count - 1))))
-            for index in range(count)
-        ]
-        return _avoid_reading_regions(positions, page_size, mark_size, config["avoid_regions"], lower, upper) if config["avoid_text"] else positions
+        gap = config["minimum_gap"]
+        count = min(count, 1 + (upper - lower) // max(1, mark_height + gap))
+        regions = config["avoid_regions"] if config["avoid_text"] else []
+        # Reduce only when no complete placement exists, then redistribute the
+        # remaining count over the full usable height instead of dropping a slot.
+        for number in range(count, 0, -1):
+            if number == 1:
+                vertical = config["anchor"].split("-")[0] if "-" in config["anchor"] else "middle"
+                ideals = [lower if vertical == "top" else upper if vertical == "bottom" else (lower + upper) / 2]
+            else:
+                ideals = [lower + (upper - lower) * index / (number - 1) for index in range(number)]
+            if config["keep_inside"]:
+                ideals = [max(lower, min(y + config["offset_y"], upper)) for y in ideals]
+            xs = [x] * number
+            if config["distribution"] == "alternating" and number > 1:
+                sides = (left, right) if horizontal == "left" else (right, left)
+                xs = [sides[index % 2] for index in range(number)]
+            placed = balanced_positions(xs, ideals, (lower, upper), mark_size, regions, gap)
+            if placed is not None:
+                return placed
+        return []
 
     horizontal, vertical = {
         "top-left": ("left", "top"), "top-center": ("center", "top"), "top-right": ("right", "top"),
@@ -256,7 +246,11 @@ def watermark_positions(
     if config["keep_inside"]:
         x = max(0, min(x, max(0, page_width - mark_width)))
         y = max(0, min(y, max(0, page_height - mark_height)))
-    return [(int(x), int(y))]
+    positions = [(int(x), int(y))]
+    if config["avoid_text"] and config["avoid_regions"]:
+        bounds = watermark_vertical_bounds(page_size, mark_size, config) if config["keep_inside"] else (min(0, y), max(page_height - mark_height, y))
+        return balanced_positions([int(x)], [int(y)], bounds, mark_size, config["avoid_regions"], 0) or []
+    return positions
 
 
 def _paste_blended(base: Image.Image, overlay: Image.Image, position: tuple[int, int], mode: str) -> None:
@@ -287,6 +281,7 @@ def compose_watermark(image: Image.Image, value: dict | None) -> bool:
     mark = prepare_watermark(image.size, config)
     if mark is None or config["opacity"] <= 0:
         return False
-    for position in watermark_positions(image.size, mark.size, config):
+    positions = watermark_positions(image.size, mark.size, config)
+    for position in positions:
         _paste_blended(image, mark, position, config["blend_mode"])
-    return True
+    return bool(positions)
