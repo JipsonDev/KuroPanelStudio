@@ -44,4 +44,4 @@ jobs:
           $tag = '${{ github.ref_name }}'
           $version = $tag.Substring(1)
           $folder = "github-release/KuroPanelStudio-v$version"
-          gh release create $tag "$folder/KuroPanelStudio-Setup-$version-Windows-x64.exe" "$folder/SHA256SUMS.txt" --verify-tag --generate-notes
+          gh release create $tag "$folder/KuroPanelStudio-Setup-$version-Windows-x64.exe" "$folder/SHA256SUMS.txt" --verify-tag --title "KuroPanel Studio $tag" --notes-file "$folder/RELEASE_NOTES.md"

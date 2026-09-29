@@ -22,13 +22,13 @@ fuente no instala actualizaciones.
 2. Crea y sube una etiqueta semántica nueva, por ejemplo:
 
    ```powershell
-   git tag v0.2.0
-   git push origin v0.2.0
+   git tag v0.2.1
+   git push origin v0.2.1
    ```
 
 3. El flujo `.github/workflows/windows-release.yml` ejecuta las pruebas en
    Windows, compila la app, genera el instalador y `SHA256SUMS.txt`, y crea la
-   GitHub Release. Comprueba que la ejecución termine correctamente antes de
+   GitHub Release con las notas de `installer/RELEASE_NOTES.md`. Comprueba que la ejecución termine correctamente antes de
    anunciar la versión.
 
 Cada versión requiere un binario nuevo, pero GitHub Actions lo construye y lo
@@ -40,8 +40,8 @@ Para compilar localmente, instala las dependencias de `requirements-release.txt`
 y PyInstaller en `.venv`, instala Inno Setup 6 y ejecuta:
 
 ```powershell
-.\build_windows.ps1 -Version 0.2.0
-.\build_installer.ps1 -Version 0.2.0
+.\build_windows.ps1 -Version 0.2.1
+.\build_installer.ps1 -Version 0.2.1
 ```
 
 `build_windows.ps1` incorpora la versión a la app y restaura los archivos

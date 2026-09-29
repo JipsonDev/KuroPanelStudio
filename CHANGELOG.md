@@ -1,0 +1,17 @@
+# Historial de cambios
+
+## 0.2.1
+
+- Actualización de estados en la lista de páginas sin volver a aplicar estilos a insignias que no cambiaron.
+- Cola de miniaturas visibles reutilizada mientras se cargan las páginas, y recalculada al desplazarse, filtrar o redimensionar la lista.
+- Tamaño de archivo tomado de los metadatos ya obtenidos durante el escaneo del capítulo, sin otra consulta al disco desde la interfaz.
+- Notas de versión explícitas en GitHub Releases, publicadas automáticamente junto al instalador y `SHA256SUMS.txt`.
+
+## 0.2.0
+
+- Instalador para Windows con comprobación y aplicación de actualizaciones desde GitHub Releases.
+- Interfaz en español e inglés, reorganización de herramientas y progreso de operaciones.
+- OCR por cajas y por capítulo, traducción con proveedores configurables y control del gasto de OCR.
+- Mejoras de detección de texto, limpieza de globos y revisión visual de la limpieza.
+- Distribución de marcas de agua a lo largo de un capítulo continuo.
+- Importación PSD/PSB, exportación a resolución original y autoguardado.

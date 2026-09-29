@@ -68,6 +68,26 @@ def test_page_search_filter_reverse_and_selection_use_chapter_indices(app, tmp_p
     panel.close()
 
 
+def test_thumbnail_queue_loads_newly_visible_pages_after_scrolling(app, tmp_path):
+    pages = []
+    for index in range(30):
+        path = tmp_path / f"page_{index:02}.png"
+        Image.new("RGB", (60, 90), (index * 6, 50, 80)).save(path)
+        pages.append(Page(path.name, path, 60, 90, "0.1 MB"))
+    panel = ImagesPanel(pages, ImageManager())
+    panel.resize(315, 420)
+    panel.show()
+    app.processEvents()
+    panel.list.scrollToBottom()
+    for _ in range(30):
+        if 29 in panel._loaded_thumbnails:
+            break
+        QTest.qWait(30)
+    assert 29 in panel._loaded_thumbnails
+    assert len(panel._loaded_thumbnails) < len(pages)
+    panel.close()
+
+
 def test_pending_page_filters_and_next_navigation(app, tmp_path):
     pages = []
     for index in range(3):

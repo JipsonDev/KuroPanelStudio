@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from collections import deque
+
 from PySide6.QtCore import QRunnable, QSize, Qt, QThreadPool, QTimer, Signal
 from PySide6.QtGui import QPixmap
 from PySide6.QtWidgets import (QAbstractItemView, QBoxLayout, QComboBox, QFrame, QHBoxLayout,
@@ -14,6 +16,7 @@ from ui.widgets.icons import icon
 
 class ProjectImageList(QListWidget):
     folder_dropped = Signal(str)
+    viewport_resized = Signal()
 
     def __init__(self) -> None:
         super().__init__()
@@ -23,6 +26,10 @@ class ProjectImageList(QListWidget):
     def setCurrentRow(self, source_index: int) -> None:
         # MainWindow works in chapter order even when this view is reversed.
         super().setCurrentRow(self.source_to_row.get(source_index, source_index))
+
+    def resizeEvent(self, event) -> None:
+        super().resizeEvent(event)
+        self.viewport_resized.emit()
 
     def dragEnterEvent(self, event) -> None:
         if event.mimeData().hasUrls():
@@ -117,10 +124,9 @@ class ImageListItem(QWidget):
         dimensions.setMinimumWidth(0)
         dimensions.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
         self.dimensions = dimensions
-        try:
-            size = f"{page.path.stat().st_size / 1048576:.1f} MB" if page.path else ""
-        except OSError:
-            size = ""
+        # Folder scanning already collected this metadata in a worker. Avoid
+        # one extra disk access per row while the chapter list is built in Qt.
+        size = page.size_label if page.path and page.size_label != "—" else ""
         self.file_size = QLabel(size); self.file_size.setObjectName("PageMeta")
         self.file_size.setMinimumWidth(0)
         self.file_size.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
@@ -183,11 +189,21 @@ class ImageListItem(QWidget):
             self.set_thumbnail(self._thumbnail_pixmap)
 
     def set_status(self, status: dict[str, bool | str]) -> None:
+        state = tuple(bool(status.get(key, False)) for key in self.status_badges)
+        error_message = str(status.get("error_message") or "Error de proceso en esta página")
+        if getattr(self, "_status_state", None) == (state, error_message):
+            return
+        self._status_state = (state, error_message)
         for key, badge in self.status_badges.items():
-            badge.setProperty("done", bool(status.get(key, False)))
-            badge.setProperty("error", key == "error" and bool(status.get("error", False)))
-            if key == "error":
-                badge.setToolTip(str(status.get("error_message") or "Error de proceso en esta página"))
+            done = bool(status.get(key, False))
+            error = key == "error" and bool(status.get("error", False))
+            changed = badge.property("done") != done or badge.property("error") != error
+            if key == "error" and badge.toolTip() != error_message:
+                badge.setToolTip(error_message)
+            if not changed:
+                continue
+            badge.setProperty("done", done)
+            badge.setProperty("error", error)
             badge.style().unpolish(badge)
             badge.style().polish(badge)
 
@@ -279,6 +295,7 @@ class ImagesPanel(QFrame):
         )
         self.list.folder_dropped.connect(self.folder_dropped)
         self.list.verticalScrollBar().valueChanged.connect(lambda _: self._queue_thumbnails())
+        self.list.viewport_resized.connect(self._queue_thumbnails)
         layout.addWidget(self.list, 1)
         self.footer = ElidedLabel("Capítulo sin imágenes cargadas")
         self.footer.setObjectName("Muted")
@@ -288,6 +305,8 @@ class ImagesPanel(QFrame):
         self._statuses: list[dict[str, bool | str]] = []
         self._display_to_source: list[int] = []
         self._loaded_thumbnails: set[int] = set()
+        self._thumbnail_candidates: deque[int] = deque()
+        self._thumbnail_queue_dirty = True
         self._thumbnail_generation = 0
         self._thumbnail_pool = QThreadPool(self)
         self._thumbnail_pool.setMaxThreadCount(2)
@@ -312,6 +331,8 @@ class ImagesPanel(QFrame):
         self.list.blockSignals(True)
         self.list.clear()
         self._loaded_thumbnails.clear()
+        self._thumbnail_candidates.clear()
+        self._thumbnail_queue_dirty = True
         self._thumbnail_generation += 1
         self._display_to_source = list(range(len(pages)))
         if self._reverse:
@@ -336,20 +357,29 @@ class ImagesPanel(QFrame):
         """Decode only visible thumbnails and yield between rows."""
         if not self.isVisible():
             return
-        viewport = self.list.viewport().rect()
-        for index, page in enumerate(self.pages):
-            row = self.list.source_to_row[index]
-            if index in self._loaded_thumbnails or self.list.item(row).isHidden():
-                continue
-            if not self.list.visualItemRect(self.list.item(row)).intersects(viewport):
+        if self._thumbnail_queue_dirty:
+            viewport = self.list.viewport().rect()
+            self._thumbnail_candidates = deque(
+                index for index in self._display_to_source
+                if self.pages[index].path is not None
+                and index not in self._loaded_thumbnails
+                and not self.list.item(self.list.source_to_row[index]).isHidden()
+                and self.list.visualItemRect(self.list.item(self.list.source_to_row[index])).intersects(viewport)
+            )
+            self._thumbnail_queue_dirty = False
+        while self._thumbnail_candidates:
+            index = self._thumbnail_candidates.popleft()
+            if index in self._loaded_thumbnails:
                 continue
             self._loaded_thumbnails.add(index)
+            page = self.pages[index]
             if page.path:
                 self._thumbnail_pool.start(ThumbnailTask(
                     self.image_manager, page.path, index,
                     self._thumbnail_generation, self.thumbnail_decoded,
                 ))
-            self._queue_thumbnails()
+            if self._thumbnail_candidates:
+                self._thumbnail_timer.start(20)
             break
 
     def _thumbnail_ready(self, index: int, generation: int, image) -> None:
@@ -357,6 +387,7 @@ class ImagesPanel(QFrame):
             self.set_thumbnail(index, image)
 
     def _queue_thumbnails(self):
+        self._thumbnail_queue_dirty = True
         self._thumbnail_timer.start(20)
 
     def showEvent(self, event) -> None:
@@ -390,18 +421,26 @@ class ImagesPanel(QFrame):
         visible_indices = []
         for index, page in enumerate(self.pages):
             status = self._statuses[index] if index < len(self._statuses) else {}
-            matches = {
-                "Todas": True,
-                "Sin detectar": not status.get("detected", False),
-                "Pendiente OCR": status.get("detected", False) and not status.get("ocr", False),
-                "Pendiente traducción": status.get("ocr", False) and not status.get("translated", False),
-                "Pendiente limpieza": status.get("detected", False) and not status.get("cleaned", False),
-                "Con error": status.get("error", False),
-                "Sin rotular": not status.get("typeset", False),
-                "Rotuladas": status.get("typeset", False),
-            }
-            visible = query in page.name.casefold() and bool(matches.get(choice, True))
-            self.list.item(self.list.source_to_row[index]).setHidden(not visible)
+            if choice == "Sin detectar":
+                matches = not status.get("detected", False)
+            elif choice == "Pendiente OCR":
+                matches = status.get("detected", False) and not status.get("ocr", False)
+            elif choice == "Pendiente traducción":
+                matches = status.get("ocr", False) and not status.get("translated", False)
+            elif choice == "Pendiente limpieza":
+                matches = status.get("detected", False) and not status.get("cleaned", False)
+            elif choice == "Con error":
+                matches = status.get("error", False)
+            elif choice == "Sin rotular":
+                matches = not status.get("typeset", False)
+            elif choice == "Rotuladas":
+                matches = status.get("typeset", False)
+            else:
+                matches = True
+            visible = (not query or query in page.name.casefold()) and bool(matches)
+            item = self.list.item(self.list.source_to_row[index])
+            if item.isHidden() == visible:
+                item.setHidden(not visible)
             if visible and (choice != "Todas" or not status.get("typeset", False)):
                 visible_indices.append(index)
         self._pending_indices = visible_indices
