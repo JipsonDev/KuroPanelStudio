@@ -1,40 +1,22 @@
-# Publicar KuroPanel Studio en GitHub
+# Actualizar el repositorio existente
 
-La carpeta fuente contiene modelos mayores de 100 MB. Deben publicarse mediante
-Git LFS; no desactives ni elimines `.gitattributes`.
+El repositorio público es [JipsonDev/KuroPanelStudio](https://github.com/JipsonDev/KuroPanelStudio).
+Conserva el historial de `main` y publica los cambios mediante commits nuevos;
+no hace falta crear otro repositorio ni forzar el `push`.
 
-## Crear el repositorio
+Antes de cada publicación, revisa `git status` y ejecuta las pruebas. No
+incluyas `dist/`, `github-release/`, entornos virtuales, cachés, proyectos
+personales, `settings.json`, `credentials.dat` ni claves de API. `.gitignore`
+excluye esos archivos. Los modelos ONNX y los pesos que ya forman parte del
+proyecto se gestionan con Git LFS según `.gitattributes`.
 
-Ejecuta estos comandos dentro de la carpeta fuente preparada. Si la carpeta ya
-contiene `.git` y los archivos aparecen en `git status`, omite `git init`,
-`git lfs install` y `git add`:
+Sube primero los commits de código a `main`. Para crear un instalador de una
+versión nueva, sube después una etiqueta semántica que coincida con esa
+versión, por ejemplo `v0.2.0`. El flujo
+`.github/workflows/windows-release.yml` ejecuta las pruebas, compila el
+instalador y publica la GitHub Release con su SHA-256 automáticamente.
+Comprueba que el flujo termine antes de anunciar la versión. Los usuarios de
+la app instalada recibirán la actualización desde el programa.
 
-```powershell
-git init -b main
-git lfs install
-git add .
-git status
-git commit -m "Publicación inicial de KuroPanel Studio 0.1.0"
-git remote add origin URL_DEL_REPOSITORIO
-git push -u origin main
-```
-
-Antes del commit, confirma que `git status` no muestra `api_configs.json`,
-`credentials.dat`, `.venv-gpu`, `dist`, `github-release`, proyectos personales
-ni imágenes que no quieras publicar.
-
-## Publicar el instalador
-
-1. Crea la etiqueta `v0.1.0` en GitHub.
-2. Abre **Releases** y crea una nueva versión usando esa etiqueta.
-3. Copia el contenido de `RELEASE_NOTES.md` en la descripción.
-4. Adjunta `KuroPanelStudio-Setup-0.1.0-Windows-x64.exe` y
-   `SHA256SUMS.txt` desde la carpeta binaria preparada.
-
-El instalador no debe añadirse al historial Git normal.
-
-## Licencia
-
-Elige una licencia antes de hacer público el repositorio. MIT permite una
-reutilización amplia; GPL obliga a que las modificaciones distribuidas sigan
-siendo libres. No añadas una licencia sin aceptar primero sus consecuencias.
+Más detalles en [Actualizaciones](docs/actualizaciones.md). El instalador no
+se añade al historial Git.

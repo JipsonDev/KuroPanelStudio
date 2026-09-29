@@ -18,7 +18,9 @@ editores de manga/manhua ni con los proveedores de modelos o APIs compatibles.
 
 ### Interfaz principal
 
-![Interfaz principal de KuroPanel Studio](docs/images/app-overview.png)
+![Interfaz principal de KuroPanel Studio](docs/images/workspace-redesign.png)
+
+[Diseño, distribución adaptable y controles de la interfaz](docs/interface-design.md).
 
 ### Detección y cajas OCR
 
@@ -62,6 +64,11 @@ páginas en publicaciones públicas, confirma que tienes los derechos necesarios
 - Exportación por página o capítulo a resolución original.
 - Comparación antes/después con divisor arrastrable.
 - Monitor de RAM, VRAM y tiempos de procesamiento.
+- Interfaz en español o inglés, seleccionable en **Configuración → Interfaz**.
+
+El idioma de la interfaz se aplica al guardar la configuración y se conserva al
+reiniciar. Es independiente de los idiomas de origen y destino del OCR y la
+traducción.
 
 ## Requisitos
 
@@ -80,10 +87,16 @@ descargar el código fuente:
 
 1. Abre la sección de [Releases](https://github.com/JipsonDev/KuroPanelStudio/releases).
 2. En la versión más reciente, descarga
-   `KuroPanelStudio-Setup-0.1.0-Windows-x64.exe`.
+   `KuroPanelStudio-Setup-<versión>-Windows-x64.exe`.
 3. Ejecuta el instalador y, si lo deseas, activa el acceso directo del
    escritorio.
 4. Abre **KuroPanel Studio** desde el menú Inicio o desde el acceso directo.
+
+La aplicación instalada busca actualizaciones al iniciar (se puede desactivar
+en **Configuración → Interfaz**) y permite buscarlas desde el menú superior.
+Si hay una versión nueva en GitHub Releases, descarga el instalador, verifica
+su SHA-256 y lo aplica al cerrar la sesión actual. Los usuarios ya instalados
+no tienen que descargar manualmente cada `.exe`.
 
 El instalador funciona en Windows x64, se instala en la carpeta del usuario y
 no necesita permisos de administrador. Incluye la aplicación, los modelos y las
@@ -170,6 +183,20 @@ contenido confidencial.
 
 ## Pruebas
 
+Consulta las [mejoras de procesamiento y sus mediciones](docs/processing-performance.md)
+para reproducir el benchmark local de detección y OCR sin enviar imágenes a una API.
+También se documentan las [correcciones de limpieza y detección de globos](docs/balloon-cleaning.md).
+Consulta las [correcciones de errores OCR y el progreso visible](docs/ocr-errors-progress.md)
+para configurar la región y distinguir problemas de modelo, clave o cuota.
+El [control de consumo OCR](docs/ocr-cost-control.md) explica la caché persistente,
+la relectura explícita y el contador de solicitudes y tokens.
+Consulta el [rediseño del editor y su estructura adaptable](docs/interface-design.md)
+para conocer la organización de paneles, el modo de enfoque y las capturas de verificación.
+La [limpieza por regiones de color](docs/bubble-mask-cleaning.md) explica la
+adaptación de `Bubble_Mask.atn`, la corrección de letras recortadas y sus pruebas.
+La [distribución de marcas de agua](docs/watermark-distribution.md) permite
+alternar lados, ajustar la separación mínima y respetar las cajas de texto.
+
 ```powershell
 pip install pytest
 python -m pytest -q
@@ -182,10 +209,10 @@ que puedas compartir legalmente.
 
 ## Compilar para Windows
 
-La edición completa GPU se construye con:
+La aplicación instalable se construye con:
 
 ```powershell
-.\build_windows.ps1
+.\build_windows.ps1 -Version 0.2.0
 ```
 
 La edición compacta CPU-first se construye con:
@@ -197,12 +224,13 @@ La edición compacta CPU-first se construye con:
 Para crear el instalador x64 con Inno Setup 6:
 
 ```powershell
-.\build_installer.ps1 -Version 0.1.0
+.\build_installer.ps1 -Version 0.2.0
 ```
 
-El instalador se genera en `github-release/KuroPanelStudio-v0.1.0/` y debe
-adjuntarse como recurso binario de una GitHub Release, no como archivo normal
-del repositorio.
+El instalador local se genera en `github-release/KuroPanelStudio-v0.2.0/`.
+En GitHub, una etiqueta `vX.Y.Z` inicia el flujo de Windows que compila,
+prueba y adjunta el instalador a la Release sin subirlo manualmente.
+Consulta [la guía de publicación](docs/actualizaciones.md).
 
 ## Estructura
 

@@ -1,4 +1,8 @@
 __pycache__/
+.venv/
+.pytest_cache/
+graphify-out/
+.graphify_cache/
 .venv-gpu/
 *.py[cod]
 _ui_preview.png
@@ -9,3 +13,24 @@ github-release/
 github-source/
 installer-smoke-*/
 *.spec.bak
+
+# Local projects, credentials, logs and editor state never belong in a release.
+.env
+.env.*
+!.env.example
+credentials.dat
+settings.json
+*.mseproj
+*.mseproj.tmp
+*.sqlite3
+*.sqlite3-*
+*.log
+*.log.*
+Cache/
+Recovery/
+Updates/
+.DS_Store
+Thumbs.db
+
+# Informe derivado de una acción Photoshop facilitada por el usuario.
+docs/bubble-mask-action.json
