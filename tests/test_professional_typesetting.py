@@ -11,7 +11,7 @@ from PIL import Image, ImageDraw
 
 from core.balloon_typesetter import (
     balloon_search_rect, detect_balloon_interior, detect_full_balloon,
-    effective_balloon_padding, fit_balanced_text,
+    effective_balloon_padding, fit_balanced_text, text_layout_geometry,
     line_intervals, usable_mask_bounds,
 )
 from core.cleaning_manager import CleaningManager
@@ -94,6 +94,18 @@ class ProfessionalTypesettingTests(unittest.TestCase):
         self.assertEqual(mask[0, 0], 0)
         self.assertGreater(mask[mask.shape[0] // 2, mask.shape[1] // 2], 0)
 
+    def test_manual_box_limits_text_to_its_handles_inside_a_large_balloon(self) -> None:
+        page = np.full((320, 440, 3), 35, np.uint8)
+        cv2.ellipse(page, (220, 160), (170, 125), 0, 0, 360, (248, 248, 248), -1)
+        box = (235, 105, 95, 90)
+        full_rect, _ = text_layout_geometry(page, box, 10)
+        manual_rect, manual_mask = text_layout_geometry(page, box, 10, manual_box=True)
+        self.assertGreater(full_rect[2], box[2] * 2)
+        self.assertEqual(manual_rect, box)
+        self.assertEqual(manual_mask.shape, (box[3], box[2]))
+        self.assertEqual(manual_mask[0, 0], 0)
+        self.assertGreater(manual_mask[box[3] // 2, box[2] // 2], 0)
+
     def test_export_uses_full_balloon_even_without_a_canvas_snapshot(self) -> None:
         image = Image.new("RGB", (440, 320), "#303640")
         ImageDraw.Draw(image).ellipse((50, 35, 390, 285), fill="white", outline="black", width=4)
@@ -120,6 +132,22 @@ class ProfessionalTypesettingTests(unittest.TestCase):
         safe = np.zeros(changed.shape, np.uint8)
         safe[sy + top:sy + top + height, sx + left:sx + left + width] = safe_mask
         self.assertEqual(np.count_nonzero(changed & (safe == 0)), 0)
+
+    def test_export_respects_moved_manual_box(self) -> None:
+        image = Image.new("RGB", (440, 320), "#303640")
+        ImageDraw.Draw(image).ellipse((50, 35, 390, 285), fill="white", outline="black", width=4)
+        before = np.asarray(image).copy()
+        region = {
+            "x": 235, "y": 105, "width": 95, "height": 90,
+            "typeset_box_manual": True, "applied_text": "HOLA MAMÁ",
+            "style": {**DEFAULT_STYLE, "font_family": "Arial", "font_size": 32,
+                      "auto_fit": True, "balloon_fit": True, "stroke_width": 0},
+        }
+        _draw_region_text(image, region, DEFAULT_STYLE)
+        changed = np.any(before != np.asarray(image), axis=2)
+        self.assertGreater(np.count_nonzero(changed), 0)
+        changed[105:195, 235:330] = False
+        self.assertEqual(np.count_nonzero(changed), 0)
 
     def test_balanced_fit_obeys_each_local_width(self) -> None:
         mask = detect_balloon_interior(self._balloon(260, 150), padding=12)
@@ -193,9 +221,12 @@ class ProfessionalTypesettingTests(unittest.TestCase):
             "signature": balloon_layout_signature(region, region["applied_text"], style),
         }
         self.assertIsNotNone(valid_balloon_snapshot(region, region["applied_text"], style))
-        with patch("core.export_manager.detect_balloon_interior", side_effect=AssertionError("recomposed")):
+        with patch("core.export_manager.text_layout_geometry", side_effect=AssertionError("recomposed")):
             _draw_region_text(image, region, DEFAULT_STYLE)
         self.assertGreater(np.count_nonzero(np.asarray(image) != 255), 0)
+        region["typeset_box_manual"] = True
+        self.assertIsNone(valid_balloon_snapshot(region, region["applied_text"], style))
+        region.pop("typeset_box_manual")
         region["x"] += 5
         self.assertIsNone(valid_balloon_snapshot(region, region["applied_text"], style))
 

@@ -82,6 +82,38 @@ def detect_full_balloon(
     return (left, top, right - left, bottom - top), mask
 
 
+def text_layout_geometry(
+    search_rgb: np.ndarray,
+    text_box: tuple[int, int, int, int],
+    padding: int,
+    manual_box: bool = False,
+) -> tuple[tuple[int, int, int, int], np.ndarray]:
+    """Resolve the layout area relative to a page crop.
+
+    An untouched OCR box may use the full balloon. Once a user moves or
+    resizes the box, the same balloon mask is clipped to that box so the
+    handles actually control where the text can be drawn.
+    """
+    x, y, width, height = (int(value) for value in text_box)
+    full = detect_full_balloon(search_rgb, text_box, padding)
+    if full is not None and not manual_box:
+        return full
+    if full is not None:
+        (bx, by, bw, bh), full_mask = full
+        left, top = max(x, bx), max(y, by)
+        right, bottom = min(x + width, bx + bw), min(y + height, by + bh)
+        if right > left and bottom > top:
+            constrained = np.zeros((height, width), np.uint8)
+            constrained[top - y:bottom - y, left - x:right - x] = full_mask[
+                top - by:bottom - by, left - bx:right - bx
+            ]
+            constrained = cv2.bitwise_and(constrained, _safe_rectangle(height, width, padding))
+            if np.count_nonzero(constrained) >= max(24, width * height * .08):
+                return (x, y, width, height), constrained
+    local = search_rgb[y:y + height, x:x + width]
+    return (x, y, width, height), detect_balloon_interior(local, padding)
+
+
 def detect_balloon_interior(rgb: np.ndarray, padding: int = 8) -> np.ndarray:
     """Return the connected, background-like area surrounding the box centre.
 

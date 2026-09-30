@@ -4111,10 +4111,19 @@ class MainWindow(QMainWindow):
             for region in regions
         ]
         if previous_order == new_order:
-            # A translation box moving across the page must carry its exact
-            # composed glyph item with it. Re-running balloon segmentation at
-            # the new x/y made font size, line breaks and vertical scale jump.
-            if self.canvas_shell.canvas._last_region_change_kind != "move":
+            # Dragging is a cheap translation of the current item. After the
+            # gesture, a manually positioned balloon box becomes the actual
+            # typesetting boundary and needs one final composition.
+            moved_manual_balloon = (
+                self.canvas_shell.canvas._last_region_change_kind == "move"
+                and any(
+                    str(region.get("id", "")) in selected_ids
+                    and bool(region.get("typeset_box_manual", False))
+                    and bool(region.get("style", {}).get("balloon_fit", False))
+                    for region in regions
+                )
+            )
+            if self.canvas_shell.canvas._last_region_change_kind != "move" or moved_manual_balloon:
                 changed = [
                     index for index, region in enumerate(regions)
                     if str(region.get("id", "")) in selected_ids

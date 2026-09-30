@@ -1,5 +1,11 @@
 # Historial de cambios
 
+## 0.2.3
+
+- Las cajas de texto movidas o redimensionadas manualmente limitan la composición a sus propios bordes, incluso dentro de un globo grande.
+- El texto vuelve a ajustarse al soltar la caja, con la misma geometría en el lienzo y la exportación.
+- La detección del globo completo sigue disponible para cajas OCR que todavía no se han ajustado manualmente.
+
 ## 0.2.2
 
 - Detección del globo completo alrededor de cajas OCR pequeñas, con margen seguro y uso de la misma geometría al exportar.

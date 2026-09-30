@@ -13,8 +13,8 @@ from PIL import Image, ImageColor, ImageDraw, ImageFilter, ImageFont
 from core.project_manager import Page
 from core.psd_manager import load_source_image
 from core.balloon_typesetter import (
-    balloon_search_rect, detect_balloon_interior, detect_full_balloon,
-    effective_balloon_padding, fit_balanced_text,
+    balloon_search_rect, effective_balloon_padding, fit_balanced_text,
+    text_layout_geometry,
 )
 from core.sfx_layout import automatic_sfx_lines
 from core.sfx_transform import bezier_baseline, build_warp
@@ -349,19 +349,14 @@ def _draw_region_text(image: Image.Image, region: dict, default_style: dict) -> 
             search_rgb = np.asarray(image.crop((
                 search_x, search_y, search_x + search_width, search_y + search_height,
             )).convert("RGB"))
-            detected = detect_full_balloon(
-                search_rgb, (x - search_x, y - search_y, width, height), padding,
+            local_rect, balloon_mask = text_layout_geometry(
+                search_rgb, (x - search_x, y - search_y, width, height),
+                padding, bool(region.get("typeset_box_manual", False)),
             )
-            if detected is None:
-                crop_rgb = np.asarray(image.crop((x, y, x + width, y + height)).convert("RGB"))
-                layout_rect = (x, y, width, height)
-                balloon_mask = detect_balloon_interior(crop_rgb, padding)
-            else:
-                local_rect, balloon_mask = detected
-                layout_rect = (
-                    search_x + local_rect[0], search_y + local_rect[1],
-                    local_rect[2], local_rect[3],
-                )
+            layout_rect = (
+                search_x + local_rect[0], search_y + local_rect[1],
+                local_rect[2], local_rect[3],
+            )
 
             def line_height_for_size(size: int) -> float:
                 candidate_font = font_for_size(size)

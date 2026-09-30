@@ -741,6 +741,70 @@ class UIWorkflowTests(unittest.TestCase):
             self.assertLessEqual(right, region["balloon_layout_snapshot"]["layout_rect"][2] - 10)
         canvas.close()
 
+    def test_dragged_balloon_box_controls_the_final_text_layout(self) -> None:
+        canvas = CanvasView()
+        canvas.resize(560, 420)
+        image = QImage(440, 320, QImage.Format_RGB888)
+        image.fill(QColor("#303640"))
+        painter = QPainter(image)
+        painter.setBrush(QColor("white"))
+        painter.setPen(QPen(QColor("black"), 4))
+        painter.drawEllipse(50, 35, 340, 250)
+        painter.end()
+        canvas.set_image(image)
+        text = "¡ES MAMÁ! ¡NO SU MAJESTAD!, SINO MAMÁ!"
+        region = {
+            "id": "manual-balloon", "x": 155, "y": 105, "width": 140, "height": 100,
+            "applied_text": text,
+            "style": {"font_family": "Arial", "font_size": 36,
+                      "auto_fit": True, "balloon_fit": True},
+        }
+        canvas.set_regions([region])
+        canvas.add_text([text], [region])
+        self.assertGreater(canvas._text_items[0].data(9)[2], region["width"])
+
+        def synchronize(regions):
+            canvas.set_regions(regions)
+            canvas.update_text_layers([0], [text], regions)
+
+        canvas.regions_changed.connect(synchronize)
+        canvas.show()
+        self.app.processEvents()
+        start = canvas.mapFromScene(QPointF(295, 205))
+        end = canvas.mapFromScene(QPointF(255, 190))
+        QTest.mousePress(canvas.viewport(), Qt.LeftButton, pos=start)
+        QTest.mouseMove(canvas.viewport(), end, delay=10)
+        QTest.mouseRelease(canvas.viewport(), Qt.LeftButton, pos=end)
+        self.app.processEvents()
+
+        adjusted = canvas._regions[0].region
+        self.assertTrue(adjusted["typeset_box_manual"])
+        self.assertLess(adjusted["width"], 140)
+        layout = adjusted["balloon_layout_snapshot"]
+        self.assertEqual(tuple(layout["layout_rect"]), (
+            adjusted["x"], adjusted["y"], adjusted["width"], adjusted["height"],
+        ))
+        self.assertFalse(adjusted["text_overflow"])
+        self.assertLessEqual(canvas._text_items[0].sceneBoundingRect().right(),
+                             adjusted["x"] + adjusted["width"] + 1)
+
+        previous_x = adjusted["x"]
+        centre = QPointF(adjusted["x"] + adjusted["width"] / 2,
+                         adjusted["y"] + adjusted["height"] / 2)
+        moved = centre + QPointF(25, 12)
+        QTest.mousePress(canvas.viewport(), Qt.LeftButton, pos=canvas.mapFromScene(centre))
+        QTest.mouseMove(canvas.viewport(), canvas.mapFromScene(moved), delay=10)
+        QTest.mouseRelease(canvas.viewport(), Qt.LeftButton, pos=canvas.mapFromScene(moved))
+        self.app.processEvents()
+        adjusted = canvas._regions[0].region
+        self.assertGreater(adjusted["x"], previous_x)
+        self.assertEqual(tuple(adjusted["balloon_layout_snapshot"]["layout_rect"]), (
+            adjusted["x"], adjusted["y"], adjusted["width"], adjusted["height"],
+        ))
+        self.assertLessEqual(canvas._text_items[0].sceneBoundingRect().right(),
+                             adjusted["x"] + adjusted["width"] + 1)
+        canvas.close()
+
     def test_live_inline_edit_refits_text_and_reports_overflow(self) -> None:
         canvas = CanvasView()
         image = QImage(440, 320, QImage.Format_RGB888)
@@ -826,7 +890,7 @@ class UIWorkflowTests(unittest.TestCase):
         }
         canvas.set_image(image)
         canvas.set_regions([region])
-        with patch("ui.canvas_view.detect_balloon_interior") as detector:
+        with patch("ui.canvas_view.text_layout_geometry") as detector:
             canvas.add_text([
                 "ESTE TEXTO DEBE USAR LÍNEAS RECTANGULARES SIN SEGUIR EL CONTORNO DEL GLOBO"
             ], [region])
@@ -1645,7 +1709,7 @@ class UIWorkflowTests(unittest.TestCase):
         canvas.set_regions([region]); canvas.add_text([region["applied_text"]], [region])
         original = canvas._text_items[0]
         canvas._regions[0].region.update({"width": 340, "height": 180})
-        with patch("ui.canvas_view.detect_balloon_interior") as detector:
+        with patch("ui.canvas_view.text_layout_geometry") as detector:
             for _ in range(100):
                 canvas._preview_region_geometry(canvas._regions[0])
         self.assertIs(canvas._text_items[0], original)
@@ -1657,7 +1721,7 @@ class UIWorkflowTests(unittest.TestCase):
         image = QImage(500, 400, QImage.Format_RGB888); image.fill(255); canvas.set_image(image)
         region = {"id": "empty", "x": 20, "y": 20, "width": 300, "height": 200, "applied_text": ""}
         canvas.set_regions([region])
-        with patch("ui.canvas_view.detect_balloon_interior") as detector:
+        with patch("ui.canvas_view.text_layout_geometry") as detector:
             canvas.add_text([""], [region])
         detector.assert_not_called()
 

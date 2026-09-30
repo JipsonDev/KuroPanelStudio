@@ -167,7 +167,9 @@ def balloon_layout_signature(region: dict, text: str, style: dict) -> str:
     """Include the image location, since moving a box changes its balloon mask."""
     base = layout_signature(text, region.get("width", 1), region.get("height", 1), style)
     position = (round(float(region.get("x", 0)), 3), round(float(region.get("y", 0)), 3))
-    return sha1(repr((base, position)).encode("utf-8", "surrogatepass")).hexdigest()
+    return sha1(repr((
+        base, position, bool(region.get("typeset_box_manual", False)),
+    )).encode("utf-8", "surrogatepass")).hexdigest()
 
 
 def valid_balloon_snapshot(region: dict, text: str, style: dict) -> dict | None:

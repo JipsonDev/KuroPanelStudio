@@ -1,16 +1,14 @@
 # KuroPanel Studio @VERSION@
 
-Esta versión mejora el tipeo y la edición de texto sobre las páginas.
+Esta versión corrige el ajuste del texto al mover o redimensionar su caja.
 
 ## Cambios
 
-- El texto puede usar el contorno completo de un globo aunque la caja de OCR sea pequeña. Si el borde no se detecta con confianza, conserva la caja como área segura.
-- La edición con doble clic recompone tamaño, saltos de línea y centrado mientras se escribe, y avisa de inmediato si el texto no cabe. Deshacer y rehacer siguen disponibles.
-- La vista previa y la exportación comparten la geometría del globo para mantener la colocación del texto.
-- Arrastrar una esquina con Ctrl escala la caja y el texto. Las esquinas también funcionan mientras está abierto el editor de texto.
-- La sección de herramientas de texto está mejor organizada y los estilos de diálogo adaptan el texto al globo de forma predeterminada; las elecciones manuales existentes se respetan.
+- Al mover o redimensionar manualmente una caja, sus bordes pasan a limitar el texto. El contenido se recompone al soltarla, en lugar de volver a ocupar el globo completo.
+- El lienzo y la exportación respetan la posición y el tamaño de la caja ajustada.
+- Las cajas OCR sin ajustes manuales siguen aprovechando el contorno completo del globo.
 
-La suite local pasó **408 pruebas y 8 subpruebas** (5 pruebas omitidas).
+La suite local pasó **411 pruebas y 8 subpruebas** (5 pruebas omitidas).
 
 El [historial de cambios](https://github.com/JipsonDev/KuroPanelStudio/blob/main/CHANGELOG.md) contiene las versiones anteriores.
 

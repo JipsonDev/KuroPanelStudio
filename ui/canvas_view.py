@@ -21,9 +21,8 @@ from PySide6.QtWidgets import (QApplication, QFrame, QGraphicsPixmapItem, QGraph
 from core.stroke_engine import StrokeEngine
 from core.retouch_layers import normalized_layer_states, patch_layer
 from core.balloon_typesetter import (
-    balloon_search_rect, detect_balloon_interior, detect_full_balloon,
-    effective_balloon_padding, fit_balanced_text,
-    usable_mask_bounds,
+    balloon_search_rect, effective_balloon_padding, fit_balanced_text,
+    text_layout_geometry, usable_mask_bounds,
 )
 from core.typography_manager import TypographyManager
 from core.sfx_layout import automatic_sfx_lines
@@ -270,6 +269,7 @@ class TextRegionItem(QGraphicsRectItem):
         self._resize_edges: tuple[bool, bool, bool, bool] | None = None
         self._gesture_size: tuple[int, int] | None = None
         self._gesture_scaled = False
+        self._gesture_moved = False
         self._scale_font_gesture = False
         self._initial_text_scene_origin: QPointF | None = None
         self._initial_text_scale = 1.0
@@ -360,6 +360,7 @@ class TextRegionItem(QGraphicsRectItem):
             self._set_cursor(edges)
             self._scale_font_gesture = bool(event.modifiers() & Qt.ControlModifier)
             self._gesture_scaled = False
+            self._gesture_moved = False
             event.accept()
             return
 
@@ -379,6 +380,7 @@ class TextRegionItem(QGraphicsRectItem):
             int(round(self.region.get("height", self.rect().height()))),
         )
         self._resize_edges = None
+        self._gesture_moved = False
         super().mousePressEvent(event)
 
     def mouseMoveEvent(self, event) -> None:
@@ -426,10 +428,13 @@ class TextRegionItem(QGraphicsRectItem):
                 self.region.pop("font_size", None)
 
             self.setRect(normalized_rect)
+            self._gesture_moved = self._gesture_moved or normalized_rect != self._initial_rect
             self._commit_geometry(notify=False, change_kind="scale" if scale_with_ctrl else "resize")
             event.accept()
             return
+        previous_position = QPointF(self.pos())
         super().mouseMoveEvent(event)
+        self._gesture_moved = self._gesture_moved or self.pos() != previous_position
         self._commit_geometry(notify=False)
 
     def mouseReleaseEvent(self, event) -> None:
@@ -439,8 +444,11 @@ class TextRegionItem(QGraphicsRectItem):
         )
         resized = bool(self._gesture_size and current_size != self._gesture_size)
         change_kind = "scale" if resized and self._gesture_scaled else "resize" if resized else "move"
+        if resized or self._gesture_moved:
+            self.region["typeset_box_manual"] = True
         self._scale_font_gesture = False
         self._gesture_scaled = False
+        self._gesture_moved = False
         if self._resize_edges and any(self._resize_edges):
             self._resize_edges = None
             self._commit_geometry(change_kind=change_kind, notify=True)
@@ -2442,7 +2450,10 @@ class CanvasView(QGraphicsView):
             (round(float(region.get("x", 0)), 3), round(float(region.get("y", 0)), 3))
             if style.get("balloon_fit", False) else None
         )
-        return f"{self._pixmap_item.pixmap().cacheKey()}|{region.get('id', '')}|{text}|{style_signature}|{geometry}"
+        return (
+            f"{self._pixmap_item.pixmap().cacheKey()}|{region.get('id', '')}|{text}|"
+            f"{style_signature}|{geometry}|{bool(region.get('typeset_box_manual', False))}"
+        )
 
     def _make_text_item(self, text: str, region: dict) -> QGraphicsItem:
         style = TypographyManager.normalized(region.get("style", {}))
@@ -2791,9 +2802,10 @@ class CanvasView(QGraphicsView):
             int(style.get("stroke2_width", 0)) if style.get("stroke2_enabled", False) else 0
         )
         padding = effective_balloon_padding(width, height, requested_padding, outline)
+        manual_box = bool(region.get("typeset_box_manual", False))
         mask_key = (
             int(self._pixmap_item.pixmap().cacheKey()), x, y, width, height,
-            padding, use_balloon, shape_type,
+            padding, use_balloon, shape_type, manual_box,
         )
         cached_geometry = self._balloon_mask_cache.get(mask_key)
         if cached_geometry is None:
@@ -2803,19 +2815,14 @@ class CanvasView(QGraphicsView):
             search = self._qimage_rgb_array(base.copy(QRect(
                 search_x, search_y, search_width, search_height,
             )))
-            detected = detect_full_balloon(
-                search, (x - search_x, y - search_y, width, height), padding,
+            local_rect, mask = text_layout_geometry(
+                search, (x - search_x, y - search_y, width, height),
+                padding, manual_box,
             )
-            if detected is None:
-                crop = self._qimage_rgb_array(base.copy(QRect(x, y, width, height)))
-                layout_rect = (x, y, width, height)
-                mask = detect_balloon_interior(crop, padding)
-            else:
-                local_rect, mask = detected
-                layout_rect = (
-                    search_x + local_rect[0], search_y + local_rect[1],
-                    local_rect[2], local_rect[3],
-                )
+            layout_rect = (
+                search_x + local_rect[0], search_y + local_rect[1],
+                local_rect[2], local_rect[3],
+            )
             self._balloon_mask_cache[mask_key] = (layout_rect, mask)
             self._balloon_mask_cache_bytes += int(mask.nbytes)
             self._balloon_mask_cache.move_to_end(mask_key)
