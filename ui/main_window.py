@@ -2118,16 +2118,23 @@ class MainWindow(QMainWindow):
 
     @staticmethod
     def _enable_adaptive_typesetting(regions: list[dict]) -> None:
-        """Request one fit after OCR/translation, then return to manual mode.
+        """Fit OCR and translated dialogue to the detected balloon interior.
 
-        SFX layers keep their independent path/perspective layout.  For normal
-        dialogue the API result can be considerably longer than the source,
-        so retaining an old fixed size is what made text leave the box.
+        SFX layers keep their independent path/perspective layout. A selected
+        font size remains the maximum; long dialogue can shrink to fit while
+        subsequent box edits continue to respect the balloon's safe area.
         """
         for region in regions:
-            style = TypographyManager.normalized(region.get("style", {}))
+            original = region.get("style", {})
+            explicit = original if isinstance(original, dict) else {}
+            style = TypographyManager.normalized(explicit)
             if not style.get("sfx_enabled", False):
-                style.update({"auto_fit": False, "fit_once": True, "balloon_fit": False, "auto_scale": True})
+                # Normalized defaults already enable adaptive dialogue. Keep
+                # an existing manual choice when OCR or translation reruns.
+                if "auto_fit" not in explicit:
+                    style["auto_fit"] = True
+                if "balloon_fit" not in explicit:
+                    style["balloon_fit"] = True
             region["style"] = style
 
     def _install_project_typography_defaults(self) -> None:
@@ -4117,7 +4124,7 @@ class MainWindow(QMainWindow):
                 )
         else:
             self.canvas_shell.canvas.add_text(text_values, regions)
-        if self.canvas_shell.canvas._last_region_change_kind == "resize" and selected_id:
+        if self.canvas_shell.canvas._last_region_change_kind in {"resize", "scale"} and selected_id:
             resized_index = next(
                 (index for index, region in enumerate(regions) if str(region.get("id", "")) == selected_id),
                 -1,

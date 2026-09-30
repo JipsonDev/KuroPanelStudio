@@ -1,5 +1,12 @@
 # Historial de cambios
 
+## 0.2.2
+
+- Detección del globo completo alrededor de cajas OCR pequeñas, con margen seguro y uso de la misma geometría al exportar.
+- Recomposición en vivo durante la edición con doble clic, aviso de desbordamiento y conservación de deshacer y rehacer.
+- Escalado de caja y texto con Ctrl al arrastrar una esquina; edición y controles de redimensionado compatibles.
+- Herramientas de texto reorganizadas y estilos de diálogo adaptativos por defecto, respetando ajustes manuales previos.
+
 ## 0.2.1
 
 - Actualización de estados en la lista de páginas sin volver a aplicar estilos a insignias que no cambiaron.

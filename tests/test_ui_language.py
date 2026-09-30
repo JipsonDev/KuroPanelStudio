@@ -14,6 +14,7 @@ from core.settings_manager import SettingsManager
 from ui.i18n import UiTranslator, translate_text
 from ui.images_panel import ImagesPanel
 from ui.settings_dialog import SettingsDialog
+from ui.text_panel import TextOptionsPanel
 
 
 class EmptyCredentials:
@@ -85,6 +86,26 @@ def test_runtime_language_switch_keeps_stable_filter_ids_and_user_text():
     finally:
         translator.set_language("es")
         root.close()
+
+
+def test_text_tools_keep_dynamic_guidance_translated():
+    app = QApplication.instance() or QApplication([])
+    translator = _translator(app)
+    panel = TextOptionsPanel()
+    try:
+        panel.set_layer(0, {"balloon_fit": True})
+        translator.set_language("en")
+        translator.refresh(panel)
+        assert panel.composition_section.header.text() == "Balloon fit"
+        assert panel.btn_dialogue.text() == "Dialogue"
+        assert panel.layout_hint.text() == "Text is centered with clearance from the detected outline."
+        panel.balloon_fit.setChecked(False)
+        panel.show()
+        app.processEvents()
+        assert panel.layout_hint.text() == "Text uses the rectangular box and its inner margin."
+    finally:
+        translator.set_language("es")
+        panel.close()
 
 
 def test_settings_exposes_interface_language_separately_from_ocr(tmp_path):

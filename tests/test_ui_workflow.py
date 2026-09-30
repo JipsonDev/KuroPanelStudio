@@ -14,7 +14,7 @@ from PIL import Image
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PySide6.QtCore import QPointF, Qt
-from PySide6.QtGui import QFont, QImage, QPainter, QPainterPath
+from PySide6.QtGui import QColor, QFont, QImage, QPainter, QPainterPath, QPen
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import (
     QApplication, QComboBox, QGraphicsDropShadowEffect, QGraphicsItem,
@@ -255,12 +255,63 @@ class UIWorkflowTests(unittest.TestCase):
         self.assertIsNotNone(canvas._inline_editor)
         self.assertTrue(canvas._inline_editor.hasFocus())
         self.assertFalse(canvas._text_items[0].isVisible())
+        self.assertTrue(canvas._regions[0].isVisible())
+        self.assertTrue(canvas._regions[0].isSelected())
+        self.assertFalse(canvas._inline_editor.flags() & QGraphicsItem.ItemIsSelectable)
+        self.assertEqual(canvas._inline_editor_container.pen().style(), Qt.NoPen)
+        self.assertEqual(canvas._inline_editor_container.brush().style(), Qt.NoBrush)
+        QTest.keyClicks(canvas.viewport(), "!")
+        self.assertIn("!", canvas._inline_editor.toPlainText())
         canvas._inline_editor.setPlainText("Editado dentro de la caja")
         canvas.finish_inline_text_edit(commit=True)
 
         self.assertEqual(committed, [(0, "Editado dentro de la caja")])
         self.assertEqual(canvas._regions[0].region["applied_text"], "Editado dentro de la caja")
         self.assertEqual(canvas._text_values[0], "Editado dentro de la caja")
+        self.assertTrue(canvas._text_items[0].isVisible())
+        self.assertTrue(canvas._regions[0].isSelected())
+        canvas.close()
+
+    def test_inline_editor_keeps_the_composed_lines_and_position(self) -> None:
+        canvas = CanvasView()
+        image = QImage(500, 300, QImage.Format_RGB888)
+        image.fill(255)
+        canvas.set_image(image)
+        original = "是娘啊，不是娘娘，是娘娘啊！"
+        region = {
+            "id": "composed-inline", "x": 40, "y": 30, "width": 200, "height": 150,
+            "translation": original, "applied_text": original,
+            "style": {
+                "font_family": "Microsoft YaHei", "font_size": 22,
+                "text_margin": 8, "auto_fit": True, "line_spacing": 4,
+            },
+        }
+        canvas.set_regions([region])
+        canvas.add_text([original], [region])
+        source = canvas._text_items[0]
+        composed = source.toPlainText()
+        self.assertIn("\n", composed)
+        source_origin = source.mapToScene(QPointF(0, 0))
+
+        canvas.select_region(0)
+        self.assertTrue(canvas.begin_inline_text_edit(0))
+        editor = canvas._inline_editor
+        self.assertEqual(editor.toPlainText(), composed)
+        self.assertEqual(editor.textWidth(), source.textWidth())
+        self.assertEqual(editor.font(), source.font())
+        self.assertEqual(editor.mapToScene(QPointF(0, 0)), source_origin)
+        self.assertEqual(
+            editor.document().begin().blockFormat().lineHeight(),
+            source.document().begin().blockFormat().lineHeight(),
+        )
+        self.assertTrue(canvas._regions[0].isVisible())
+        self.assertTrue(canvas._regions[0].isSelected())
+
+        committed = []
+        canvas.inline_text_committed.connect(lambda index, text: committed.append((index, text)))
+        canvas.finish_inline_text_edit(commit=True)
+        self.assertEqual(committed, [])
+        self.assertEqual(canvas._text_values[0], original)
         self.assertTrue(canvas._text_items[0].isVisible())
         canvas.close()
 
@@ -285,6 +336,90 @@ class UIWorkflowTests(unittest.TestCase):
         self.assertEqual(committed, [])
         self.assertEqual(canvas._regions[0].region["applied_text"], "Conservar")
         self.assertEqual(canvas._text_values[0], "Conservar")
+
+    def test_corner_drag_still_works_while_inline_editor_is_open(self) -> None:
+        canvas = CanvasView()
+        canvas.resize(680, 480)
+        image = QImage(600, 400, QImage.Format_RGB888)
+        image.fill(255)
+        canvas.set_image(image)
+        region = {
+            "id": "inline-resize", "x": 80, "y": 90, "width": 300, "height": 160,
+            "applied_text": "Texto editable", "style": {"font_size": 36, "balloon_fit": False},
+        }
+        canvas.set_regions([region])
+        canvas.add_text([region["applied_text"]], [region])
+        canvas.show()
+        self.app.processEvents()
+        QTest.mouseDClick(canvas.viewport(), Qt.LeftButton, pos=canvas.mapFromScene(QPointF(200, 150)))
+        self.app.processEvents()
+        self.assertIsNotNone(canvas._inline_editor)
+        canvas._inline_editor.setPlainText("Texto cambiado antes de redimensionar")
+
+        start = canvas.mapFromScene(QPointF(380, 250))
+        end = canvas.mapFromScene(QPointF(425, 280))
+        QTest.mousePress(canvas.viewport(), Qt.LeftButton, pos=start)
+        self.assertIsNone(canvas._inline_editor)
+        QTest.mouseMove(canvas.viewport(), end, delay=10)
+        QTest.mouseRelease(canvas.viewport(), Qt.LeftButton, pos=end)
+        self.assertGreater(region["width"], 300)
+        self.assertGreater(region["height"], 160)
+        self.assertEqual(region["applied_text"], "Texto cambiado antes de redimensionar")
+        self.assertTrue(canvas._text_items[0].isVisible())
+        canvas.close()
+
+    def test_ctrl_corner_drag_scales_box_and_text_without_deleting(self) -> None:
+        canvas = CanvasView()
+        canvas.resize(680, 480)
+        image = QImage(600, 400, QImage.Format_RGB888)
+        image.fill(255)
+        canvas.set_image(image)
+        region = {
+            "id": "proportional-scale", "x": 80, "y": 90, "width": 300, "height": 160,
+            "applied_text": "Texto escalable", "style": {
+                "font_family": "Arial", "font_size": 36, "auto_fit": False,
+                "balloon_fit": False,
+            },
+        }
+        canvas.set_regions([region])
+        canvas.add_text([region["applied_text"]], [region])
+        canvas.show()
+        self.app.processEvents()
+        initial_font = canvas._text_items[0].font().pointSize()
+
+        def synchronize(regions):
+            canvas.set_regions(regions)
+            canvas.update_text_layers([0], [regions[0]["applied_text"]], regions)
+
+        canvas.regions_changed.connect(synchronize)
+        start = canvas.mapFromScene(QPointF(380, 250))
+        smaller = canvas.mapFromScene(QPointF(320, 218))
+        QTest.mousePress(canvas.viewport(), Qt.LeftButton, Qt.ControlModifier, start)
+        QTest.mouseMove(canvas.viewport(), smaller, delay=10)
+        self.assertLess(canvas._text_items[0].scale(), 1.0)
+        QTest.mouseRelease(canvas.viewport(), Qt.LeftButton, Qt.ControlModifier, smaller)
+        self.app.processEvents()
+
+        self.assertEqual(len(canvas._regions), 1)
+        self.assertEqual(canvas._last_region_change_kind, "scale")
+        self.assertAlmostEqual(region["width"] / 300, region["height"] / 160, delta=.02)
+        self.assertLess(region["style"]["font_size"], initial_font)
+        self.assertEqual(canvas._text_items[0].font().pointSize(), region["style"]["font_size"])
+        current = canvas._regions[0].region
+        smaller_font = current["style"]["font_size"]
+        smaller_width, smaller_height = current["width"], current["height"]
+
+        corner = canvas.mapFromScene(QPointF(current["x"] + smaller_width, current["y"] + smaller_height))
+        larger = canvas.mapFromScene(QPointF(current["x"] + smaller_width * 1.25, current["y"] + smaller_height * 1.25))
+        QTest.mousePress(canvas.viewport(), Qt.LeftButton, Qt.ControlModifier, corner)
+        QTest.mouseMove(canvas.viewport(), larger, delay=10)
+        QTest.mouseRelease(canvas.viewport(), Qt.LeftButton, Qt.ControlModifier, larger)
+        self.app.processEvents()
+        current = canvas._regions[0].region
+        self.assertGreater(current["width"], smaller_width)
+        self.assertGreater(current["height"], smaller_height)
+        self.assertGreater(current["style"]["font_size"], smaller_font)
+        canvas.close()
 
     def test_live_text_survives_the_next_box_geometry_commit(self) -> None:
         canvas = CanvasView()
@@ -385,7 +520,7 @@ class UIWorkflowTests(unittest.TestCase):
         region = {
             "id": "fixed-size", "x": 60, "y": 70, "width": 390, "height": 180,
             "applied_text": "El tamaÃ±o visible no cambia al manipular la caja.",
-            "style": {"font_family": "Arial", "font_size": 46, "auto_fit": True},
+            "style": {"font_family": "Arial", "font_size": 46, "auto_fit": True, "balloon_fit": False},
         }
         canvas.set_regions([region])
         canvas.add_text([region["applied_text"]], [region])
@@ -408,7 +543,7 @@ class UIWorkflowTests(unittest.TestCase):
         region = {
             "id": "corner-fixed", "x": 80, "y": 90, "width": 320, "height": 170,
             "applied_text": "La esquina cambia la caja, no el tamaÃ±o tipogrÃ¡fico.",
-            "style": {"font_family": "Arial", "font_size": 42, "auto_fit": True},
+            "style": {"font_family": "Arial", "font_size": 42, "auto_fit": True, "balloon_fit": False},
         }
         canvas.set_regions([region])
         canvas.add_text([region["applied_text"]], [region])
@@ -572,6 +707,114 @@ class UIWorkflowTests(unittest.TestCase):
         self.assertLess(item.font().pointSize(), 48)
         self.assertFalse(region.get("text_overflow", True))
         self.assertLessEqual(item.boundingRect().height() * float(item.data(4)), region["height"] + 1)
+
+    def test_new_dialogue_fits_and_centres_inside_detected_balloon(self) -> None:
+        canvas = CanvasView()
+        image = QImage(420, 320, QImage.Format_RGB888)
+        image.fill(QColor("#303640"))
+        painter = QPainter(image)
+        painter.setBrush(QColor("white"))
+        painter.setPen(QPen(QColor("black"), 4))
+        painter.drawEllipse(55, 35, 310, 250)
+        painter.end()
+        canvas.set_image(image)
+        text = "ESTA ES UNA FRASE BASTANTE LARGA PARA VER SI SE ADAPTA BIEN AL GLOBO"
+        region = {
+            "id": "automatic-balloon", "x": 70, "y": 52,
+            "width": 280, "height": 215, "applied_text": text,
+        }
+        canvas.set_regions([region])
+        canvas.add_text([text], [region])
+
+        item = canvas._text_items[0]
+        self.assertTrue(region["style"]["auto_fit"])
+        self.assertTrue(region["style"]["balloon_fit"])
+        self.assertTrue(region["style"]["optical_center"])
+        self.assertFalse(region["text_overflow"])
+        self.assertLess(item.font().pointSize(), 36)
+        self.assertEqual(len(item.data(2)), len(item.toPlainText().splitlines()))
+        self.assertEqual(region["balloon_layout_snapshot"]["text"], item.toPlainText())
+        self.assertEqual(region["balloon_layout_snapshot"]["font_size"], item.font().pointSize())
+        self.assertAlmostEqual(float(item.data(8)), region["height"] / 2, delta=4)
+        for left, right in item.data(2):
+            self.assertGreaterEqual(left, 10)
+            self.assertLessEqual(right, region["balloon_layout_snapshot"]["layout_rect"][2] - 10)
+        canvas.close()
+
+    def test_live_inline_edit_refits_text_and_reports_overflow(self) -> None:
+        canvas = CanvasView()
+        image = QImage(440, 320, QImage.Format_RGB888)
+        image.fill(QColor("#303640"))
+        painter = QPainter(image)
+        painter.setBrush(QColor("white"))
+        painter.setPen(QPen(QColor("black"), 4))
+        painter.drawEllipse(45, 35, 350, 250)
+        painter.end()
+        canvas.set_image(image)
+        region = {
+            "id": "live-balloon", "x": 170, "y": 125, "width": 100, "height": 70,
+            "applied_text": "HOLA", "style": {
+                "font_size": 42, "auto_fit": True, "balloon_fit": True,
+            },
+        }
+        canvas.set_regions([region])
+        canvas.add_text(["HOLA"], [region])
+        layout_rect = region["balloon_layout_snapshot"]["layout_rect"]
+        self.assertGreater(layout_rect[2], region["width"] * 2)
+        self.assertTrue(canvas.begin_inline_text_edit(0))
+        editor = canvas._inline_editor
+        original_size = editor.font().pointSize()
+        editor.setPlainText("UNA FRASE MUCHO MÁS LARGA QUE DEBE RECOMPONERSE DENTRO DEL GLOBO")
+        QTest.qWait(180)
+        self.app.processEvents()
+        self.assertLessEqual(editor.font().pointSize(), original_size)
+        self.assertIn("\n", editor.toPlainText())
+        self.assertFalse(canvas._inline_overflow_hint.isVisible())
+        QTest.keyClick(canvas.viewport(), Qt.Key_Z, Qt.ControlModifier)
+        self.assertEqual(editor.toPlainText(), "HOLA")
+        QTest.keyClick(canvas.viewport(), Qt.Key_Y, Qt.ControlModifier)
+        self.assertIn("FRASE", editor.toPlainText())
+        canvas.finish_inline_text_edit(commit=False)
+        self.assertEqual(region["applied_text"], "HOLA")
+        canvas.close()
+
+    def test_live_inline_overflow_warning_clears_on_cancel(self) -> None:
+        canvas = CanvasView()
+        image = QImage(320, 220, QImage.Format_RGB888)
+        image.fill(255)
+        canvas.set_image(image)
+        region = {
+            "id": "overflow-draft", "x": 80, "y": 60, "width": 160, "height": 90,
+            "applied_text": "UNO", "style": {
+                "font_size": 20, "auto_fit": False, "balloon_fit": True,
+            },
+        }
+        canvas.set_regions([region])
+        canvas.add_text(["UNO"], [region])
+        statuses = []
+        canvas.text_layout_status_changed.connect(lambda values: statuses.append(values[0]))
+        self.assertTrue(canvas.begin_inline_text_edit(0))
+        canvas._inline_editor.setPlainText("UNA FRASE EXTREMADAMENTE LARGA PARA ESTE GLOBO")
+        QTest.qWait(180)
+        self.app.processEvents()
+        self.assertTrue(canvas._inline_overflow_hint.isVisible())
+        self.assertTrue(statuses[-1])
+        canvas.finish_inline_text_edit(commit=False)
+        self.assertFalse(statuses[-1])
+        self.assertEqual(region["applied_text"], "UNO")
+        canvas.close()
+
+    def test_translation_keeps_manual_typesetting_choices(self) -> None:
+        regions = [
+            {"style": {"auto_fit": False, "balloon_fit": False, "alignment": "left"}},
+            {"style": {}},
+        ]
+        MainWindow._enable_adaptive_typesetting(regions)
+        self.assertFalse(regions[0]["style"]["auto_fit"])
+        self.assertFalse(regions[0]["style"]["balloon_fit"])
+        self.assertEqual(regions[0]["style"]["alignment"], "left")
+        self.assertTrue(regions[1]["style"]["auto_fit"])
+        self.assertTrue(regions[1]["style"]["balloon_fit"])
 
     def test_normal_dialogue_never_follows_balloon_shape_even_for_legacy_styles(self) -> None:
         canvas = CanvasView()
@@ -745,6 +988,37 @@ class UIWorkflowTests(unittest.TestCase):
 
         self.assertFalse(hasattr(panel, "fallback_fonts"))
 
+    def test_text_tools_prioritize_balloon_fit_and_disable_irrelevant_controls(self) -> None:
+        panel = TextOptionsPanel()
+        panel.set_layer(0, {"auto_fit": True, "balloon_fit": True})
+        panel.resize(340, 800)
+        panel.show()
+        QApplication.processEvents()
+
+        self.assertTrue(panel.composition_section.is_expanded())
+        self.assertFalse(panel.font_section.is_expanded())
+        self.assertFalse(panel.advanced_section.is_expanded())
+        self.assertLess(panel.composition_section.y(), panel.font_section.y())
+        self.assertEqual(panel.horizontalScrollBar().maximum(), 0)
+        self.assertEqual(panel.size_label.text(), "TAMAÑO MÁXIMO")
+        self.assertTrue(panel.balloon_padding.isEnabled())
+
+        panel.btn_dialogue.click()
+        self.assertTrue(panel.btn_dialogue.isChecked())
+        panel.btn_shout.click()
+        self.assertFalse(panel.btn_dialogue.isChecked())
+        self.assertTrue(panel.btn_shout.isChecked())
+
+        panel.balloon_fit.setChecked(False)
+        self.assertFalse(panel.btn_shout.isChecked())
+        self.assertFalse(panel.balloon_shape.isEnabled())
+        self.assertFalse(panel.balloon_padding.isEnabled())
+        self.assertFalse(panel.auto_scale.isEnabled())
+        panel.size.setValue(panel.size.value() + 1)
+        self.assertFalse(panel.auto_fit.isChecked())
+        self.assertEqual(panel.size_label.text(), "TAMAÑO FIJO")
+        panel.close()
+
     def test_sfx_perspective_corners_are_free_and_clear_when_disabled(self) -> None:
         canvas = CanvasView()
         image = QImage(600, 400, QImage.Format_RGB888); image.fill(255); canvas.set_image(image)
@@ -793,7 +1067,7 @@ class UIWorkflowTests(unittest.TestCase):
         region = {
             "id": "fit-once", "x": 30, "y": 30, "width": 180, "height": 80,
             "applied_text": "UN TEXTO DEMASIADO LARGO PARA SU TAMAÑO ACTUAL",
-            "style": {**TypographyManager.normalized({}), "font_size": 64, "fit_once": True},
+            "style": {**TypographyManager.normalized({}), "font_size": 64, "fit_once": True, "balloon_fit": False},
         }
         canvas.set_regions([region]); canvas.add_text([region["applied_text"]], [region])
         resulting = canvas._regions[0].region
@@ -1366,7 +1640,7 @@ class UIWorkflowTests(unittest.TestCase):
         region = {
             "id": "heavy", "x": 30, "y": 30, "width": 220, "height": 100,
             "applied_text": "Texto con trazo y resplandor",
-            "style": {"stroke_width": 4, "glow_enabled": True, "glow_radius": 20},
+            "style": {"stroke_width": 4, "glow_enabled": True, "glow_radius": 20, "balloon_fit": False},
         }
         canvas.set_regions([region]); canvas.add_text([region["applied_text"]], [region])
         original = canvas._text_items[0]

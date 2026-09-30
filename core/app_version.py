@@ -10,7 +10,7 @@ def installed_version() -> str:
     try:
         return str(json.loads(version_file.read_text(encoding="utf-8"))["version"])
     except (OSError, ValueError, KeyError, TypeError):
-        return "0.2.1"
+        return "0.2.2"
 
 
 APP_VERSION = installed_version()

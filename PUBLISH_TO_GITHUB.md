@@ -12,7 +12,7 @@ proyecto se gestionan con Git LFS según `.gitattributes`.
 
 Sube primero los commits de código a `main`. Para crear un instalador de una
 versión nueva, sube después una etiqueta semántica que coincida con esa
-versión, por ejemplo `v0.2.1`. El flujo
+versión, por ejemplo `v0.2.2`. El flujo
 `.github/workflows/windows-release.yml` ejecuta las pruebas, compila el
 instalador y publica la GitHub Release con su SHA-256 y las notas de cambios automáticamente.
 Comprueba que el flujo termine antes de anunciar la versión. Los usuarios de

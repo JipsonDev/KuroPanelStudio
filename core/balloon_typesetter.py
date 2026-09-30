@@ -1,6 +1,7 @@
 """Speech-balloon interior detection and balanced line composition."""
 from __future__ import annotations
 
+import math
 from functools import lru_cache
 from typing import Callable
 
@@ -9,6 +10,76 @@ import numpy as np
 
 from core.linguistic_composer import linguistic_wrap
 from core.balloon_geometry import enclosed_balloon_mask
+
+
+def effective_balloon_padding(width: int, height: int, requested: int, stroke: int = 0) -> int:
+    """Keep glyphs clear of the outline at both small and full page resolutions."""
+    shorter = max(1, min(int(width), int(height)))
+    minimum = max(2, int(round(shorter * 0.055)), int(stroke) * 2 + 4)
+    return min(max(int(requested), minimum), max(2, shorter // 4))
+
+
+def usable_mask_bounds(mask: np.ndarray) -> tuple[int, int, int, int]:
+    """Return the actual usable interior bounds, with exclusive right/bottom."""
+    binary = np.asarray(mask) > 0
+    rows = np.flatnonzero(np.any(binary, axis=1))
+    columns = np.flatnonzero(np.any(binary, axis=0))
+    if not len(rows) or not len(columns):
+        return 0, 0, binary.shape[1], binary.shape[0]
+    return int(columns[0]), int(rows[0]), int(columns[-1]) + 1, int(rows[-1]) + 1
+
+
+def balloon_search_rect(
+    page_width: int, page_height: int, box: tuple[int, int, int, int],
+) -> tuple[int, int, int, int]:
+    """Search around an OCR box without treating that box as the balloon edge."""
+    x, y, width, height = (int(value) for value in box)
+    horizontal = max(96, width * 2, height * 2)
+    vertical = max(96, height * 3, width)
+    left = max(0, x - horizontal)
+    top = max(0, y - vertical)
+    right = min(int(page_width), x + width + horizontal)
+    bottom = min(int(page_height), y + height + vertical)
+    return left, top, max(1, right - left), max(1, bottom - top)
+
+
+def detect_full_balloon(
+    search_rgb: np.ndarray, text_box: tuple[int, int, int, int], padding: int,
+) -> tuple[tuple[int, int, int, int], np.ndarray] | None:
+    """Find a closed balloon containing the box centre in a larger page crop.
+
+    Coordinates are relative to ``search_rgb``. Return None when the outline
+    is uncertain so callers can keep their existing local-box fallback.
+    """
+    height, width = search_rgb.shape[:2]
+    x, y, box_width, box_height = (int(value) for value in text_box)
+    if min(width, height, box_width, box_height) < 12:
+        return None
+    # The OCR rectangle can touch an outline. Its central half is a much more
+    # reliable seed, and selecting it also disambiguates adjacent balloons.
+    seed = np.zeros((height, width), np.uint8)
+    inset_x = max(1, box_width // 4)
+    inset_y = max(1, box_height // 4)
+    x1, y1 = max(0, x + inset_x), max(0, y + inset_y)
+    x2, y2 = min(width, x + box_width - inset_x), min(height, y + box_height - inset_y)
+    if x2 <= x1 or y2 <= y1:
+        return None
+    seed[y1:y2, x1:x2] = 255
+    enclosed = enclosed_balloon_mask(search_rgb, seed)
+    if enclosed is None:
+        return None
+    left, top, right, bottom = usable_mask_bounds(enclosed)
+    if right - left < 12 or bottom - top < 12:
+        return None
+    mask = enclosed[top:bottom, left:right].copy()
+    inset = max(1, int(padding))
+    mask = cv2.erode(
+        mask, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (inset * 2 + 1, inset * 2 + 1)),
+        borderType=cv2.BORDER_CONSTANT, borderValue=0,
+    )
+    if not np.any(mask):
+        return None
+    return (left, top, right - left, bottom - top), mask
 
 
 def detect_balloon_interior(rgb: np.ndarray, padding: int = 8) -> np.ndarray:
@@ -142,39 +213,57 @@ def symmetric_shape_intervals(
     return intervals
 
 
-def line_intervals(mask: np.ndarray, line_count: int, line_height: float) -> list[tuple[int, int]]:
-    """Measure safe left/right limits at every intended baseline band, strictly symmetrized."""
+def line_intervals(
+    mask: np.ndarray, line_count: int, line_height: float,
+    bounds: tuple[int, int, int, int] | None = None,
+    row_limits: tuple[np.ndarray, np.ndarray] | None = None,
+) -> list[tuple[int, int]]:
+    """Measure full glyph bands around the detected interior's own centre."""
     binary = np.asarray(mask) > 0
     height, width = binary.shape
+    left_bound, top_bound, right_bound, bottom_bound = bounds or usable_mask_bounds(mask)
+    centre_x = (left_bound + right_bound) / 2.0
+    centre_y = (top_bound + bottom_bound) / 2.0
+    left_by_row, right_by_row = row_limits or _central_row_limits(binary, centre_x)
     count = max(1, int(line_count))
     total_height = max(1.0, float(line_height) * count)
-    if total_height > height:
+    if total_height > bottom_bound - top_bound:
         return []
-    top = (height - total_height) / 2.0
+    top = centre_y - total_height / 2.0
     intervals: list[tuple[int, int]] = []
-    band_half = max(1, int(round(float(line_height) * 0.34)))
+    band_half = max(1, int(math.ceil(float(line_height) * 0.48)))
     for line in range(count):
         centre = top + (line + 0.5) * float(line_height)
         y1, y2 = max(0, int(round(centre)) - band_half), min(height, int(round(centre)) + band_half + 1)
-        band = binary[y1:y2]
-        if band.size == 0:
+        if y1 < top_bound or y2 > bottom_bound:
             return []
-        coverage = np.mean(band, axis=0)
-        valid = np.flatnonzero(coverage >= 0.72)
-        if valid.size < 2:
+        left_val = int(np.max(left_by_row[y1:y2]))
+        right_val = int(np.min(right_by_row[y1:y2]))
+        if right_val - left_val < max(8, (right_bound - left_bound) * 0.08):
             return []
-        splits = np.split(valid, np.where(np.diff(valid) > 1)[0] + 1)
-        run = max(splits, key=len)
-        if len(run) < max(8, width * 0.08):
+        half_width = min(centre_x - left_val, right_val - centre_x)
+        sym_left = max(0, int(math.ceil(centre_x - half_width)))
+        sym_right = min(width, int(math.floor(centre_x + half_width)))
+        if sym_right - sym_left < 8:
             return []
-        # Enforce axial symmetry so centered text never exhibits wobbly/asymmetric line offsets
-        left_val = int(run[0])
-        right_val = int(run[-1]) + 1
-        left_margin = max(left_val, width - right_val)
-        sym_left = max(0, min(width // 2 - 4, left_margin))
-        sym_right = max(sym_left + 8, width - sym_left)
         intervals.append((sym_left, sym_right))
     return intervals
+
+
+def _central_row_limits(binary: np.ndarray, centre_x: float) -> tuple[np.ndarray, np.ndarray]:
+    """Measure the safe central run once, then reuse it for every line band."""
+    height, width = binary.shape
+    middle = max(0, min(width - 1, int(round(centre_x - 0.5))))
+    left_half = binary[:, :middle + 1][:, ::-1]
+    right_half = binary[:, middle:]
+    left_break = np.argmax(~left_half, axis=1)
+    right_break = np.argmax(~right_half, axis=1)
+    left = middle - np.where(np.all(left_half, axis=1), middle + 1, left_break) + 1
+    right = middle + np.where(np.all(right_half, axis=1), width - middle, right_break)
+    missing_centre = ~binary[:, middle]
+    left[missing_centre] = width
+    right[missing_centre] = 0
+    return left, right
 
 
 def _tokens(text: str) -> tuple[list[str], str]:
@@ -252,6 +341,10 @@ def fit_balanced_text(
 ) -> dict:
     """Find the largest balanced layout fitting the detected interior."""
     start = max(int(minimum_size), int(requested_size))
+    bounds = usable_mask_bounds(mask)
+    centre_x = (bounds[0] + bounds[2]) / 2.0
+    centre_y = (bounds[1] + bounds[3]) / 2.0
+    row_limits = _central_row_limits(np.asarray(mask) > 0, centre_x)
     measurement_cache: dict[tuple[int, str], float] = {}
 
     def measured(size: int, value: str) -> float:
@@ -290,8 +383,15 @@ def fit_balanced_text(
                         intervals = symmetric_shape_intervals(
                             shape_type, mask.shape[1], mask.shape[0], count, line_height, padding,
                         )
+                        safe_intervals = line_intervals(mask, count, line_height, bounds, row_limits)
+                        intervals = [
+                            (max(left, safe_left), min(right, safe_right))
+                            for (left, right), (safe_left, safe_right) in zip(intervals, safe_intervals)
+                        ] if len(safe_intervals) == len(intervals) else []
                     else:
-                        intervals = line_intervals(mask, count, line_height)
+                        intervals = line_intervals(mask, count, line_height, bounds, row_limits)
+                    if any(right - left < 8 for left, right in intervals):
+                        intervals = []
                     interval_candidates.append((intervals, [right - left for left, right in intervals]))
                 geometry_cache[scale_y] = interval_candidates
             best_transform = None
@@ -305,6 +405,10 @@ def fit_balanced_text(
                 )
                 if lines is None:
                     continue
+                # Hanging punctuation may be ignored by the linguistic width
+                # scorer; the painted glyphs must still stay inside the mask.
+                if any(measure(line) > width - 1 for line, width in zip(lines, widths)):
+                    continue
                 score = sum(
                     ((width - measure(line)) / max(1.0, width)) ** 2
                     for line, width in zip(lines, widths)
@@ -313,7 +417,7 @@ def fit_balanced_text(
                     "text": "\n".join(lines), "lines": lines, "intervals": intervals,
                     "font_size": size, "line_height": line_height, "overflow": False,
                     "balance_score": score, "scale_x": scale_x, "scale_y": scale_y,
-                    "language": language,
+                    "language": language, "center_x": centre_x, "center_y": centre_y,
                 }
                 if best_transform is None or score < best_transform["balance_score"]:
                     best_transform = attempt
@@ -346,4 +450,5 @@ def fit_balanced_text(
         "font_size": start, "line_height": line_height_for_size(start),
         "overflow": True, "balance_score": float("inf"), "scale_x": 1.0,
         "scale_y": 1.0, "language": language,
+        "center_x": centre_x, "center_y": centre_y,
     }

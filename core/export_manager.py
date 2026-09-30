@@ -12,10 +12,13 @@ from PIL import Image, ImageColor, ImageDraw, ImageFilter, ImageFont
 
 from core.project_manager import Page
 from core.psd_manager import load_source_image
-from core.balloon_typesetter import detect_balloon_interior, fit_balanced_text
+from core.balloon_typesetter import (
+    balloon_search_rect, detect_balloon_interior, detect_full_balloon,
+    effective_balloon_padding, fit_balanced_text,
+)
 from core.sfx_layout import automatic_sfx_lines
 from core.sfx_transform import bezier_baseline, build_warp
-from core.text_layout import fit_rectangular_text, layout_signature, valid_snapshot
+from core.text_layout import fit_rectangular_text, layout_signature, valid_balloon_snapshot, valid_snapshot
 from core.typography_manager import TypographyManager
 from core.watermark_manager import compose_watermark
 
@@ -324,31 +327,71 @@ def _draw_region_text(image: Image.Image, region: dict, default_style: dict) -> 
     balloon_layout = None
     rectangle_layout = None
     if style.get("balloon_fit", False) and not vertical:
-        crop_rgb = np.asarray(image.crop((x, y, x + width, y + height)).convert("RGB"))
-        balloon_mask = detect_balloon_interior(crop_rgb, int(style.get("balloon_padding", 10)))
-
         def font_for_size(size: int):
             return _font(size, resolved_family, style.get("font_file"), font_weight, italic)
 
-        def line_height_for_size(size: int) -> float:
-            candidate_font = font_for_size(size)
-            bounds = draw.textbbox((0, 0), "Ag", font=candidate_font, stroke_width=render_stroke)
-            return max(1, bounds[3] - bounds[1] + spacing)
+        balloon_layout = valid_balloon_snapshot(region, text, style)
+        if balloon_layout is not None:
+            snapshot_font = font_for_size(int(balloon_layout["font_size"]))
+            if any(
+                draw.textlength(line, font=snapshot_font) * manual_scale_x
+                * float(balloon_layout.get("scale_x", 1.0)) > right - left - 1
+                for line, (left, right) in zip(balloon_layout["lines"], balloon_layout["intervals"])
+            ):
+                balloon_layout = None
+        if balloon_layout is None:
+            padding = effective_balloon_padding(
+                width, height, int(style.get("balloon_padding", 10)), render_stroke,
+            )
+            search_x, search_y, search_width, search_height = balloon_search_rect(
+                image.width, image.height, (x, y, width, height),
+            )
+            search_rgb = np.asarray(image.crop((
+                search_x, search_y, search_x + search_width, search_y + search_height,
+            )).convert("RGB"))
+            detected = detect_full_balloon(
+                search_rgb, (x - search_x, y - search_y, width, height), padding,
+            )
+            if detected is None:
+                crop_rgb = np.asarray(image.crop((x, y, x + width, y + height)).convert("RGB"))
+                layout_rect = (x, y, width, height)
+                balloon_mask = detect_balloon_interior(crop_rgb, padding)
+            else:
+                local_rect, balloon_mask = detected
+                layout_rect = (
+                    search_x + local_rect[0], search_y + local_rect[1],
+                    local_rect[2], local_rect[3],
+                )
 
-        balloon_layout = fit_balanced_text(
-            text, balloon_mask, requested, 6, bool(style.get("auto_fit", False)),
-            line_height_for_size,
-            lambda size, value: draw.textlength(value, font=font_for_size(size)) * manual_scale_x,
-            language=str(style.get("language", "auto")),
-            hyphenate=bool(style.get("hyphenation", True)),
-            orphan_control=bool(style.get("orphan_control", True)),
-            hanging_punctuation=bool(style.get("hanging_punctuation", True)),
-            max_horizontal_compression=int(style.get("max_horizontal_compression", 12)),
-            auto_scale=bool(style.get("auto_scale", True)),
-        )
+            def line_height_for_size(size: int) -> float:
+                candidate_font = font_for_size(size)
+                bounds = draw.textbbox((0, 0), "Ag", font=candidate_font, stroke_width=render_stroke)
+                return max(1, bounds[3] - bounds[1] + spacing)
+
+            balloon_layout = fit_balanced_text(
+                text, balloon_mask, requested, 6,
+                bool(style.get("auto_fit", False) or style.get("fit_once", False)),
+                line_height_for_size,
+                lambda size, value: draw.textlength(value, font=font_for_size(size)) * manual_scale_x,
+                language=str(style.get("language", "auto")),
+                hyphenate=bool(style.get("hyphenation", True)),
+                orphan_control=bool(style.get("orphan_control", True)),
+                hanging_punctuation=bool(style.get("hanging_punctuation", True)),
+                max_horizontal_compression=int(style.get("max_horizontal_compression", 12)),
+                auto_scale=bool(style.get("auto_scale", True)),
+                shape_type=str(style.get("balloon_shape", "auto")),
+                padding=padding,
+            )
+            if not balloon_layout["overflow"]:
+                balloon_layout["layout_rect"] = layout_rect
+                balloon_layout["center_y"] = (
+                    float(balloon_layout["center_y"]) + layout_rect[1] - y
+                )
         if not balloon_layout["overflow"]:
             wrapped = str(balloon_layout["text"])
             selected_font = font_for_size(int(balloon_layout["font_size"]))
+        else:
+            region["text_overflow"] = True
     elif not vertical:
         rectangle_layout = valid_snapshot(region, text, style)
         if rectangle_layout is None:
@@ -393,7 +436,8 @@ def _draw_region_text(image: Image.Image, region: dict, default_style: dict) -> 
     balloon_specs: list[tuple[str, tuple[float, float]]] = []
     balloon_success = bool(balloon_layout and not balloon_layout["overflow"])
     if balloon_success:
-        text_width = width
+        layout_rect = balloon_layout.get("layout_rect", (x, y, width, height))
+        text_width = int(layout_rect[2])
         text_height = int(math.ceil(float(balloon_layout["line_height"]) * len(balloon_layout["lines"])))
         bbox = (0, 0, text_width, text_height)
     else:
@@ -574,7 +618,7 @@ def _draw_region_text(image: Image.Image, region: dict, default_style: dict) -> 
         alpha = text_layer.getchannel("A").point(lambda value: value * opacity // 100)
         text_layer.putalpha(alpha)
     if balloon_success:
-        px = x + (width - text_layer.width) / 2
+        px = float(layout_rect[0]) + (float(layout_rect[2]) - text_layer.width) / 2
     elif alignment == "left":
         px = x + margin - effect_pad
     elif alignment == "right":
@@ -582,7 +626,7 @@ def _draw_region_text(image: Image.Image, region: dict, default_style: dict) -> 
     else:
         px = x + (width - text_layer.width) / 2
     if balloon_success:
-        py = y + (height - text_layer.height) / 2
+        py = y + float(balloon_layout["center_y"]) - text_layer.height / 2
     elif vertical_alignment == "top":
         py = y + margin - effect_pad
     elif vertical_alignment == "bottom":

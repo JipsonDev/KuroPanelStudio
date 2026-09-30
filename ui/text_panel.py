@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import QSize, Qt, Signal
 from PySide6.QtGui import QColor, QFont, QIcon, QPixmap
 from PySide6.QtWidgets import (QCheckBox, QColorDialog, QComboBox, QFrame,
                                QHBoxLayout, QLabel, QLineEdit, QScrollArea, QSpinBox,
@@ -28,8 +28,8 @@ class TextOptionsPanel(QScrollArea):
         super().__init__(parent)
         self.setWidgetResizable(True)
         self.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-        self.setMinimumWidth(250)
-        self.setMaximumWidth(310)
+        self.setMinimumWidth(270)
+        self.setMaximumWidth(370)
         self._loading = False
         self._layer_index = -1
         self._presets: dict[str, dict] = {}
@@ -42,44 +42,58 @@ class TextOptionsPanel(QScrollArea):
         content.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
         self.setWidget(content)
         root = QVBoxLayout(content)
-        root.setContentsMargins(8, 11, 8, 11)
-        root.setSpacing(9)
+        root.setContentsMargins(12, 14, 12, 16)
+        root.setSpacing(13)
 
-        root.addWidget(SectionTitle("Tipografía profesional"))
+        root.addWidget(SectionTitle("Herramientas de texto"))
         self.layer_label = QLabel("Selecciona una capa de texto")
-        self.layer_label.setObjectName("Muted")
+        self.layer_label.setObjectName("TextSelectionStatus")
         self.layer_label.setWordWrap(True)
         root.addWidget(self.layer_label)
 
-        quick_header = QLabel("ESTILOS RÁPIDOS (1 CLIC)")
+        quick_card = QFrame()
+        quick_card.setObjectName("TextQuickCard")
+        quick_grid = QVBoxLayout(quick_card)
+        quick_grid.setContentsMargins(11, 11, 11, 12)
+        quick_grid.setSpacing(8)
+        quick_header = QLabel("ESTILOS RÁPIDOS")
         quick_header.setObjectName("Caption")
-        root.addWidget(quick_header)
-        quick_grid = QVBoxLayout()
-        quick_grid.setSpacing(4)
-        row1 = QHBoxLayout(); row1.setSpacing(4)
-        self.btn_dialogue = ModernButton("💬 Diálogo", "Secondary")
+        quick_grid.addWidget(quick_header)
+        row1 = QHBoxLayout(); row1.setSpacing(8)
+        self.btn_dialogue = ModernButton("Diálogo", "Secondary", icon_name="text")
         self.btn_dialogue.setToolTip("Estilo estándar para globos de diálogo (centrado, seminegrita, contorno)")
         self.btn_dialogue.clicked.connect(lambda: self._apply_quick_preset("dialogue"))
-        self.btn_shout = ModernButton("⚡ Grito", "Secondary")
+        self.btn_shout = ModernButton("Grito", "Secondary", icon_name="sparkles")
         self.btn_shout.setToolTip("Estilo enérgico con mayúsculas y doble trazo para acción o gritos")
         self.btn_shout.clicked.connect(lambda: self._apply_quick_preset("shout"))
         row1.addWidget(self.btn_dialogue, 1); row1.addWidget(self.btn_shout, 1)
         quick_grid.addLayout(row1)
-        row2 = QHBoxLayout(); row2.setSpacing(4)
-        self.btn_thought = ModernButton("💭 Pensar", "Secondary")
+        row2 = QHBoxLayout(); row2.setSpacing(8)
+        self.btn_thought = ModernButton("Pensamiento", "Secondary", icon_name="moon")
         self.btn_thought.setToolTip("Estilo cursiva suave con resplandor para pensamientos")
         self.btn_thought.clicked.connect(lambda: self._apply_quick_preset("thought"))
-        self.btn_whisper = ModernButton("🤫 Susurro", "Secondary")
+        self.btn_whisper = ModernButton("Susurro", "Secondary", icon_name="edit")
         self.btn_whisper.setToolTip("Estilo ligero y suave para susurros o voces bajas")
         self.btn_whisper.clicked.connect(lambda: self._apply_quick_preset("whisper"))
-        self.btn_narrator = ModernButton("📜 Narrar", "Secondary")
+        row2.addWidget(self.btn_thought, 1); row2.addWidget(self.btn_whisper, 1)
+        quick_grid.addLayout(row2)
+        self.btn_narrator = ModernButton("Narración", "Secondary", icon_name="script")
         self.btn_narrator.setToolTip("Estilo para cuadros de narración y carteles")
         self.btn_narrator.clicked.connect(lambda: self._apply_quick_preset("narrator"))
-        row2.addWidget(self.btn_thought, 1); row2.addWidget(self.btn_whisper, 1); row2.addWidget(self.btn_narrator, 1)
-        quick_grid.addLayout(row2)
-        root.addLayout(quick_grid)
+        quick_grid.addWidget(self.btn_narrator)
+        for button in (self.btn_dialogue, self.btn_shout, self.btn_thought, self.btn_whisper, self.btn_narrator):
+            button.setMinimumHeight(40)
+            button.setIconSize(QSize(17, 17))
+            button.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+            button.setCheckable(True)
+        self._quick_buttons = {
+            "dialogue": self.btn_dialogue, "shout": self.btn_shout,
+            "thought": self.btn_thought, "whisper": self.btn_whisper,
+            "narrator": self.btn_narrator,
+        }
+        root.addWidget(quick_card)
 
-        self.profile_section = CollapsibleSection("1 · Proyecto y rol", True)
+        self.profile_section = CollapsibleSection("Proyecto y roles", False)
         profile_layout = self.profile_section.body_layout
         self.profile_summary = QLabel("Sin proyecto tipográfico")
         self.profile_summary.setObjectName("ProfileSummary")
@@ -106,17 +120,13 @@ class TextOptionsPanel(QScrollArea):
         self.font_role.setSizeAdjustPolicy(QComboBox.AdjustToMinimumContentsLengthWithIcon); self.font_role.setMinimumContentsLength(8)
         self.font_role.currentIndexChanged.connect(self._font_role_changed)
         profile_layout.addWidget(self.font_role)
-        root.addWidget(self.profile_section)
 
-        self.font_section = CollapsibleSection("2 · Fuente de capa", False)
+        self.font_section = CollapsibleSection("Fuente y color", False)
         font_layout = self.font_section.body_layout
-        font_hint = QLabel("Puedes reemplazar la fuente aunque la capa tenga un perfil asignado.")
-        font_hint.setObjectName("Muted")
-        font_hint.setWordWrap(True)
-        font_layout.addWidget(font_hint)
         self.font_source_label = QLabel("Fuente manual · Segoe UI")
         self.font_source_label.setObjectName("FontSourceBadge")
         self.font_source_label.setWordWrap(True)
+        self.font_source_label.setToolTip("Puedes reemplazar la fuente aunque la capa tenga un perfil asignado.")
         font_layout.addWidget(self.font_source_label)
         self.family = QComboBox()
         self.family.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Fixed)
@@ -125,6 +135,7 @@ class TextOptionsPanel(QScrollArea):
         self.family.setInsertPolicy(QComboBox.NoInsert)
         self.family.setToolTip("Despliega el menú o escribe parte del nombre para filtrar las fuentes")
         self.family.addItem("Segoe UI")
+        font_layout.addWidget(QLabel("FUENTE"))
         font_layout.addWidget(self.family)
         font_layout.addWidget(QLabel("ESTILO DE LA FUENTE"))
         self.weight = QComboBox()
@@ -136,50 +147,55 @@ class TextOptionsPanel(QScrollArea):
         self.weight.addItem("Black", 900)
         self.weight.setProperty("kuro_i18n_choices", True)
         font_layout.addWidget(self.weight)
+        self.size_label = QLabel("TAMAÑO MÁXIMO")
+        self.size = self._spin(6, 300, " px")
+        self.auto_fit = QCheckBox("Ajustar fuente automáticamente")
+        self.fit_now = ModernButton("Ajustar texto ahora", "Primary", icon_name="scan")
+        self.fit_now.setToolTip("Calcula una vez el mayor tamaño que cabe y vuelve inmediatamente al modo manual.")
+        self.fit_now.clicked.connect(self.fit_requested.emit)
+        self.text_color = self._color_control("Color del texto", "#111111", font_layout)
+
+        self.advanced_section = CollapsibleSection("Opciones avanzadas", False)
+        advanced_layout = self.advanced_section.body_layout
+        preview_caption = QLabel("VISTA PREVIA DE LA FUENTE")
+        preview_caption.setObjectName("Caption")
+        advanced_layout.addWidget(preview_caption)
+        self.font_preview = QLabel("Diálogo  ·  GRITOS  ·  Aa 123")
+        self.font_preview.setObjectName("TextFontPreview")
+        self.font_preview.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Fixed)
+        self.font_preview.setAlignment(Qt.AlignCenter)
+        self.font_preview.setMinimumHeight(72)
+        advanced_layout.addWidget(self.font_preview)
         emphasis = QVBoxLayout()
-        emphasis.setSpacing(5)
+        emphasis.setSpacing(7)
         self.italic = QCheckBox("Cursiva")
         self.underline = QCheckBox("Subrayado")
         self.strikeout = QCheckBox("Tachado")
         emphasis.addWidget(self.italic)
         emphasis.addWidget(self.underline)
         emphasis.addWidget(self.strikeout)
-        font_layout.addLayout(emphasis)
-        font_layout.addWidget(QLabel("FORMATO DE TEXTO"))
+        advanced_layout.addLayout(emphasis)
+        advanced_layout.addWidget(QLabel("FORMATO DE TEXTO"))
         self.text_case = QComboBox()
         self.text_case.addItem("Como fue escrito", "original")
         self.text_case.addItem("TODO MAYÚSCULAS", "upper")
         self.text_case.addItem("todo minúsculas", "lower")
         self.text_case.setProperty("kuro_i18n_choices", True)
-        font_layout.addWidget(self.text_case)
-        preview_caption = QLabel("VISTA PREVIA DE LA FUENTE")
-        preview_caption.setObjectName("Caption")
-        font_layout.addWidget(preview_caption)
-        self.font_preview = QLabel("Diálogo  ·  GRITOS  ·  Aa 123")
-        self.font_preview.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Fixed)
-        self.font_preview.setAlignment(Qt.AlignCenter)
-        self.font_preview.setMinimumHeight(42)
-        self.font_preview.setStyleSheet("background:#0D1C2A; border:1px dashed #285E76; border-radius:7px;")
-        font_layout.addWidget(self.font_preview)
-        root.addWidget(self.font_section)
+        advanced_layout.addWidget(self.text_case)
 
-        self.composition_section = CollapsibleSection("3 · Composición", False)
+        self.composition_section = CollapsibleSection("Ajuste al globo", True)
         composition_layout = self.composition_section.body_layout
-        self.size = self._spin(6, 300, " px")
-        self.spacing = self._spin(-10, 100, " px")
-        composition_layout.addWidget(QLabel("TAMAÑO"))
+        composition_layout.addWidget(self.size_label)
         composition_layout.addWidget(self.size)
-        composition_layout.addWidget(QLabel("INTERLINEADO"))
-        composition_layout.addWidget(self.spacing)
-        self.auto_fit = QCheckBox("Autoajuste continuo (opcional)")
         composition_layout.addWidget(self.auto_fit)
-        self.fit_now = ModernButton("Ajustar texto ahora", "Primary")
-        self.fit_now.setToolTip("Calcula una vez el mayor tamaño que cabe y vuelve inmediatamente al modo manual.")
-        self.fit_now.clicked.connect(self.fit_requested.emit)
-        composition_layout.addWidget(self.fit_now)
-        self.balloon_fit = QCheckBox("Adaptar a la forma del globo (Shape Flow)")
-        self.balloon_fit.setToolTip("Distribuye el texto de forma simétrica siguiendo la silueta del globo sin descentrar las líneas.")
+        self.spacing = self._spin(-10, 100, " px")
+        self.balloon_fit = QCheckBox("Seguir contorno del globo")
+        self.balloon_fit.setToolTip("Centra el texto dentro del área detectada y adapta cada línea al ancho seguro del globo.")
         composition_layout.addWidget(self.balloon_fit)
+        self.layout_hint = QLabel("El texto se centra y mantiene distancia del borde detectado.")
+        self.layout_hint.setObjectName("Muted")
+        self.layout_hint.setWordWrap(True)
+        composition_layout.addWidget(self.layout_hint)
         self.balloon_shape_label = QLabel("FORMA DE ADAPTACIÓN")
         composition_layout.addWidget(self.balloon_shape_label)
         self.balloon_shape = QComboBox()
@@ -189,14 +205,18 @@ class TextOptionsPanel(QScrollArea):
         self.balloon_shape.addItem("Rectangular (Cuadros)", "rectangle")
         self.balloon_shape.setProperty("kuro_i18n_choices", True)
         composition_layout.addWidget(self.balloon_shape)
-        self.balloon_padding_label = QLabel("MARGEN DEL GLOBO (PADDING)")
+        self.balloon_padding_label = QLabel("MARGEN MÍNIMO DEL GLOBO")
         composition_layout.addWidget(self.balloon_padding_label)
         self.balloon_padding = self._spin(2, 80, " px")
+        self.balloon_padding.setToolTip("El programa aumenta este margen en globos grandes o con contornos gruesos para que las letras no toquen el borde.")
         composition_layout.addWidget(self.balloon_padding)
         self.optical_center = QCheckBox("Centrado óptico")
         composition_layout.addWidget(self.optical_center)
+        composition_layout.addWidget(self.fit_now)
+        advanced_layout.addWidget(QLabel("INTERLINEADO"))
+        advanced_layout.addWidget(self.spacing)
 
-        composition_layout.addWidget(QLabel("REGLAS DEL IDIOMA"))
+        advanced_layout.addWidget(QLabel("REGLAS DEL IDIOMA"))
         self.language = QComboBox()
         self.language.addItem("Detectar automáticamente", "auto")
         self.language.addItem("Español", "es")
@@ -204,23 +224,26 @@ class TextOptionsPanel(QScrollArea):
         self.language.addItem("Japonés", "ja")
         self.language.addItem("Coreano", "ko")
         self.language.setProperty("kuro_i18n_choices", True)
-        composition_layout.addWidget(self.language)
+        advanced_layout.addWidget(self.language)
         self.hyphenation = QCheckBox("Separación silábica en español")
         self.orphan_control = QCheckBox("Evitar palabras huérfanas")
         self.hanging_punctuation = QCheckBox("Puntuación colgante")
-        composition_layout.addWidget(self.hyphenation)
-        composition_layout.addWidget(self.orphan_control)
-        composition_layout.addWidget(self.hanging_punctuation)
+        advanced_layout.addWidget(self.hyphenation)
+        advanced_layout.addWidget(self.orphan_control)
+        advanced_layout.addWidget(self.hanging_punctuation)
 
-        composition_layout.addWidget(QLabel("ESCALA MANUAL"))
-        self.auto_scale = QCheckBox("Comprimir antes de reducir la fuente")
+        advanced_layout.addWidget(QLabel("ESCALA MANUAL"))
+        self.auto_scale = QCheckBox("Comprimir antes de reducir")
         self.max_horizontal_compression = self._spin(0, 20, " %")
         self.scale_x = self._spin(50, 200, " %")
         self.scale_y = self._spin(50, 200, " %")
-        composition_layout.addWidget(QLabel("ESCALA HORIZONTAL"))
-        composition_layout.addWidget(self.scale_x)
-        composition_layout.addWidget(QLabel("ESCALA VERTICAL"))
-        composition_layout.addWidget(self.scale_y)
+        advanced_layout.addWidget(self.auto_scale)
+        advanced_layout.addWidget(QLabel("COMPRESIÓN MÁXIMA"))
+        advanced_layout.addWidget(self.max_horizontal_compression)
+        advanced_layout.addWidget(QLabel("ESCALA HORIZONTAL"))
+        advanced_layout.addWidget(self.scale_x)
+        advanced_layout.addWidget(QLabel("ESCALA VERTICAL"))
+        advanced_layout.addWidget(self.scale_y)
 
         self.alignment = QComboBox(); self.alignment.addItem("Izquierda", "left"); self.alignment.addItem("Centro", "center"); self.alignment.addItem("Derecha", "right")
         self.vertical_alignment = QComboBox(); self.vertical_alignment.addItem("Arriba", "top"); self.vertical_alignment.addItem("Centro", "center"); self.vertical_alignment.addItem("Abajo", "bottom")
@@ -228,37 +251,31 @@ class TextOptionsPanel(QScrollArea):
         self.vertical_alignment.setProperty("kuro_i18n_choices", True)
         self.alignment.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Fixed)
         self.vertical_alignment.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Fixed)
-        composition_layout.addWidget(QLabel("ALINEACIÓN HORIZONTAL"))
-        composition_layout.addWidget(self.alignment)
-        composition_layout.addWidget(QLabel("POSICIÓN VERTICAL"))
-        composition_layout.addWidget(self.vertical_alignment)
+        advanced_layout.addWidget(QLabel("ALINEACIÓN HORIZONTAL"))
+        advanced_layout.addWidget(self.alignment)
+        advanced_layout.addWidget(QLabel("POSICIÓN VERTICAL"))
+        advanced_layout.addWidget(self.vertical_alignment)
         self.rotation = self._spin(-180, 180, "°")
         self.vertical = QCheckBox("Texto vertical")
         self.vertical.setToolTip("Componer el texto verticalmente")
-        composition_layout.addWidget(QLabel("ROTACIÓN"))
-        composition_layout.addWidget(self.rotation)
-        composition_layout.addWidget(self.vertical)
+        advanced_layout.addWidget(QLabel("ROTACIÓN"))
+        advanced_layout.addWidget(self.rotation)
+        advanced_layout.addWidget(self.vertical)
+        self.margin = self._spin(0, 200, " px")
+        advanced_layout.addWidget(QLabel("MARGEN INTERIOR DE CAJA"))
+        advanced_layout.addWidget(self.margin)
         self.overflow_warning = QLabel("⚠ El texto no cabe dentro del globo")
         self.overflow_warning.setObjectName("WarningText")
         self.overflow_warning.setWordWrap(True)
         self.overflow_warning.hide()
         composition_layout.addWidget(self.overflow_warning)
-        root.addWidget(self.composition_section)
-
-        self.appearance_section = CollapsibleSection("4 · Apariencia", False)
-        appearance_layout = self.appearance_section.body_layout
-        self.text_color = self._color_control("Color del texto", "#111111", appearance_layout)
         # Stroke belongs to the dedicated Effects tool. Keep its backing
         # values for project compatibility, but do not duplicate its controls.
         self.stroke_color = QLineEdit("#FFFFFF"); self.stroke_color.hide()
         self.stroke = self._spin(0, 20, " px")
         self.stroke.hide()
-        self.margin = self._spin(0, 200, " px")
-        appearance_layout.addWidget(QLabel("MARGEN INTERIOR"))
-        appearance_layout.addWidget(self.margin)
-        root.addWidget(self.appearance_section)
 
-        self.preset_section = CollapsibleSection("5 · Estilos", False)
+        self.preset_section = CollapsibleSection("Estilos guardados", False)
         preset_layout = self.preset_section.body_layout
         self.preset = QComboBox()
         self.preset.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Fixed)
@@ -274,17 +291,21 @@ class TextOptionsPanel(QScrollArea):
         preset_row.addWidget(self.preset_name, 1)
         preset_row.addWidget(save_preset)
         preset_layout.addLayout(preset_row)
-        root.addWidget(self.preset_section)
+        for section in (
+            self.composition_section, self.font_section, self.advanced_section,
+            self.profile_section, self.preset_section,
+        ):
+            root.addWidget(section)
 
         for section in (
             self.profile_section, self.font_section, self.composition_section,
-            self.appearance_section, self.preset_section,
+            self.advanced_section, self.preset_section,
         ):
             section.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
             section.header.setMinimumWidth(0)
             section.header.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Fixed)
             section.body.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
-            section.set_collapsible(False)
+            section.set_collapsible(True)
 
         for widget in (
             self.weight, self.italic, self.underline, self.strikeout, self.text_case,
@@ -327,6 +348,29 @@ class TextOptionsPanel(QScrollArea):
     def _set_editing_enabled(self, enabled: bool) -> None:
         for widget in self._edit_controls:
             widget.setEnabled(enabled)
+        self._sync_control_state()
+
+    def _sync_control_state(self) -> None:
+        """Keep dependent controls honest without changing the saved style."""
+        active = self._layer_index >= 0
+        vertical = self.vertical.isChecked()
+        balloon = active and self.balloon_fit.isChecked() and not vertical
+        self.balloon_fit.setEnabled(active and not vertical)
+        for widget in (
+            self.balloon_shape_label, self.balloon_shape,
+            self.balloon_padding_label, self.balloon_padding,
+        ):
+            widget.setEnabled(balloon)
+        self.auto_scale.setEnabled(balloon)
+        self.max_horizontal_compression.setEnabled(balloon and self.auto_scale.isChecked())
+        self.size_label.setText("TAMAÑO MÁXIMO" if self.auto_fit.isChecked() else "TAMAÑO FIJO")
+        if vertical:
+            hint = "El texto vertical usa la caja; el ajuste al globo queda en pausa."
+        elif balloon:
+            hint = "El texto se centra y mantiene distancia del borde detectado."
+        else:
+            hint = "El texto usa la caja rectangular y su margen interior."
+        self.layout_hint.setText(hint)
 
     def _apply_quick_preset(self, preset_key: str) -> None:
         if self._loading or self._layer_index < 0:
@@ -337,6 +381,10 @@ class TextOptionsPanel(QScrollArea):
         merged = {**self.values(), **preset}
         self.set_layer(self._layer_index, merged, preset.get("name", "Personalizado"))
         self.style_changed.emit(self.values())
+
+    def _show_quick_preset(self, preset_name: str) -> None:
+        for key, button in self._quick_buttons.items():
+            button.setChecked(QUICK_TYPOGRAPHY_PRESETS[key].get("name") == preset_name)
 
     @staticmethod
     def _spin(low: int, high: int, suffix: str) -> QSpinBox:
@@ -486,12 +534,15 @@ class TextOptionsPanel(QScrollArea):
         self._set_color(self.text_color, normalized["text_color"])
         self._set_color(self.stroke_color, normalized["stroke_color"])
         self.preset.setCurrentText(preset_name if preset_name else "Personalizado")
+        self._show_quick_preset(preset_name)
         self._update_font_preview(normalized["font_family"])
         self._loading = False
+        self._sync_control_state()
 
     def clear_layer(self) -> None:
         self._layer_index = -1
         self.layer_label.setText("Selecciona una capa de texto")
+        self._show_quick_preset("")
         self._set_editing_enabled(False)
 
     def set_font_role(self, alias: str) -> None:
@@ -555,6 +606,8 @@ class TextOptionsPanel(QScrollArea):
             self.preset.blockSignals(True)
             self.preset.setCurrentText("Personalizado")
             self.preset.blockSignals(False)
+            self._show_quick_preset("")
+            self._sync_control_state()
             self._update_font_preview(self.family.currentText())
             self.style_changed.emit(self.values())
 
@@ -568,7 +621,7 @@ class TextOptionsPanel(QScrollArea):
         font.setStrikeOut(self.strikeout.isChecked() if hasattr(self, "strikeout") else False)
         self.font_preview.setFont(font)
         self.font_preview.setText(f"{family}\nAa 123  ·  漢字  ·  한글")
-        self.font_preview.setMinimumHeight(58)
+        self.font_preview.setMinimumHeight(72)
 
     def _update_font_preview_from_current(self, *_args) -> None:
         self._update_font_preview(self.family.currentText())

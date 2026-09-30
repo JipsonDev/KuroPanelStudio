@@ -201,6 +201,10 @@ QPushButton#DetectAction { background: #2A394E; border: 1px solid #33445A; color
 QPushButton#DetectAction:hover { background: #34475E; border-color: #4B617C; }
 QToolButton#AIMode { background: #1B2A3D; border: 1px solid #33445A; border-radius: 7px; color: #C7D3E3; font-size: 12px; padding: 6px 8px; }
 QFrame#AIPanel QPushButton, QFrame#AIPanel QComboBox { font-size: 12px; }
+QFrame#TextQuickCard { background: #172334; border: 1px solid #33445A; border-radius: 10px; }
+QFrame#TextQuickCard QPushButton { text-align: left; padding-left: 12px; }
+QLabel#TextSelectionStatus { background: #172334; border: 1px solid #33445A; border-radius: 8px; color: #DDE6F2; padding: 9px 11px; }
+QLabel#TextFontPreview { background: #172334; border: 1px solid #33445A; border-radius: 8px; color: #F4F7FB; padding: 6px; }
 QFrame#AIActionFooterPage { background: #111C2B; border-top: 1px solid #34465D; }
 QToolButton#LayerMore { background: #172334; border: 1px solid #27364A; border-radius: 7px; padding: 4px 8px; color: #F4F7FB; }
 QToolButton#LayerMore:hover { background: #27364A; border-color: #34465D; }

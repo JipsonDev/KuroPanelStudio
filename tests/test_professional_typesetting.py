@@ -3,18 +3,29 @@ from __future__ import annotations
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 import cv2
 import numpy as np
+from PIL import Image, ImageDraw
 
-from core.balloon_typesetter import detect_balloon_interior, fit_balanced_text, line_intervals
+from core.balloon_typesetter import (
+    balloon_search_rect, detect_balloon_interior, detect_full_balloon,
+    effective_balloon_padding, fit_balanced_text,
+    line_intervals, usable_mask_bounds,
+)
 from core.cleaning_manager import CleaningManager
+from core.export_manager import _draw_region_text
 from core.linguistic_composer import linguistic_wrap
 from core.sfx_transform import build_warp
-from core.text_layout import fit_rectangular_text, layout_signature
+from core.text_layout import (
+    balloon_layout_signature, fit_rectangular_text, layout_signature,
+    valid_balloon_snapshot,
+)
 from core.project_io import load_project_bundle, save_project_bundle
 from core.project_manager import Page
 from core.performance_manager import PerformanceTracker, resource_policy
+from core.typography_manager import DEFAULT_STYLE
 
 
 class ProfessionalTypesettingTests(unittest.TestCase):
@@ -67,6 +78,49 @@ class ProfessionalTypesettingTests(unittest.TestCase):
         self.assertGreater(widths[1], widths[0])
         self.assertGreater(widths[1], widths[2])
 
+    def test_full_balloon_is_found_outside_the_ocr_box(self) -> None:
+        page = np.full((320, 440, 3), 35, np.uint8)
+        cv2.ellipse(page, (220, 160), (170, 125), 0, 0, 360, (248, 248, 248), -1)
+        box = (175, 125, 90, 70)
+        sx, sy, sw, sh = balloon_search_rect(440, 320, box)
+        result = detect_full_balloon(
+            page[sy:sy + sh, sx:sx + sw],
+            (box[0] - sx, box[1] - sy, box[2], box[3]), 12,
+        )
+        self.assertIsNotNone(result)
+        rect, mask = result
+        self.assertGreater(rect[2], box[2] * 2)
+        self.assertGreater(rect[3], box[3] * 2)
+        self.assertEqual(mask[0, 0], 0)
+        self.assertGreater(mask[mask.shape[0] // 2, mask.shape[1] // 2], 0)
+
+    def test_export_uses_full_balloon_even_without_a_canvas_snapshot(self) -> None:
+        image = Image.new("RGB", (440, 320), "#303640")
+        ImageDraw.Draw(image).ellipse((50, 35, 390, 285), fill="white", outline="black", width=4)
+        before = np.asarray(image).copy()
+        region = {
+            "x": 175, "y": 125, "width": 90, "height": 70,
+            "applied_text": "ESTE TEXTO DEBE OCUPAR EL GLOBO COMPLETO Y NO SOLO LA CAJA DE OCR",
+            "style": {**DEFAULT_STYLE, "font_family": "Arial", "font_size": 34,
+                      "auto_fit": True, "balloon_fit": True, "stroke_width": 0},
+        }
+        _draw_region_text(image, region, DEFAULT_STYLE)
+        changed = np.any(before != np.asarray(image), axis=2)
+        outside_box = changed.copy()
+        outside_box[125:195, 175:265] = False
+        self.assertGreater(np.count_nonzero(outside_box), 0)
+        search_rect = balloon_search_rect(440, 320, (175, 125, 90, 70))
+        sx, sy, sw, sh = search_rect
+        detected = detect_full_balloon(
+            before[sy:sy + sh, sx:sx + sw], (175 - sx, 125 - sy, 90, 70),
+            effective_balloon_padding(90, 70, 10),
+        )
+        self.assertIsNotNone(detected)
+        (left, top, width, height), safe_mask = detected
+        safe = np.zeros(changed.shape, np.uint8)
+        safe[sy + top:sy + top + height, sx + left:sx + left + width] = safe_mask
+        self.assertEqual(np.count_nonzero(changed & (safe == 0)), 0)
+
     def test_balanced_fit_obeys_each_local_width(self) -> None:
         mask = detect_balloon_interior(self._balloon(260, 150), padding=12)
         layout = fit_balanced_text(
@@ -79,6 +133,71 @@ class ProfessionalTypesettingTests(unittest.TestCase):
         self.assertGreater(len(layout["lines"]), 1)
         for line, (left, right) in zip(layout["lines"], layout["intervals"]):
             self.assertLessEqual(len(line) * layout["font_size"] * 0.55, right - left)
+
+    def test_shifted_balloon_centres_text_with_clearance_from_its_outline(self) -> None:
+        image = np.full((230, 300, 3), 35, np.uint8)
+        cv2.ellipse(image, (165, 123), (115, 80), 0, 0, 360, (248, 248, 248), -1)
+        padding = effective_balloon_padding(300, 230, 8)
+        mask = detect_balloon_interior(image, padding)
+        self.assertGreaterEqual(padding, 12)
+        left, top, right, bottom = usable_mask_bounds(mask)
+        self.assertAlmostEqual((left + right) / 2, 165, delta=3)
+        self.assertAlmostEqual((top + bottom) / 2, 123, delta=3)
+        layout = fit_balanced_text(
+            "UNA FRASE ALGO LARGA DENTRO DE ESTE GLOBO", mask, 30, 6, True,
+            lambda size: size * 1.3,
+            lambda size, value: len(value) * size * .53,
+        )
+        self.assertFalse(layout["overflow"])
+        self.assertAlmostEqual(layout["center_x"], 165, delta=3)
+        self.assertAlmostEqual(layout["center_y"], 123, delta=3)
+        self.assertEqual(len(layout["lines"]), len(layout["intervals"]))
+        for left, right in layout["intervals"]:
+            self.assertAlmostEqual((left + right) / 2, 165, delta=1)
+            self.assertGreater(left, 12)
+            self.assertLess(right, 288)
+
+    def test_exported_balloon_text_stays_inside_detected_safe_area(self) -> None:
+        image = Image.new("RGB", (420, 320), "#303640")
+        ImageDraw.Draw(image).ellipse((55, 35, 365, 285), fill="white", outline="black", width=4)
+        region = {
+            "x": 70, "y": 52, "width": 280, "height": 215,
+            "applied_text": "ESTA ES UNA FRASE BASTANTE LARGA PARA VER SI SE ADAPTA BIEN AL GLOBO",
+            "style": {**DEFAULT_STYLE, "font_family": "Arial", "font_size": 42, "stroke_width": 0},
+        }
+        before = np.asarray(image).copy()
+        _draw_region_text(image, region, DEFAULT_STYLE)
+        after = np.asarray(image)
+        x, y, width, height = (region[key] for key in ("x", "y", "width", "height"))
+        padding = effective_balloon_padding(width, height, 10)
+        safe = detect_balloon_interior(before[y:y + height, x:x + width], padding) > 0
+        changed = np.any(before[y:y + height, x:x + width] != after[y:y + height, x:x + width], axis=2)
+        self.assertGreater(np.count_nonzero(changed), 0)
+        self.assertEqual(np.count_nonzero(changed & ~safe), 0)
+
+    def test_export_reuses_valid_balloon_composition_and_rejects_moved_box(self) -> None:
+        image = Image.new("RGB", (300, 220), "white")
+        style = {**DEFAULT_STYLE, "font_size": 24}
+        region = {
+            "x": 30, "y": 20, "width": 220, "height": 150,
+            "applied_text": "TEXTO CENTRADO", "style": style,
+        }
+        layout = {
+            "text": "TEXTO\nCENTRADO", "lines": ["TEXTO", "CENTRADO"],
+            "intervals": [(20, 200), (20, 200)], "font_size": 24,
+            "line_height": 30, "center_y": 75, "scale_x": 1.0,
+            "scale_y": 1.0, "overflow": False,
+        }
+        region["balloon_layout_snapshot"] = {
+            **layout,
+            "signature": balloon_layout_signature(region, region["applied_text"], style),
+        }
+        self.assertIsNotNone(valid_balloon_snapshot(region, region["applied_text"], style))
+        with patch("core.export_manager.detect_balloon_interior", side_effect=AssertionError("recomposed")):
+            _draw_region_text(image, region, DEFAULT_STYLE)
+        self.assertGreater(np.count_nonzero(np.asarray(image) != 255), 0)
+        region["x"] += 5
+        self.assertIsNone(valid_balloon_snapshot(region, region["applied_text"], style))
 
     def test_unfittable_text_reports_overflow_when_auto_fit_is_disabled(self) -> None:
         mask = np.zeros((40, 80), np.uint8)

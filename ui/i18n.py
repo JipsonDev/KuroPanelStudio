@@ -16,6 +16,7 @@ from PySide6.QtWidgets import (
 
 
 ES_TO_EN = {
+    "⚠ El texto no cabe en el globo": "⚠ Text does not fit inside the balloon",
     # Window, navigation and empty state.
     "Espacio de edición de manhuas": "Manhua editing workspace",
     "Abrir": "Open", "Guardar": "Save", "Exportar": "Export",
@@ -215,6 +216,8 @@ ES_TO_EN = {
         "Drag to move · Ctrl + click or Delete to remove",
     "Arrastra para mover · Esquinas para redimensionar · Ctrl + clic para borrar":
         "Drag to move · Corners to resize · Ctrl + click to remove",
+    "Arrastra para mover · Esquinas para redimensionar · Ctrl + arrastrar esquina para escalar texto · Ctrl + clic dentro para borrar":
+        "Drag to move · Corners to resize · Ctrl + drag a corner to scale text · Ctrl + click inside to remove",
     "Arrastra para comparar limpieza y original": "Drag to compare clean and original",
     "Abre un capítulo para comenzar": "Open a chapter to begin",
     "Editando en el lienzo · Ctrl+Enter guarda · Esc cancela":
@@ -281,6 +284,24 @@ ES_TO_EN = {
 
     # Typesetting, effects and SFX.
     "Selecciona una capa de texto": "Select a text layer",
+    "Herramientas de texto": "Text tools",
+    "ESTILOS RÁPIDOS": "QUICK STYLES",
+    "Diálogo": "Dialogue", "Grito": "Shout", "Pensamiento": "Thought",
+    "Susurro": "Whisper", "Narración": "Narration",
+    "Proyecto y roles": "Project and roles", "Fuente y color": "Font and color",
+    "Ajuste al globo": "Balloon fit", "Opciones avanzadas": "Advanced options",
+    "Estilos guardados": "Saved styles", "FUENTE": "FONT",
+    "TAMAÑO MÁXIMO": "MAXIMUM SIZE", "TAMAÑO FIJO": "FIXED SIZE",
+    "Ajustar fuente automáticamente": "Fit font automatically",
+    "El texto se centra y mantiene distancia del borde detectado.":
+        "Text is centered with clearance from the detected outline.",
+    "El texto usa la caja rectangular y su margen interior.":
+        "Text uses the rectangular box and its inner margin.",
+    "El texto vertical usa la caja; el ajuste al globo queda en pausa.":
+        "Vertical text uses the box; balloon fitting is paused.",
+    "COMPRESIÓN MÁXIMA": "MAXIMUM CONDENSING",
+    "MARGEN INTERIOR DE CAJA": "BOX INNER MARGIN",
+    "Comprimir antes de reducir": "Condense before shrinking",
     "Tipografía profesional": "Professional typesetting",
     "ESTILOS RÁPIDOS (1 CLIC)": "QUICK STYLES (1 CLICK)",
     "💬 Diálogo": "💬 Dialogue", "⚡ Grito": "⚡ Shout",
@@ -301,15 +322,19 @@ ES_TO_EN = {
     "Como fue escrito": "As written", "TODO MAYÚSCULAS": "ALL CAPS",
     "todo minúsculas": "all lowercase",
     "VISTA PREVIA DE LA FUENTE": "FONT PREVIEW",
-    "Autoajuste continuo (opcional)": "Continuous auto fit (optional)",
+    "Ajustar tamaño de fuente automáticamente": "Fit font size automatically",
     "Ajustar texto ahora": "Fit text now",
-    "Adaptar a la forma del globo (Shape Flow)": "Fit balloon shape (Shape Flow)",
+    "Seguir contorno del globo": "Follow balloon outline",
+    "Centra el texto dentro del área detectada y adapta cada línea al ancho seguro del globo.":
+        "Center text in the detected interior and fit each line to the balloon's safe width.",
     "FORMA DE ADAPTACIÓN": "SHAPE MODE",
     "Automático (según el globo)": "Automatic (by balloon)",
     "Ovalado / Elipse (Diálogo)": "Oval / Ellipse (Dialogue)",
     "Diamante / Puntiagudo (Gritos)": "Diamond / Pointed (Shouts)",
     "Rectangular (Cuadros)": "Rectangular (Boxes)",
-    "MARGEN DEL GLOBO (PADDING)": "BALLOON PADDING",
+    "MARGEN MÍNIMO DEL GLOBO": "MINIMUM BALLOON MARGIN",
+    "El programa aumenta este margen en globos grandes o con contornos gruesos para que las letras no toquen el borde.":
+        "The app increases this margin for large balloons or thick outlines so letters stay clear of the edge.",
     "Centrado óptico": "Optical centering",
     "Detectar automáticamente": "Detect automatically",
     "Chino": "Chinese", "Japonés": "Japanese", "Coreano": "Korean",
@@ -759,6 +784,10 @@ ES_TO_EN.update({
 
 
 PATTERNS = (
+    (r"^Editando capa (\d+) · los cambios se ven en tiempo real$",
+     r"Editing layer \1 · changes appear live"),
+    (r"^Fuente manual  ·  (.+)$", r"Manual font  ·  \1"),
+    (r"^Rol (.+)  ·  (.+)$", r"Role \1  ·  \2"),
     (r"^Ya tienes la versión (\d+\.\d+\.\d+)\.$", r"You already have version \1."),
     (r"^KuroPanel Studio (\d+\.\d+\.\d+) está disponible\.\nVersión actual: (\d+\.\d+\.\d+)\.$",
      r"KuroPanel Studio \1 is available.\nCurrent version: \2."),

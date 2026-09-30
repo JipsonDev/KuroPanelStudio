@@ -17,6 +17,9 @@ LAYOUT_STYLE_KEYS = (
     "text_case", "auto_fit", "line_spacing", "language", "hyphenation",
     "orphan_control", "hanging_punctuation", "scale_x", "scale_y",
     "text_margin", "vertical_text", "alignment", "vertical_alignment",
+    "balloon_fit", "balloon_shape", "balloon_padding", "auto_scale",
+    "max_horizontal_compression", "stroke_width", "stroke2_enabled",
+    "stroke2_width", "fit_once",
 )
 
 
@@ -156,5 +159,45 @@ def valid_snapshot(region: dict, text: str, style: dict) -> dict | None:
         return None
     expected = layout_signature(text, region.get("width", 1), region.get("height", 1), style)
     if snapshot.get("signature") != expected or not isinstance(snapshot.get("lines"), list):
+        return None
+    return dict(snapshot)
+
+
+def balloon_layout_signature(region: dict, text: str, style: dict) -> str:
+    """Include the image location, since moving a box changes its balloon mask."""
+    base = layout_signature(text, region.get("width", 1), region.get("height", 1), style)
+    position = (round(float(region.get("x", 0)), 3), round(float(region.get("y", 0)), 3))
+    return sha1(repr((base, position)).encode("utf-8", "surrogatepass")).hexdigest()
+
+
+def valid_balloon_snapshot(region: dict, text: str, style: dict) -> dict | None:
+    snapshot = region.get("balloon_layout_snapshot")
+    if not isinstance(snapshot, dict) or snapshot.get("overflow"):
+        return None
+    if snapshot.get("signature") != balloon_layout_signature(region, text, style):
+        return None
+    lines, intervals = snapshot.get("lines"), snapshot.get("intervals")
+    if not isinstance(lines, list) or not isinstance(intervals, list) or len(lines) != len(intervals):
+        return None
+    if not lines or any(not isinstance(line, str) for line in lines):
+        return None
+    layout_rect = snapshot.get("layout_rect", (
+        region.get("x", 0), region.get("y", 0), region.get("width", 1), region.get("height", 1),
+    ))
+    if not isinstance(layout_rect, (list, tuple)) or len(layout_rect) != 4:
+        return None
+    try:
+        width = float(layout_rect[2])
+        if width <= 0 or float(layout_rect[3]) <= 0:
+            return None
+    except (TypeError, ValueError):
+        return None
+    if any(
+        not isinstance(interval, (list, tuple)) or len(interval) != 2
+        or not (0 <= float(interval[0]) < float(interval[1]) <= width)
+        for interval in intervals
+    ):
+        return None
+    if not (4 <= int(snapshot.get("font_size", 0)) <= 500):
         return None
     return dict(snapshot)
