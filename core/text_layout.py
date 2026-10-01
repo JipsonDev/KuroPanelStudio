@@ -203,3 +203,23 @@ def valid_balloon_snapshot(region: dict, text: str, style: dict) -> dict | None:
     if not (4 <= int(snapshot.get("font_size", 0)) <= 500):
         return None
     return dict(snapshot)
+
+
+def translate_balloon_snapshot(region: dict, text: str, style: dict,
+                               old_x: int, old_y: int) -> bool:
+    """Carry an existing composition with a box instead of detecting its balloon again."""
+    current_x, current_y = int(region.get("x", 0)), int(region.get("y", 0))
+    if (current_x, current_y) == (old_x, old_y):
+        return False
+    previous = dict(region)
+    previous["x"], previous["y"] = old_x, old_y
+    snapshot = valid_balloon_snapshot(previous, text, style)
+    if snapshot is None:
+        return False
+    rect = list(snapshot.get("layout_rect", (old_x, old_y, region.get("width", 1), region.get("height", 1))))
+    rect[0] = float(rect[0]) + current_x - old_x
+    rect[1] = float(rect[1]) + current_y - old_y
+    snapshot["layout_rect"] = rect
+    snapshot["signature"] = balloon_layout_signature(region, text, style)
+    region["balloon_layout_snapshot"] = snapshot
+    return True

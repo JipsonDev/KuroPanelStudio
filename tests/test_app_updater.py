@@ -2,10 +2,15 @@
 from __future__ import annotations
 
 import hashlib
+import json
+from unittest.mock import patch
 
 import pytest
 
-from core.app_updater import ReleaseUpdater, UpdateCancelled, UpdateError, UpdateInfo, version_tuple
+from core.app_updater import (
+    LocalInstallerUpdater, ReleaseUpdater, UpdateCancelled, UpdateError, UpdateInfo,
+    check_available_update, version_tuple,
+)
 
 
 class Response:
@@ -91,3 +96,34 @@ def test_mismatched_or_cancelled_download_is_never_staged(tmp_path):
     with pytest.raises(UpdateCancelled):
         updater.download(info, destination, cancelled=lambda: True)
     assert not destination.exists()
+
+
+def test_local_installer_is_detected_only_when_newer_and_verified(tmp_path):
+    name = "KuroPanelStudio-Setup-0.2.6-Windows-x64.exe"
+    installer = tmp_path / name
+    installer.write_bytes(b"local installer")
+    manifest = tmp_path / "local-release.json"
+    manifest.write_text(json.dumps({
+        "version": "0.2.6", "filename": name, "installer": str(installer),
+        "size": installer.stat().st_size,
+        "sha256": hashlib.sha256(installer.read_bytes()).hexdigest(),
+    }), encoding="utf-8")
+
+    updater = LocalInstallerUpdater(manifest)
+    info = updater.check("0.2.5")
+    assert info.version == "0.2.6"
+    assert info.local_path == installer
+    assert updater.check("0.2.6") is None
+
+    installer.write_bytes(b"changed installer")
+    with pytest.raises(UpdateError, match="no coincide"):
+        updater.check("0.2.5")
+
+
+def test_local_channel_never_queries_github():
+    with (
+        patch.object(LocalInstallerUpdater, "check", return_value=None),
+        patch.object(ReleaseUpdater, "check") as remote,
+    ):
+        assert check_available_update("0.2.6", "local") is None
+        remote.assert_not_called()

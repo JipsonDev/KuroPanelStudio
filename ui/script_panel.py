@@ -6,7 +6,7 @@ from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QColor, QFont, QTextCursor
 from PySide6.QtWidgets import (
     QApplication, QCheckBox, QComboBox, QFrame, QHBoxLayout, QLabel,
-    QLineEdit, QPlainTextEdit, QScrollArea, QSizePolicy, QVBoxLayout, QWidget,
+    QLineEdit, QListWidget, QPlainTextEdit, QScrollArea, QSizePolicy, QVBoxLayout, QWidget,
 )
 
 from ui.widgets.controls import CollapsibleSection, ModernButton, SectionTitle
@@ -167,6 +167,8 @@ class ScriptPanel(QScrollArea):
     translate_page_requested = Signal()
     replace_all_requested = Signal(str, str, bool, bool, str)  # find, replace, case, word, scope
     search_next_requested = Signal(str, bool, bool, str)
+    translations_queued = Signal(str)
+    queue_cleared = Signal()
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -206,6 +208,51 @@ class ScriptPanel(QScrollArea):
         stats_layout.addWidget(self.btn_copy_all)
 
         root.addLayout(stats_layout)
+
+        queue_card = QFrame()
+        queue_card.setObjectName("TranslationQueueCard")
+        queue_card.setStyleSheet(
+            "QFrame#TranslationQueueCard { background: #18202B; border: 1px solid #303946; "
+            "border-radius: 9px; }"
+        )
+        queue_layout = QVBoxLayout(queue_card)
+        queue_layout.setContentsMargins(10, 10, 10, 10)
+        queue_layout.setSpacing(8)
+        queue_title = QLabel("Traducciones para cajas nuevas")
+        queue_title.setStyleSheet("font-weight: 700;")
+        queue_layout.addWidget(queue_title)
+        queue_hint = QLabel("Pega una entrada por línea o separa párrafos con una línea vacía. Se omiten los números.")
+        queue_hint.setObjectName("Muted")
+        queue_hint.setWordWrap(True)
+        queue_layout.addWidget(queue_hint)
+        self.queue_input = QPlainTextEdit()
+        self.queue_input.setPlaceholderText("1. Primera traducción\n2. Segunda traducción")
+        self.queue_input.setMinimumHeight(100)
+        self.queue_input.setMaximumHeight(180)
+        queue_layout.addWidget(self.queue_input)
+        queue_buttons = QHBoxLayout()
+        queue_buttons.setSpacing(8)
+        self.btn_queue = ModernButton("Preparar cola", "Primary")
+        self.btn_queue.clicked.connect(self._submit_queue)
+        queue_buttons.addWidget(self.btn_queue, 1)
+        self.btn_clear_queue = ModernButton("Vaciar", "Secondary")
+        self.btn_clear_queue.clicked.connect(self.queue_cleared.emit)
+        queue_buttons.addWidget(self.btn_clear_queue)
+        queue_layout.addLayout(queue_buttons)
+        self.queue_status = QLabel("0 traducciones pendientes")
+        self.queue_status.setObjectName("Muted")
+        self.queue_status.setWordWrap(True)
+        queue_layout.addWidget(self.queue_status)
+        self.queue_list = QListWidget()
+        self.queue_list.setMinimumHeight(80)
+        self.queue_list.setMaximumHeight(150)
+        self.queue_list.setFocusPolicy(Qt.NoFocus)
+        self.queue_list.setStyleSheet(
+            "QListWidget { background: #111923; border: 1px solid #303946; border-radius: 6px; }"
+            "QListWidget::item { padding: 5px 7px; }"
+        )
+        queue_layout.addWidget(self.queue_list)
+        root.addWidget(queue_card)
 
         # Collapsible Find & Replace Section
         self.find_section = CollapsibleSection("Búsqueda y Reemplazo", False)
@@ -273,6 +320,30 @@ class ScriptPanel(QScrollArea):
         root.addLayout(self.cards_container)
 
         root.addStretch()
+
+    def _submit_queue(self) -> None:
+        raw = self.queue_input.toPlainText().strip()
+        if raw:
+            self.translations_queued.emit(raw)
+
+    def set_pending_translations(self, pending: list[dict]) -> None:
+        count = len(pending)
+        self.queue_status.setText(f"{count} traducciones pendientes")
+        self.btn_clear_queue.setEnabled(bool(count))
+        self.queue_list.clear()
+        for index, entry in enumerate(pending, 1):
+            value = str(entry.get("text", "")).strip()
+            preview = value.replace("\n", " ⏎ ")
+            self.queue_list.addItem(f"{index}. {preview}")
+            self.queue_list.item(index - 1).setToolTip(value)
+        self.queue_list.setVisible(bool(count))
+        if count:
+            next_text = str(pending[0].get("text", "")).replace("\n", " ").strip()
+            if len(next_text) > 65:
+                next_text = next_text[:62].rstrip() + "…"
+            self.queue_status.setToolTip(f"Siguiente: {next_text}")
+        else:
+            self.queue_status.setToolTip("")
 
     def set_regions(self, regions: list[dict], page_index: int = 0) -> None:
         """Populate the side-by-side list with all dialogue regions on the current page."""

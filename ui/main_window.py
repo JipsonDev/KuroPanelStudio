@@ -15,8 +15,9 @@ from PySide6.QtGui import QAction, QGuiApplication
 from PySide6.QtWidgets import QApplication, QFileDialog, QDialog, QHBoxLayout, QMainWindow, QMessageBox, QProgressDialog, QScrollArea, QSplitter, QStackedWidget, QVBoxLayout, QWidget
 
 from core.cleaning_process_manager import CleaningProcessManager
-from core.app_updater import ReleaseUpdater, UpdateInfo
-from core.app_version import APP_VERSION
+from core.app_updater import ReleaseUpdater, UpdateInfo, check_available_update
+from core.app_version import APP_UPDATE_CHANNEL, APP_VERSION
+from core.balloon_classifier import BALLOON_KINDS, classify_balloon
 from core.credential_store import CredentialStore
 from core.detection_manager import DetectionManager
 from core.font_profile_manager import FontProfileManager
@@ -38,7 +39,7 @@ from core.settings_manager import SettingsManager
 from core.stroke_engine import StrokeEngine
 from core.text_transfer import (
     format_chapter_sections, format_numbered_entries,
-    parse_chapter_sections, parse_numbered_entries, strip_numeric_prefix,
+    parse_chapter_sections, parse_numbered_entries,
 )
 from core.translation_manager import TranslationManager
 from core.typography_manager import DEFAULT_STYLE, EFFECT_STYLE_KEYS, TypographyManager
@@ -487,6 +488,8 @@ class MainWindow(QMainWindow):
         self.script_panel.translate_page_requested.connect(lambda: self.run_translation("page"))
         self.script_panel.replace_all_requested.connect(self._script_replace_all)
         self.script_panel.search_next_requested.connect(self._script_search_next)
+        self.script_panel.translations_queued.connect(self._queue_script_translations)
+        self.script_panel.queue_cleared.connect(self._clear_script_translations)
         self.text_panel.style_changed.connect(self._typography_live_changed)
         self.text_panel.fit_requested.connect(self._fit_selected_text_once)
         self.effects_panel.effects_changed.connect(self._effects_live_changed)
@@ -499,6 +502,7 @@ class MainWindow(QMainWindow):
         self.text_panel.project_type_selected.connect(self._font_type_selected)
         self.text_panel.profile_selected.connect(self._font_profile_selected)
         self.text_panel.font_role_selected.connect(self._font_role_selected)
+        self.text_panel.balloon_kind_selected.connect(self._balloon_kind_selected)
         self.inspector.action_requested.connect(self._handle_action)
         self.inspector.text_editor.textChanged.connect(self._editor_text_changed)
         self.inspector.text_editor.editing_finished.connect(self._finish_text_editing)
@@ -514,6 +518,8 @@ class MainWindow(QMainWindow):
         self.canvas_shell.canvas.performance_measured.connect(self._record_performance_metric)
         self.canvas_shell.canvas.regions_changed.connect(self._sync_regions)
         self.canvas_shell.canvas.region_edit_requested.connect(self._edit_region_text)
+        self.canvas_shell.canvas.region_kind_requested.connect(self._balloon_kind_from_canvas)
+        self.canvas_shell.canvas.region_hyphenation_requested.connect(self._hyphenation_from_canvas)
         self.canvas_shell.canvas.inline_text_committed.connect(self._canvas_inline_text_committed)
         self.canvas_shell.canvas.watermark_positions_changed.connect(self._watermark_positions_changed)
         self.canvas_shell.canvas.sfx_nodes_changed.connect(self._sfx_nodes_changed)
@@ -1205,9 +1211,9 @@ class MainWindow(QMainWindow):
 
     @staticmethod
     def _assign_transferred_text(region: dict, item: dict) -> None:
-        # The leading number is transfer metadata shown in the OCR list. It
-        # must never become part of the dialogue rendered on the canvas.
-        value = strip_numeric_prefix(item.get("text", ""))
+        # Queue entries have already had their transfer numbering removed by
+        # the parser. Keep numbers that are part of the actual dialogue.
+        value = str(item.get("text", "")).strip()
         if not value:
             return
         if item.get("target") == "ocr":
@@ -1230,11 +1236,27 @@ class MainWindow(QMainWindow):
                 "manga_mode", self.page_styles.get(key, {}).get("ocr", {}).get("manga_mode", False),
             )),
         )
-        consumed = min(len(ordered), len(pending))
-        for region, item in zip(ordered, pending[:consumed]):
+        consumed = 0
+        for region in ordered:
+            if consumed >= len(pending):
+                break
+            item = pending[consumed]
+            if item.get("target") == "ocr":
+                occupied = str(region.get("text") or "").strip()
+            else:
+                occupied = str(region.get("translation") or "").strip()
+                applied = str(region.get("applied_text") or "").strip()
+                source = str(region.get("text") or "").strip()
+                if applied and applied != source:
+                    occupied = applied
+            if occupied:
+                continue
             self._assign_transferred_text(region, item)
+            consumed += 1
         del pending[:consumed]
         self.page_styles[key].setdefault("text_transfer", {})["pending"] = pending
+        if key == self._active_key() and hasattr(self, "script_panel"):
+            self.script_panel.set_pending_translations(pending)
         return consumed
 
     def _numbered_page_content(self, key: str, target: str | None = None) -> str:
@@ -1327,6 +1349,36 @@ class MainWindow(QMainWindow):
         self.page_styles.setdefault(key, {}).setdefault("text_transfer", {})["pending"] = pending
         return assigned, len(pending)
 
+    def _queue_script_translations(self, raw: str) -> None:
+        key = self._active_key()
+        if not key:
+            self._toast("Sin página", "Abre un capítulo antes de preparar traducciones.")
+            return
+        entries = parse_numbered_entries(raw)
+        if not entries:
+            self._toast("Sin texto", "Escribe al menos una traducción.")
+            return
+        pending = [{"text": entry, "target": "translation"} for entry in entries]
+        transfer = self.page_styles.setdefault(key, {}).setdefault("text_transfer", {})
+        transfer["pending"] = pending
+        transfer["source"] = raw
+        self.script_panel.set_pending_translations(pending)
+        self._refresh_page_text(key)
+        self._record_history()
+        self._toast("Cola preparada", f"{len(pending)} traducción(es) listas. Dibuja una caja por cada texto.")
+
+    def _clear_script_translations(self) -> None:
+        key = self._active_key()
+        if not key:
+            return
+        transfer = self.page_styles.setdefault(key, {}).setdefault("text_transfer", {})
+        transfer["pending"] = []
+        transfer["source"] = ""
+        self.script_panel.queue_input.clear()
+        self.script_panel.set_pending_translations([])
+        self._refresh_page_text(key)
+        self._record_history()
+
     def paste_distributed_text(self) -> None:
         if not self.project.pages:
             self._toast("Sin capítulo", "Abre un capítulo antes de pegar texto.")
@@ -1392,6 +1444,9 @@ class MainWindow(QMainWindow):
         selected_style = {**page_default, **region.get("style", {}), "text_overflow": bool(region.get("text_overflow", False))}
         self.text_panel.set_layer(index, selected_style, str(region.get("style_preset", "")))
         self.text_panel.set_font_role(str(region.get("font_role", "")))
+        self.text_panel.set_balloon_kind(
+            str(region.get("balloon_kind", "dialogue")), bool(region.get("balloon_kind_manual", False)),
+        )
         self.effects_panel.set_layer(
             index, {**page_default, **region.get("style", {})}, len(selected),
         )
@@ -1414,6 +1469,13 @@ class MainWindow(QMainWindow):
     def _sync_script_panel(self) -> None:
         if hasattr(self, "script_panel"):
             self.script_panel.set_regions(self.regions, self.current_page)
+            key = self._active_key()
+            source = str(self.page_styles.get(key or "", {}).get("text_transfer", {}).get("source", ""))
+            if self.script_panel.queue_input.toPlainText() != source:
+                self.script_panel.queue_input.setPlainText(source)
+            self.script_panel.set_pending_translations(
+                self._pending_text_items(key, create=False) if key else []
+            )
             active_idx = self.layers.current_index()
             if 0 <= active_idx < len(self.regions):
                 rid = str(self.regions[active_idx].get("id", f"region-{active_idx}"))
@@ -2110,11 +2172,129 @@ class MainWindow(QMainWindow):
         )
         return alias, family, str(path) if path else "", dict(entry.get("style", {}))
 
-    def _apply_dialogue_defaults(self, regions: list[dict]) -> list[dict]:
-        defaults = self._dialogue_font_defaults()
-        if defaults is not None:
-            TypographyManager.assign_font_role_defaults(regions, *defaults)
+    def _kind_font_defaults(self, kind: str) -> tuple[str, str, str, dict]:
+        matched = self.font_profiles.balloon_kind_font(
+            self.active_font_type, self.active_font_profile, kind,
+        )
+        if matched is not None:
+            alias, entry = matched
+            family = str(entry.get("family", "")).strip()
+            if family:
+                path = self.font_profiles.font_file(
+                    self.active_font_type, self.active_font_profile, str(entry.get("file", "")),
+                )
+                return alias, family, str(path) if path else "", dict(entry.get("style", {}))
+        fallback = {
+            "dialogue": ("Segoe UI", 400),
+            "shout": ("Arial", 900),
+            "caption": ("Segoe UI", 700),
+        }
+        family, weight = fallback.get(kind, fallback["dialogue"])
+        return "", family, "", {"font_weight": weight}
+
+    def _set_kind_font(self, region: dict, kind: str, *, force: bool = False) -> None:
+        style = region.get("style")
+        style = dict(style) if isinstance(style, dict) else {}
+        if not force and (str(region.get("font_role", "")).strip() or
+                          str(style.get("font_family", "")).strip()) and not region.get("balloon_font_from_kind"):
+            return
+        alias, family, font_file, role_style = self._kind_font_defaults(kind)
+        style.update({"font_family": family, "font_file": font_file})
+        for name in ("font_weight", "font_size", "italic"):
+            if name in role_style:
+                style[name] = role_style[name]
+        if force or region.get("balloon_font_from_kind") or style.get("balloon_shape", "auto") in {"", "auto"}:
+            style["balloon_shape"] = {
+                "dialogue": "ellipse", "shout": "diamond", "caption": "rectangle",
+            }[kind]
+        region["style"] = TypographyManager.normalized(style)
+        if alias:
+            region["font_role"] = alias
+        else:
+            region.pop("font_role", None)
+        region["balloon_font_from_kind"] = True
+
+    def _apply_dialogue_defaults(self, regions: list[dict], key: str | None = None) -> list[dict]:
+        """Classify visible new boxes; keep manual font and category choices."""
+        if not regions:
+            return regions
+        key = key or self._active_key()
+        canvas = self.canvas_shell.canvas
+        image = canvas._pixmap_item.pixmap().toImage()
+        may_detect = bool(
+            key == self._active_key() and self.project.pages
+            and self._displayed_page_path == self.project.active_page.path
+            and not image.isNull()
+        )
+        pending = [region for region in regions if not region.get("balloon_kind_manual")
+                   and region.get("balloon_kind_source") != "detected"]
+        rgb = canvas._qimage_rgb_array(image) if may_detect and pending else None
+        for region in regions:
+            if region.get("balloon_kind_manual"):
+                continue
+            previous = str(region.get("balloon_kind", ""))
+            if rgb is not None and region.get("balloon_kind_source") != "detected":
+                box = tuple(int(region.get(name, 0)) for name in ("x", "y", "width", "height"))
+                detected = classify_balloon(rgb, box)
+                region["balloon_kind"] = detected or "dialogue"
+                region["balloon_kind_source"] = "detected"
+            elif previous not in BALLOON_KINDS:
+                region["balloon_kind"] = "dialogue"
+                region["balloon_kind_source"] = "default"
+            if previous != region["balloon_kind"] or not region.get("balloon_font_from_kind"):
+                self._set_kind_font(region, region["balloon_kind"])
         return regions
+
+    def _balloon_kind_from_canvas(self, region_id: str, kind: str) -> None:
+        index = next(
+            (index for index, region in enumerate(self.regions)
+             if str(region.get("id", "")) == region_id), -1,
+        )
+        if index < 0:
+            return
+        self.layers.set_selected_indices([index], index)
+        self.canvas_shell.canvas.select_regions([index], index)
+        self._balloon_kind_selected(kind, indices=[index])
+
+    def _hyphenation_from_canvas(self, region_id: str, enabled: bool) -> None:
+        index = next(
+            (index for index, region in enumerate(self.regions)
+             if str(region.get("id", "")) == region_id), -1,
+        )
+        if index < 0:
+            return
+        self.regions[index].setdefault("style", {})["hyphenation"] = bool(enabled)
+        self._store_active_regions(self.regions)
+        self.layers.set_selected_indices([index], index)
+        self.canvas_shell.canvas.select_regions([index], index)
+        self._schedule_text_render(indices=[index])
+        self._layer_selected(index)
+        self._record_history()
+
+    def _balloon_kind_selected(self, kind: str, indices: list[int] | None = None) -> None:
+        if self._restoring_state:
+            return
+        indices = self._selected_layer_indices() if indices is None else indices
+        if not indices:
+            return
+        for index in indices:
+            region = self.regions[index]
+            if kind == "auto":
+                region["balloon_kind_manual"] = False
+                region["balloon_kind_source"] = ""
+                self._apply_dialogue_defaults([region])
+                resolved = str(region.get("balloon_kind", "dialogue"))
+            else:
+                resolved = kind if kind in BALLOON_KINDS else "dialogue"
+                region["balloon_kind"] = resolved
+                region["balloon_kind_manual"] = True
+                region["balloon_kind_source"] = "manual"
+                self._set_kind_font(region, resolved, force=True)
+            region["typeset_completed"] = bool(region.get("applied_text"))
+        self._store_active_regions(self.regions)
+        self._schedule_text_render(indices=indices)
+        self._layer_selected(indices[-1])
+        self._record_history()
 
     @staticmethod
     def _enable_adaptive_typesetting(regions: list[dict]) -> None:
@@ -2140,22 +2320,19 @@ class MainWindow(QMainWindow):
     def _install_project_typography_defaults(self) -> None:
         """Migrate unstyled pages/boxes to the active project's Dialogue role."""
         defaults = self._dialogue_font_defaults()
-        if defaults is None:
-            return
-        alias, family, font_file, role_style = defaults
         for page in self.project.pages:
             key = page_key(page)
-            page_style = self.page_styles.setdefault(key, {})
-            typography = page_style.setdefault("typography", {})
-            if not str(typography.get("font_family", "")).strip():
-                typography.update({
-                    **role_style,
-                    "font_family": family,
-                    "font_file": font_file,
-                })
-            TypographyManager.assign_font_role_defaults(
-                self.page_regions.get(key, []), alias, family, font_file, role_style,
-            )
+            if defaults is not None:
+                _alias, family, font_file, role_style = defaults
+                page_style = self.page_styles.setdefault(key, {})
+                typography = page_style.setdefault("typography", {})
+                if not str(typography.get("font_family", "")).strip():
+                    typography.update({
+                        **role_style,
+                        "font_family": family,
+                        "font_file": font_file,
+                    })
+            self._apply_dialogue_defaults(self.page_regions.get(key, []), key=key)
 
     def _font_type_selected(self, project_type: str) -> None:
         self.active_font_type = project_type
@@ -2187,6 +2364,7 @@ class MainWindow(QMainWindow):
             font_path = self.font_profiles.font_file(self.active_font_type, self.active_font_profile, file_name)
             for index in indices:
                 self.regions[index]["font_role"] = alias
+                self.regions[index]["balloon_font_from_kind"] = False
                 style = self.regions[index].setdefault("style", {})
                 style.update(dict(role_style or {}))
                 style["font_family"] = family
@@ -2209,6 +2387,10 @@ class MainWindow(QMainWindow):
             updated = TypographyManager.normalized(style)
             for key in EFFECT_STYLE_KEYS:
                 updated[key] = current[key]
+            if any(current.get(name) != updated.get(name) for name in (
+                "font_family", "font_file", "font_weight", "font_size", "italic",
+            )):
+                self.regions[index]["balloon_font_from_kind"] = False
             self.regions[index]["style"] = updated
             self.regions[index]["typeset_completed"] = bool(self.regions[index].get("applied_text"))
             if selected_preset in self.style_presets:
@@ -2482,7 +2664,9 @@ class MainWindow(QMainWindow):
             return
         if self._update_check_task is not None or self._update_download_task is not None:
             return
-        task = ModelTask(lambda _progress, _cancelled: ReleaseUpdater().check(APP_VERSION))
+        task = ModelTask(
+            lambda _progress, _cancelled: check_available_update(APP_VERSION, APP_UPDATE_CHANNEL)
+        )
         self._update_check_task = task
         task.signals.completed.connect(lambda info: self._update_check_finished(info, manual))
         task.signals.failed.connect(lambda message: self._update_check_failed(message, manual))
@@ -2505,7 +2689,11 @@ class MainWindow(QMainWindow):
         dialog.setWindowTitle("Actualización disponible")
         dialog.setTextFormat(Qt.PlainText)
         dialog.setText(f"KuroPanel Studio {info.version} está disponible.\nVersión actual: {APP_VERSION}.")
-        dialog.setInformativeText("Se descargará y verificará el instalador antes de cerrar la aplicación.")
+        dialog.setInformativeText(
+            "El instalador local ya está verificado. Se abrirá al cerrar la aplicación."
+            if info.local_path else
+            "Se descargará y verificará el instalador antes de cerrar la aplicación."
+        )
         install_button = dialog.addButton("Actualizar ahora", QMessageBox.AcceptRole)
         dialog.addButton("Más tarde", QMessageBox.RejectRole)
         self.ui_translator.refresh(dialog)
@@ -2515,7 +2703,9 @@ class MainWindow(QMainWindow):
         if self.current_task is not None:
             self._toast("Proceso en curso", "Espera a que termine antes de actualizar.")
             return
-        if self._staged_update is not None and self._staged_update[0] == info:
+        if info.local_path is not None:
+            self._install_update(info.local_path)
+        elif self._staged_update is not None and self._staged_update[0] == info:
             self._install_update(self._staged_update[1])
         else:
             self._download_update(info)
@@ -2980,6 +3170,7 @@ class MainWindow(QMainWindow):
                 self.images_panel.list.blockSignals(False)
                 self._set_page(index)
                 self.canvas_shell.canvas.restore_view_state(view_state)
+                self._sync_script_panel()
         finally:
             self._restoring_state = False
         self._update_history_actions()
@@ -3169,6 +3360,8 @@ class MainWindow(QMainWindow):
         self.inspector.update_page(index, len(self.project.pages))
         if same_page:
             self.status.set_page(page.name, page.width, page.height, page.size_label)
+        if self.tool_panel.currentWidget() is self.script_panel:
+            self._sync_script_panel()
         if not self._restoring_state:
             self.history.replace_current(self._snapshot())
             self._update_history_actions()
@@ -3283,6 +3476,7 @@ class MainWindow(QMainWindow):
                 ):
                     return
                 self.regions = self.page_regions.get(key, [])
+                self._apply_dialogue_defaults(self.regions, key=key)
                 self._render_page_layers(key, page_changed=not preserve_view)
                 if final_view_state is not None:
                     self.canvas_shell.canvas.restore_view_state(final_view_state)
@@ -3780,7 +3974,7 @@ class MainWindow(QMainWindow):
             else:
                 recognized = {region.get("id"): region for region in recognized_regions}
                 merged = [recognized.get(region.get("id"), region) for region in self.page_regions.get(key, [])]
-            self._apply_dialogue_defaults(merged)
+            self._apply_dialogue_defaults(merged, key=key)
             self._enable_adaptive_typesetting(merged)
             for region in merged:
                 self._promote_ocr_overlay(region)
@@ -4111,19 +4305,9 @@ class MainWindow(QMainWindow):
             for region in regions
         ]
         if previous_order == new_order:
-            # Dragging is a cheap translation of the current item. After the
-            # gesture, a manually positioned balloon box becomes the actual
-            # typesetting boundary and needs one final composition.
-            moved_manual_balloon = (
-                self.canvas_shell.canvas._last_region_change_kind == "move"
-                and any(
-                    str(region.get("id", "")) in selected_ids
-                    and bool(region.get("typeset_box_manual", False))
-                    and bool(region.get("style", {}).get("balloon_fit", False))
-                    for region in regions
-                )
-            )
-            if self.canvas_shell.canvas._last_region_change_kind != "move" or moved_manual_balloon:
+            # A move carries the already composed lines with the box. Only
+            # resizing or changing content requests a new composition.
+            if self.canvas_shell.canvas._last_region_change_kind != "move":
                 changed = [
                     index for index, region in enumerate(regions)
                     if str(region.get("id", "")) in selected_ids
@@ -4150,6 +4334,8 @@ class MainWindow(QMainWindow):
         if self.tool_panel.currentWidget() is self.sfx_panel and selected_id:
             selected_index = next((i for i, region in enumerate(regions) if str(region.get("id", "")) == selected_id), -1)
             self.canvas_shell.canvas.show_sfx_nodes(selected_index)
+        if new_regions and self.tool_panel.currentWidget() is self.script_panel:
+            self._sync_script_panel()
         self._record_history()
 
     @staticmethod

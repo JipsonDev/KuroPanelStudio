@@ -44,6 +44,8 @@ ES_TO_EN = {
     "Actualización disponible": "Update available",
     "Se descargará y verificará el instalador antes de cerrar la aplicación.":
         "The installer will be downloaded and verified before the application closes.",
+    "El instalador local ya está verificado. Se abrirá al cerrar la aplicación.":
+        "The local installer has been verified. It will open when the application closes.",
     "Actualizar ahora": "Update now", "Más tarde": "Later",
     "Proceso en curso": "Task in progress",
     "Espera a que termine antes de actualizar.": "Wait for it to finish before updating.",
@@ -210,6 +212,12 @@ ES_TO_EN = {
     "Palabra completa": "Whole word", "Todo el proyecto": "Entire project",
     "DIÁLOGOS DE LA PÁGINA": "PAGE DIALOGUE", "Filtrar diálogos...": "Filter dialogue...",
     "Diálogo": "Dialogue", "Guión y Traducción": "Script and Translation",
+    "Traducciones para cajas nuevas": "Translations for new boxes",
+    "Pega una entrada por línea o separa párrafos con una línea vacía. Se omiten los números.":
+        "Paste one entry per line or separate paragraphs with a blank line. Numbers are omitted.",
+    "1. Primera traducción\n2. Segunda traducción": "1. First translation\n2. Second translation",
+    "Preparar cola": "Prepare queue", "Vaciar": "Clear",
+    "0 traducciones pendientes": "0 pending translations",
     "REEMPLAZAR POR": "REPLACE WITH", "ÁMBITO": "SCOPE",
     "¡Guión copiado al portapapeles!": "Script copied to clipboard!",
     "Arrastra para mover · Ctrl + clic o Supr para borrar":
@@ -328,6 +336,24 @@ ES_TO_EN = {
     "Centra el texto dentro del área detectada y adapta cada línea al ancho seguro del globo.":
         "Center text in the detected interior and fit each line to the balloon's safe width.",
     "FORMA DE ADAPTACIÓN": "SHAPE MODE",
+    "TIPO DE GLOBO": "BALLOON TYPE",
+    "Tipo de globo": "Balloon type",
+    "Automático": "Automatic",
+    "Diálogo": "Dialogue", "Grito": "Shout", "Cuadro": "Caption",
+    "Eliminar cuadro de texto (Supr / Delete)": "Delete text box (Del / Delete)",
+    "Diálogo · ovalado": "Dialogue · oval",
+    "Grito · puntiagudo": "Shout · pointed",
+    "Cuadro · rectangular": "Caption · rectangular",
+    "Elige el tipo de esta caja. Automático analiza el contorno; una elección manual tiene prioridad.":
+        "Choose this box's type. Automatic analyzes the outline; a manual choice takes priority.",
+    "Usa la fuente asignada a ese tipo en el proyecto.":
+        "Uses the font assigned to this type in the project.",
+    "Detectado: Diálogo · puedes corregirlo aquí.":
+        "Detected: Dialogue · you can correct it here.",
+    "Detectado: Grito · puedes corregirlo aquí.":
+        "Detected: Shout · you can correct it here.",
+    "Detectado: Cuadro · puedes corregirlo aquí.":
+        "Detected: Caption · you can correct it here.",
     "Automático (según el globo)": "Automatic (by balloon)",
     "Ovalado / Elipse (Diálogo)": "Oval / Ellipse (Dialogue)",
     "Diamante / Puntiagudo (Gritos)": "Diamond / Pointed (Shouts)",
@@ -341,6 +367,7 @@ ES_TO_EN = {
     "Izquierda": "Left", "Centro": "Center", "Derecha": "Right",
     "Arriba": "Top", "Abajo": "Bottom",
     "Separación silábica en español": "Spanish hyphenation",
+    "Separar palabras largas con guion": "Hyphenate long words",
     "Evitar palabras huérfanas": "Avoid orphan words",
     "Puntuación colgante": "Hanging punctuation",
     "Comprimir antes de reducir la fuente": "Condense before shrinking font",
@@ -784,6 +811,7 @@ ES_TO_EN.update({
 
 
 PATTERNS = (
+    (r"^(\d+) traducciones pendientes$", r"\1 pending translations"),
     (r"^Editando capa (\d+) · los cambios se ven en tiempo real$",
      r"Editing layer \1 · changes appear live"),
     (r"^Fuente manual  ·  (.+)$", r"Manual font  ·  \1"),

@@ -6,6 +6,7 @@ import tempfile
 import unittest
 from io import BytesIO
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import numpy as np
@@ -13,7 +14,7 @@ from PIL import Image
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PySide6.QtCore import QPointF, Qt
+from PySide6.QtCore import QPoint, QPointF, Qt, QTimer
 from PySide6.QtGui import QColor, QFont, QImage, QPainter, QPainterPath, QPen
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import (
@@ -741,6 +742,40 @@ class UIWorkflowTests(unittest.TestCase):
             self.assertLessEqual(right, region["balloon_layout_snapshot"]["layout_rect"][2] - 10)
         canvas.close()
 
+    def test_balloon_text_reflows_during_corner_drag_before_release(self) -> None:
+        canvas = CanvasView()
+        canvas.resize(700, 500)
+        image = QImage(600, 400, QImage.Format_RGB888)
+        image.fill(255)
+        canvas.set_image(image)
+        region = {
+            "id": "live-balloon", "x": 80, "y": 90, "width": 320, "height": 170,
+            "applied_text": "El texto debe cambiar sus saltos al reducir la caja en tiempo real.",
+            "style": {"font_family": "Arial", "font_size": 36, "auto_fit": True, "balloon_fit": True},
+        }
+        canvas.set_regions([region])
+        canvas.add_text([region["applied_text"]], [region])
+        canvas.show()
+        self.app.processEvents()
+        original_item = canvas._text_items[0]
+        original_width = original_item.textWidth()
+        start = canvas.mapFromScene(QPointF(400, 260))
+        narrower = canvas.mapFromScene(QPointF(285, 260))
+
+        QTest.mousePress(canvas.viewport(), Qt.LeftButton, pos=start)
+        with patch("ui.canvas_view.text_layout_geometry") as balloon_detector:
+            QTest.mouseMove(canvas.viewport(), narrower, delay=10)
+            balloon_detector.assert_not_called()
+        self.assertIs(canvas._text_items[0], original_item)
+        self.assertLess(original_item.textWidth(), original_width)
+        preview_width = canvas._regions[0].region["width"]
+        self.assertEqual(original_item.data(0), (preview_width, 170))
+
+        QTest.mouseRelease(canvas.viewport(), Qt.LeftButton, pos=narrower)
+        self.app.processEvents()
+        self.assertEqual(canvas._regions[0].region["width"], preview_width)
+        canvas.close()
+
     def test_dragged_balloon_box_controls_the_final_text_layout(self) -> None:
         canvas = CanvasView()
         canvas.resize(560, 420)
@@ -803,6 +838,56 @@ class UIWorkflowTests(unittest.TestCase):
         ))
         self.assertLessEqual(canvas._text_items[0].sceneBoundingRect().right(),
                              adjusted["x"] + adjusted["width"] + 1)
+        canvas.close()
+
+    def test_click_and_small_move_preserve_balloon_composition(self) -> None:
+        from core.text_layout import valid_balloon_snapshot
+
+        canvas = CanvasView()
+        canvas.resize(560, 420)
+        image = QImage(440, 320, QImage.Format_RGB888)
+        image.fill(QColor("#303640"))
+        painter = QPainter(image)
+        painter.setBrush(QColor("white"))
+        painter.setPen(QPen(QColor("black"), 4))
+        painter.drawEllipse(50, 35, 340, 250)
+        painter.end()
+        canvas.set_image(image)
+        text = "UNA FRASE QUE YA TIENE UNA COMPOSICIÓN ELEGIDA"
+        region = {
+            "id": "keep-layout", "x": 120, "y": 90, "width": 190, "height": 130,
+            "applied_text": text, "typeset_box_manual": True,
+            "style": {"font_family": "Arial", "font_size": 32,
+                      "auto_fit": True, "balloon_fit": True},
+        }
+        canvas.set_regions([region])
+        canvas.add_text([text], [region])
+        before = copy.deepcopy(region["balloon_layout_snapshot"])
+        calls = []
+        canvas.regions_changed.connect(lambda regions: calls.append(regions))
+        canvas.show()
+        self.app.processEvents()
+        centre = canvas.mapFromScene(QPointF(215, 155))
+        QTest.mouseClick(canvas.viewport(), Qt.LeftButton, pos=centre)
+        self.assertEqual(calls, [])
+        self.assertEqual(region["balloon_layout_snapshot"], before)
+
+        end = centre + canvas.mapFromScene(QPointF(9, 6)) - canvas.mapFromScene(QPointF(0, 0))
+        QTest.mousePress(canvas.viewport(), Qt.LeftButton, pos=centre)
+        QTest.mouseMove(canvas.viewport(), end, delay=10)
+        QTest.mouseRelease(canvas.viewport(), Qt.LeftButton, pos=end)
+        self.app.processEvents()
+        self.assertEqual(len(calls), 1)
+        self.assertTrue(region["typeset_box_manual"])
+        moved = region["balloon_layout_snapshot"]
+        self.assertEqual(moved["lines"], before["lines"])
+        self.assertEqual(moved["font_size"], before["font_size"])
+        self.assertIsNotNone(valid_balloon_snapshot(region, text, region["style"]))
+        with patch("ui.canvas_view.text_layout_geometry") as detect:
+            canvas.add_text([text], [region])
+            detect.assert_not_called()
+        self.assertEqual(canvas._text_items[0].toPlainText(), before["text"])
+        self.assertEqual(canvas._text_items[0].font().pointSize(), before["font_size"])
         canvas.close()
 
     def test_live_inline_edit_refits_text_and_reports_overflow(self) -> None:
@@ -2061,6 +2146,221 @@ class UIWorkflowTests(unittest.TestCase):
         panel.select_region("r2")
         self.assertTrue(panel._cards["r2"].property("active"))
         self.assertFalse(panel._cards["r1"].property("active"))
+
+    def test_balloon_category_uses_project_font_and_manual_choice_wins(self) -> None:
+        from ui.text_panel import TextOptionsPanel
+
+        with tempfile.TemporaryDirectory() as temp:
+            manager = FontProfileManager(Path(temp))
+            manager.create_type("Manhua")
+            manager.create_project("Manhua", "Capítulo")
+            manager.set_font("Manhua", "Capítulo", "Diálogo", "Arial")
+            manager.set_font("Manhua", "Capítulo", "Gritos", "Impact")
+            manager.set_font("Manhua", "Capítulo", "Narrador", "Georgia")
+            canvas = CanvasView()
+            image = QImage(440, 320, QImage.Format_RGB888)
+            image.fill(QColor("#303640"))
+            painter = QPainter(image)
+            painter.setBrush(QColor("white"))
+            painter.setPen(QPen(QColor("black"), 4))
+            painter.drawRect(70, 50, 300, 220)
+            painter.end()
+            canvas.set_image(image)
+            page = SimpleNamespace(path=Path(temp) / "page.png")
+
+            class WindowStub:
+                _kind_font_defaults = MainWindow._kind_font_defaults
+                _set_kind_font = MainWindow._set_kind_font
+                _apply_dialogue_defaults = MainWindow._apply_dialogue_defaults
+                _selected_layer_indices = lambda self: [0]
+                _store_active_regions = lambda self, _regions: None
+                _schedule_text_render = lambda self, **_kwargs: None
+                _layer_selected = lambda self, _index: None
+                _record_history = lambda self: None
+                _restoring_state = False
+
+                @staticmethod
+                def _active_key():
+                    return "page"
+
+            window = WindowStub()
+            window.font_profiles = manager
+            window.active_font_type = "Manhua"
+            window.active_font_profile = "Capítulo"
+            window.project = SimpleNamespace(pages=[page], active_page=page)
+            window._displayed_page_path = None
+            window.canvas_shell = SimpleNamespace(canvas=canvas)
+            region = {"id": "box", "x": 165, "y": 120, "width": 110, "height": 80}
+            window.regions = [region]
+            window._apply_dialogue_defaults(window.regions)
+            self.assertEqual(region["balloon_kind"], "dialogue")
+            self.assertEqual(region["font_role"], "Diálogo")
+            window._displayed_page_path = page.path
+            window._apply_dialogue_defaults(window.regions)
+            self.assertEqual(region["balloon_kind"], "caption")
+            self.assertEqual(region["font_role"], "Narrador")
+            self.assertEqual(region["style"]["font_family"], "Georgia")
+
+            region["style"]["font_family"] = "Comic Sans MS"
+            region["balloon_font_from_kind"] = False
+            window._apply_dialogue_defaults(window.regions)
+            self.assertEqual(region["style"]["font_family"], "Comic Sans MS")
+
+            MainWindow._balloon_kind_selected(window, "shout")
+            self.assertEqual(region["balloon_kind"], "shout")
+            self.assertTrue(region["balloon_kind_manual"])
+            self.assertEqual(region["font_role"], "Gritos")
+            self.assertEqual(region["style"]["font_family"], "Impact")
+            window._apply_dialogue_defaults(window.regions)
+            self.assertEqual(region["balloon_kind"], "shout")
+
+            panel = TextOptionsPanel()
+            selected = []
+            panel.balloon_kind_selected.connect(selected.append)
+            panel.set_layer(0, region["style"])
+            panel.set_balloon_kind("shout", True)
+            self.assertEqual(panel.balloon_kind.currentData(), "shout")
+            self.assertEqual(selected, [])
+            panel.balloon_kind.setCurrentIndex(panel.balloon_kind.findData("dialogue"))
+            self.assertEqual(selected, ["dialogue"])
+            panel.btn_shout.click()
+            self.assertEqual(selected[-1], "shout")
+            panel.close()
+            canvas.close()
+
+    def test_right_click_box_offers_kind_and_hyphenation_for_that_box(self) -> None:
+        canvas = CanvasView()
+        image = QImage(320, 220, QImage.Format_RGB888)
+        image.fill(255)
+        canvas.set_image(image)
+        regions = [
+            {"id": "first", "x": 20, "y": 20, "width": 100, "height": 70},
+            {"id": "second", "x": 170, "y": 20, "width": 100, "height": 70},
+        ]
+        canvas.set_regions(regions)
+        kinds, hyphenation = [], []
+        canvas.region_kind_requested.connect(lambda rid, kind: kinds.append((rid, kind)))
+        canvas.region_hyphenation_requested.connect(
+            lambda rid, enabled: hyphenation.append((rid, enabled))
+        )
+        menus = []
+        event = SimpleNamespace(screenPos=lambda: QPoint(0, 0), accept=lambda: None)
+        def capture_menu() -> None:
+            popup = QApplication.activePopupWidget()
+            if popup is not None:
+                menus.append(popup)
+                popup.close()
+        QTimer.singleShot(0, capture_menu)
+        canvas._regions[1].contextMenuEvent(event)
+        menu = menus[0]
+        kind_menu = menu.actions()[0].menu()
+        labels = [action.text() for action in kind_menu.actions()]
+        self.assertEqual(labels, ["Automático", "Diálogo", "Grito", "Cuadro"])
+        self.assertTrue(kind_menu.actions()[0].isChecked())
+        kind_menu.actions()[2].trigger()
+        self.assertEqual(kinds, [("second", "shout")])
+        hyphen_action = next(
+            action for action in menu.actions() if action.text() == "Separar palabras largas con guion"
+        )
+        self.assertTrue(hyphen_action.isChecked())
+        hyphen_action.trigger()
+        self.assertEqual(hyphenation, [("second", False)])
+        canvas.close()
+
+    def test_script_queue_preserves_existing_boxes_and_advances_on_new_box(self) -> None:
+        class WindowStub:
+            page_styles = {"page": {"text_transfer": {"pending": [
+                {"text": "Primera", "target": "translation"},
+                {"text": "Segunda", "target": "translation"},
+            ]}}}
+            _pending_text_items = MainWindow._pending_text_items
+            _assign_transferred_text = staticmethod(MainWindow._assign_transferred_text)
+
+            @staticmethod
+            def _active_key():
+                return "page"
+
+        window = WindowStub()
+        existing = {
+            "id": "old", "x": 10, "y": 0, "width": 60, "height": 40,
+            "translation": "Conservar", "applied_text": "Conservar",
+        }
+        first = {"id": "new-1", "x": 10, "y": 10, "width": 60, "height": 40}
+        second = {"id": "new-2", "x": 10, "y": 60, "width": 60, "height": 40}
+
+        self.assertEqual(MainWindow._consume_pending_text(window, "page", [existing, first]), 1)
+        self.assertEqual(existing["translation"], "Conservar")
+        self.assertEqual(first["translation"], "Primera")
+        self.assertEqual(MainWindow._consume_pending_text(window, "page", [existing, second]), 1)
+        self.assertEqual(second["translation"], "Segunda")
+        self.assertEqual(window.page_styles["page"]["text_transfer"]["pending"], [])
+
+        numeric_dialogue = {}
+        MainWindow._assign_transferred_text(numeric_dialogue, {"text": "2 kilos", "target": "translation"})
+        self.assertEqual(numeric_dialogue["translation"], "2 kilos")
+
+    def test_script_panel_submits_pasted_translations(self) -> None:
+        from ui.script_panel import ScriptPanel
+
+        panel = ScriptPanel()
+        submitted = []
+        panel.translations_queued.connect(submitted.append)
+        panel.queue_input.setPlainText("1. Hola\n2. Adiós")
+        panel.btn_queue.click()
+        self.assertEqual(submitted, ["1. Hola\n2. Adiós"])
+        panel.set_pending_translations([{"text": "Hola"}, {"text": "Adiós"}])
+        self.assertEqual(panel.queue_status.text(), "2 traducciones pendientes")
+        self.assertEqual(panel.queue_list.count(), 2)
+        self.assertEqual(panel.queue_list.item(0).text(), "1. Hola")
+        panel.close()
+
+    def test_undo_restores_consumed_script_queue_in_panel(self) -> None:
+        from core.history_manager import HistoryManager
+        from ui.script_panel import ScriptPanel
+
+        class LayersStub:
+            @staticmethod
+            def current_index():
+                return -1
+
+        class WindowStub:
+            _pending_text_items = MainWindow._pending_text_items
+            _assign_transferred_text = staticmethod(MainWindow._assign_transferred_text)
+            layers = LayersStub()
+            current_page = 0
+
+            @staticmethod
+            def _active_key():
+                return "page"
+
+        window = WindowStub()
+        window.script_panel = ScriptPanel()
+        window.regions = []
+        window.page_styles = {"page": {"text_transfer": {
+            "source": "1. Primero\n2. Segundo",
+            "pending": [
+                {"text": "Primero", "target": "translation"},
+                {"text": "Segundo", "target": "translation"},
+            ],
+        }}}
+        history = HistoryManager()
+        history.reset({"page_regions": {"page": []}, "page_styles": window.page_styles})
+        new_region = {"id": "first", "x": 0, "y": 0, "width": 100, "height": 50}
+        self.assertEqual(MainWindow._consume_pending_text(window, "page", [new_region]), 1)
+        window.regions = [new_region]
+        history.record({"page_regions": {"page": window.regions}, "page_styles": window.page_styles})
+        MainWindow._sync_script_panel(window)
+        self.assertEqual(window.script_panel.queue_list.count(), 1)
+        self.assertEqual(window.script_panel.queue_list.item(0).text(), "1. Segundo")
+
+        restored = history.undo()
+        window.regions = restored["page_regions"]["page"]
+        window.page_styles = restored["page_styles"]
+        MainWindow._sync_script_panel(window)
+        self.assertEqual(window.script_panel.queue_input.toPlainText(), "1. Primero\n2. Segundo")
+        self.assertEqual(window.script_panel.queue_list.count(), 2)
+        self.assertEqual(window.script_panel.queue_list.item(0).text(), "1. Primero")
+        window.script_panel.close()
 
     def test_canvas_clone_and_heal_modes(self) -> None:
         canvas = CanvasView()

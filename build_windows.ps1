@@ -1,6 +1,7 @@
 param(
     [ValidatePattern('^\d+\.\d+\.\d+$')]
-    [string]$Version = "0.2.3"
+    [string]$Version = "0.2.9",
+    [switch]$LocalOnly
 )
 
 $ErrorActionPreference = "Stop"
@@ -18,7 +19,8 @@ $versionInfoPath = Join-Path $projectRoot "assets\windows_version_info.txt"
 $previousVersion = [IO.File]::ReadAllBytes($versionPath)
 $previousVersionInfo = [IO.File]::ReadAllBytes($versionInfoPath)
 $parts = $Version.Split('.')
-$json = "{`n  `"version`": `"$Version`"`n}`n"
+$channel = if ($LocalOnly) { "local" } else { "github" }
+$json = "{`n  `"version`": `"$Version`",`n  `"update_channel`": `"$channel`"`n}`n"
 [IO.File]::WriteAllText($versionPath, $json, [Text.UTF8Encoding]::new($false))
 $versionInfo = [IO.File]::ReadAllText($versionInfoPath)
 $versionInfo = [regex]::Replace($versionInfo, 'filevers=\(\d+,\s*\d+,\s*\d+,\s*\d+\)', "filevers=($($parts[0]), $($parts[1]), $($parts[2]), 0)")
@@ -38,6 +40,11 @@ try {
     # so users can only launch the completed application.
     $temporaryBuild = Join-Path $projectRoot "build"
     if (Test-Path -LiteralPath $temporaryBuild) {
+        $resolvedBuild = (Resolve-Path -LiteralPath $temporaryBuild).Path
+        $resolvedRoot = (Resolve-Path -LiteralPath $projectRoot).Path.TrimEnd([IO.Path]::DirectorySeparatorChar)
+        if (-not $resolvedBuild.StartsWith($resolvedRoot + [IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase)) {
+            throw "La carpeta temporal esta fuera del proyecto: $resolvedBuild"
+        }
         Remove-Item -LiteralPath $temporaryBuild -Recurse -Force
     }
     Write-Host "Ejecutable listo en dist\KuroPanelStudio\KuroPanelStudio.exe"

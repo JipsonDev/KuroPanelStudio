@@ -7,6 +7,8 @@ from collections.abc import Iterable
 
 _NUMBERED_LINE = re.compile(r"^\s*(?:#\s*)?(\d{1,5})\s*[.\-:)]\s*(.*)$")
 _HASH_LINE = re.compile(r"^\s*#\s*(\d{1,5})\s+(.*)$")
+_BRACKET_LINE = re.compile(r"^\s*\[\s*(\d{1,5})\s*\]\s*(.*)$")
+_STANDALONE_NUMBER = re.compile(r"^\s*(?:#\s*|\[\s*)?(\d{1,5})\s*\]?\s*$")
 _PAGE_HEADER = re.compile(r"^\s*={2,}\s*(.*?)\s*={2,}\s*$")
 _ANY_NUMBER_PREFIX = re.compile(
     r"^\s*(?:(?:#\s*|\[\s*)\d{1,5}\s*\]?|\d{1,5})"
@@ -39,25 +41,37 @@ def format_numbered_entries(entries: Iterable[tuple[int, object]]) -> str:
 
 
 def parse_numbered_entries(value: str) -> list[str]:
-    """Accept ``1. text``, ``#01 text`` or one unnumbered box per line."""
+    """Read numbered boxes or blank-separated paragraphs in paste order."""
     lines = str(value or "").replace("\r\n", "\n").replace("\r", "\n").split("\n")
-    has_numbers = any(_NUMBERED_LINE.match(line) or _HASH_LINE.match(line) for line in lines)
+    has_numbers = any(
+        _NUMBERED_LINE.match(line) or _HASH_LINE.match(line) or _BRACKET_LINE.match(line)
+        or _STANDALONE_NUMBER.match(line)
+        for line in lines
+    )
     if not has_numbers:
+        if any(not line.strip() for line in lines[1:-1]):
+            blocks = re.split(r"\n\s*\n+", "\n".join(lines).strip())
+            return [block.strip() for block in blocks if block.strip()]
         return [strip_numeric_prefix(line) for line in lines if strip_numeric_prefix(line)]
 
     entries: list[str] = []
     current: list[str] = []
     for line in lines:
-        numbered = _NUMBERED_LINE.match(line) or _HASH_LINE.match(line)
+        numbered = (
+            _NUMBERED_LINE.match(line) or _HASH_LINE.match(line)
+            or _BRACKET_LINE.match(line) or _STANDALONE_NUMBER.match(line)
+        )
         if numbered:
             if current:
                 entries.append("\n".join(current).strip())
-            current = [strip_numeric_prefix(line)]
+            current = [strip_numeric_prefix(line)] if not _STANDALONE_NUMBER.match(line) else []
         elif line.strip() and current:
             current.append(line.strip())
+        elif line.strip() and has_numbers:
+            current = [line.strip()]
     if current:
         entries.append("\n".join(current).strip())
-    return [strip_numeric_prefix(entry) for entry in entries if strip_numeric_prefix(entry)]
+    return [entry for entry in entries if entry]
 
 
 def format_chapter_sections(sections: Iterable[tuple[str, str]]) -> str:

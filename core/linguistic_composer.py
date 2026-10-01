@@ -59,6 +59,14 @@ def spanish_hyphen_points(word: str) -> tuple[int, ...]:
     return tuple(points)
 
 
+def _emergency_hyphen_points(word: str) -> range:
+    """Fallback for long unrecognized words that cannot fit any legal split."""
+    clean = str(word)
+    if len(clean) < 9 or not clean.isalpha():
+        return range(0)
+    return range(3, len(clean) - 2)
+
+
 def _visible_width(text: str, measure: Callable[[str], float], hanging: bool) -> float:
     width = float(measure(text))
     if hanging and text and text[-1] in HANGING_PUNCTUATION:
@@ -148,7 +156,7 @@ def _word_wrap(
                 result = (cost, (candidate, *tail[1]))
                 if best is None or result[0] < best[0]:
                     best = result
-        if hyphenate and language == "es":
+        if best is None and hyphenate and language == "es":
             prefix_words = []
             for word_index, word in enumerate(words):
                 base = " ".join(prefix_words)
@@ -164,6 +172,26 @@ def _word_wrap(
                         continue
                     empty = (widths[line] - used) / max(1.0, widths[line])
                     result = (tail[0] + empty * empty + 0.08, (candidate, *tail[1]))
+                    if best is None or result[0] < best[0]:
+                        best = result
+                prefix_words.append(word)
+        if best is None and hyphenate and language == "es":
+            prefix_words = []
+            for word_index, word in enumerate(words):
+                base = " ".join(prefix_words)
+                for point in reversed(_emergency_hyphen_points(word)):
+                    if unicodedata.category(word[point]).startswith("M"):
+                        continue
+                    candidate = f"{base} {word[:point]}-".strip()
+                    used = _visible_width(candidate, measure, hanging)
+                    if used > widths[line]:
+                        continue
+                    remainder = (word[point:], *words[word_index + 1:])
+                    tail = solve(tuple(remainder), line + 1)
+                    if tail is None:
+                        continue
+                    empty = (widths[line] - used) / max(1.0, widths[line])
+                    result = (tail[0] + empty * empty + 0.5, (candidate, *tail[1]))
                     if best is None or result[0] < best[0]:
                         best = result
                 prefix_words.append(word)

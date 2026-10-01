@@ -259,6 +259,37 @@ class ProfessionalTypesettingTests(unittest.TestCase):
         self.assertTrue(all("SEGUNDO" not in line for line in lines[:first_end + 1]))
         self.assertTrue(any("SEGUNDO" in line for line in lines[first_end + 1:]))
 
+    def test_long_unrecognized_word_gets_display_hyphen_without_changing_source(self) -> None:
+        source = "zzzzzzzzzzzzzz"
+        lines = linguistic_wrap(
+            source, [72, 72], lambda value: len(value) * 8,
+            language="es", hyphenate=True,
+        )
+        self.assertIsNotNone(lines)
+        self.assertEqual(len(lines), 2)
+        self.assertTrue(lines[0].endswith("-"))
+        self.assertEqual("".join(lines).replace("-", ""), source)
+        self.assertTrue(all(len(line) * 8 <= 72 for line in lines))
+        self.assertIsNone(linguistic_wrap(
+            source, [72, 72], lambda value: len(value) * 8,
+            language="es", hyphenate=False,
+        ))
+
+    def test_authored_hyphen_and_newline_remain_unchanged(self) -> None:
+        source = "asjkdjkas-\najsdlakjskld"
+        lines = linguistic_wrap(
+            source, [96, 120], lambda value: len(value) * 8,
+            language="es", hyphenate=True,
+        )
+        self.assertEqual(lines, source.splitlines())
+
+    def test_hyphenation_does_not_split_words_that_already_fit(self) -> None:
+        lines = linguistic_wrap(
+            "HOLA MUNDO", [80, 80], lambda value: len(value) * 8,
+            language="es", hyphenate=True,
+        )
+        self.assertEqual(lines, ["HOLA", "MUNDO"])
+
     def test_japanese_kinsoku_and_korean_nonstarters(self) -> None:
         japanese = linguistic_wrap(
             "これは「重要」です。次です！", [50] * 5,

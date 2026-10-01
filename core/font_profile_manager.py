@@ -158,12 +158,23 @@ class FontProfileManager:
 
     def dialogue_font(self, project_type: str, project: str) -> tuple[str, dict] | None:
         """Return the project's dialogue role independent of accents/case."""
+        return self.balloon_kind_font(project_type, project, "dialogue")
+
+    def balloon_kind_font(
+        self, project_type: str, project: str, kind: str,
+    ) -> tuple[str, dict] | None:
+        """Find the configured font role for a detected balloon category."""
+        names = {
+            "dialogue": {"dialogo", "dialogue"},
+            "shout": {"grito", "gritos", "shout", "shouts"},
+            "caption": {"cuadro", "cuadros", "narracion", "narrador", "caption", "narration", "narrator"},
+        }.get(kind, set())
         for alias, entry in self.font_entries(project_type, project).items():
             normalized = "".join(
                 character for character in unicodedata.normalize("NFKD", alias)
                 if not unicodedata.combining(character)
             ).strip().casefold()
-            if normalized in {"dialogo", "dialogue"}:
+            if normalized in names:
                 return alias, entry
         return None
 

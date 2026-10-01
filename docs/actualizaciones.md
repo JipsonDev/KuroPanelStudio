@@ -6,7 +6,8 @@ las credenciales, la recuperación y las descargas de actualización quedan en
 `%LOCALAPPDATA%\ManhuaSuiteEditor`. Reinstalar o actualizar la app no borra
 esos datos ni los proyectos guardados fuera de la instalación.
 
-La app instalada consulta `releases/latest` de GitHub al iniciar, salvo que se
+La app instalada comprueba primero si hay un instalador local verificado y después
+consulta `releases/latest` de GitHub al iniciar, salvo que se
 desactive **Configuración → Interfaz → Buscar actualizaciones automáticamente**.
 El menú superior ofrece **Buscar actualizaciones…** en cualquier momento. Una
 actualización se ofrece antes de descargarla; la descarga muestra progreso y
@@ -22,8 +23,8 @@ fuente no instala actualizaciones.
 2. Crea y sube una etiqueta semántica nueva, por ejemplo:
 
    ```powershell
-   git tag v0.2.3
-   git push origin v0.2.3
+   git tag v0.2.9
+   git push origin v0.2.9
    ```
 
 3. El flujo `.github/workflows/windows-release.yml` ejecuta las pruebas en
@@ -40,11 +41,16 @@ Para compilar localmente, instala las dependencias de `requirements-release.txt`
 y PyInstaller en `.venv`, instala Inno Setup 6 y ejecuta:
 
 ```powershell
-.\build_windows.ps1 -Version 0.2.3
-.\build_installer.ps1 -Version 0.2.3
+.\build_windows.ps1 -Version 0.2.9
+.\build_installer.ps1 -Version 0.2.9
 ```
 
 `build_windows.ps1` incorpora la versión a la app y restaura los archivos
 fuente de versión al terminar. La edición GPU local sigue disponible con
 `.venv-gpu`; el flujo automático distribuye la edición ONNX para CPU, sin
 las dependencias voluminosas de PyTorch. CUDA requiere un paquete aparte.
+
+Para una actualización solo en este equipo, ejecuta ambos comandos con
+`-LocalOnly`. El instalador se guarda en `local-builds/` y se registra con
+tamaño y SHA-256 en `%LOCALAPPDATA%\ManhuaSuiteEditor\Updates\local-release.json`.
+El botón **Buscar actualizaciones** puede instalarlo sin una GitHub Release.

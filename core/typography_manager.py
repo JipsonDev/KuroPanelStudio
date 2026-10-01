@@ -18,7 +18,7 @@ DEFAULT_STYLE = {
     "balloon_shape": "auto",
     "balloon_padding": 10,
     "language": "auto",
-    "hyphenation": False,
+    "hyphenation": True,
     "orphan_control": True,
     "hanging_punctuation": True,
     "auto_scale": True,

@@ -1,15 +1,17 @@
 # KuroPanel Studio @VERSION@
 
-Esta versión corrige el ajuste del texto al mover o redimensionar su caja.
+## Tipeo y globos
 
-## Cambios
+- Cada caja puede marcarse como **Diálogo**, **Grito** o **Cuadro** desde Texto o con clic derecho. El modo automático distingue contornos ovalados, puntiagudos y rectangulares cuando hay evidencia suficiente; una elección manual tiene prioridad.
+- Cada tipo usa la fuente de su rol en el proyecto (Diálogo, Gritos o Narrador/Cuadro), respetando fuentes elegidas manualmente.
+- Las palabras largas pueden dividirse con un guion visual cuando no caben. El texto fuente y los saltos escritos manualmente permanecen intactos. La opción se puede cambiar por caja desde el menú contextual.
+- Al tocar o mover una caja, se conserva su composición, tamaño y posición relativa. Redimensionar muestra el ajuste en tiempo real. Las cajas tienen borde morado y tiradores más visibles.
 
-- Al mover o redimensionar manualmente una caja, sus bordes pasan a limitar el texto. El contenido se recompone al soltarla, en lugar de volver a ocupar el globo completo.
-- El lienzo y la exportación respetan la posición y el tamaño de la caja ajustada.
-- Las cajas OCR sin ajustes manuales siguen aprovechando el contorno completo del globo.
+## Guión y actualizaciones
 
-La suite local pasó **411 pruebas y 8 subpruebas** (5 pruebas omitidas).
+- En Guión, una lista visible muestra las traducciones pendientes. Cada caja nueva recibe la siguiente entrada y **Ctrl+Z** devuelve esa entrada a la cola.
+- Las compilaciones locales pueden registrarse para **Buscar actualizaciones** sin publicarlas; esta versión de GitHub mantiene el canal de GitHub Releases.
 
-El [historial de cambios](https://github.com/JipsonDev/KuroPanelStudio/blob/main/CHANGELOG.md) contiene las versiones anteriores.
+La suite local pasó **426 pruebas y 11 subpruebas** (5 pruebas omitidas).
 
-Descarga `KuroPanelStudio-Setup-@VERSION@-Windows-x64.exe` y verifica su SHA-256 con `SHA256SUMS.txt`. La aplicación instalada también puede ofrecer esta versión desde **Buscar actualizaciones**.
+Descarga `KuroPanelStudio-Setup-@VERSION@-Windows-x64.exe` y verifica su SHA-256 con `SHA256SUMS.txt`. La aplicación instalada puede ofrecer esta versión desde **Buscar actualizaciones**.

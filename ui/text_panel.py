@@ -22,6 +22,7 @@ class TextOptionsPanel(QScrollArea):
     project_type_selected = Signal(str)
     profile_selected = Signal(str, str)
     font_role_selected = Signal(str, str, str, object)
+    balloon_kind_selected = Signal(str)
     fit_requested = Signal()
 
     def __init__(self, parent: QWidget | None = None) -> None:
@@ -56,6 +57,22 @@ class TextOptionsPanel(QScrollArea):
         quick_grid = QVBoxLayout(quick_card)
         quick_grid.setContentsMargins(11, 11, 11, 12)
         quick_grid.setSpacing(8)
+        kind_label = QLabel("TIPO DE GLOBO")
+        kind_label.setObjectName("Caption")
+        quick_grid.addWidget(kind_label)
+        self.balloon_kind = QComboBox()
+        self.balloon_kind.addItem("Automático", "auto")
+        self.balloon_kind.addItem("Diálogo · ovalado", "dialogue")
+        self.balloon_kind.addItem("Grito · puntiagudo", "shout")
+        self.balloon_kind.addItem("Cuadro · rectangular", "caption")
+        self.balloon_kind.setProperty("kuro_i18n_choices", True)
+        self.balloon_kind.setToolTip("Elige el tipo de esta caja. Automático analiza el contorno; una elección manual tiene prioridad.")
+        self.balloon_kind.currentIndexChanged.connect(self._emit_balloon_kind)
+        quick_grid.addWidget(self.balloon_kind)
+        self.balloon_kind_hint = QLabel("Usa la fuente asignada a ese tipo en el proyecto.")
+        self.balloon_kind_hint.setObjectName("Muted")
+        self.balloon_kind_hint.setWordWrap(True)
+        quick_grid.addWidget(self.balloon_kind_hint)
         quick_header = QLabel("ESTILOS RÁPIDOS")
         quick_header.setObjectName("Caption")
         quick_grid.addWidget(quick_header)
@@ -225,7 +242,7 @@ class TextOptionsPanel(QScrollArea):
         self.language.addItem("Coreano", "ko")
         self.language.setProperty("kuro_i18n_choices", True)
         advanced_layout.addWidget(self.language)
-        self.hyphenation = QCheckBox("Separación silábica en español")
+        self.hyphenation = QCheckBox("Separar palabras largas con guion")
         self.orphan_control = QCheckBox("Evitar palabras huérfanas")
         self.hanging_punctuation = QCheckBox("Puntuación colgante")
         advanced_layout.addWidget(self.hyphenation)
@@ -321,6 +338,7 @@ class TextOptionsPanel(QScrollArea):
         self.family.lineEdit().editingFinished.connect(self._family_editing_finished)
         root.addStretch()
         self._edit_controls = [
+            self.balloon_kind,
             self.btn_dialogue, self.btn_shout, self.btn_thought, self.btn_whisper,
             self.btn_narrator, self.preset, self.preset_name, save_preset, self.font_role,
             self.fit_now,
@@ -381,6 +399,9 @@ class TextOptionsPanel(QScrollArea):
         merged = {**self.values(), **preset}
         self.set_layer(self._layer_index, merged, preset.get("name", "Personalizado"))
         self.style_changed.emit(self.values())
+        kind = {"dialogue": "dialogue", "shout": "shout", "narrator": "caption"}.get(preset_key)
+        if kind:
+            self.balloon_kind_selected.emit(kind)
 
     def _show_quick_preset(self, preset_name: str) -> None:
         for key, button in self._quick_buttons.items():
@@ -543,7 +564,22 @@ class TextOptionsPanel(QScrollArea):
         self._layer_index = -1
         self.layer_label.setText("Selecciona una capa de texto")
         self._show_quick_preset("")
+        self.set_balloon_kind("dialogue", False)
         self._set_editing_enabled(False)
+
+    def set_balloon_kind(self, kind: str, manual: bool) -> None:
+        self._loading = True
+        self._set_data(self.balloon_kind, kind if manual else "auto")
+        names = {"dialogue": "Diálogo", "shout": "Grito", "caption": "Cuadro"}
+        self.balloon_kind_hint.setText(
+            "Usa la fuente asignada a ese tipo en el proyecto."
+            if manual else f"Detectado: {names.get(kind, 'Diálogo')} · puedes corregirlo aquí."
+        )
+        self._loading = False
+
+    def _emit_balloon_kind(self, *_args) -> None:
+        if not self._loading and self._layer_index >= 0:
+            self.balloon_kind_selected.emit(str(self.balloon_kind.currentData() or "auto"))
 
     def set_font_role(self, alias: str) -> None:
         self._loading = True

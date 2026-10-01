@@ -8,13 +8,14 @@ from time import perf_counter
 import numpy as np
 
 from PySide6.QtCore import QPointF, QRect, QRectF, Qt, QTimer, Signal, Slot
-from PySide6.QtGui import (QBrush, QColor, QFont, QFontMetricsF, QImage, QLinearGradient,
+from PySide6.QtGui import (QActionGroup, QBrush, QColor, QFont, QFontMetricsF, QImage, QLinearGradient,
                            QPainter, QPainterPath, QPen, QPixmap, QTextBlockFormat,
                            QTextCharFormat, QTextCursor, QTextOption, QTransform)
 from PySide6.QtWidgets import (QApplication, QFrame, QGraphicsPixmapItem, QGraphicsRectItem, QGraphicsScene,
                                QGraphicsEllipseItem, QGraphicsItem, QGraphicsLineItem, QGraphicsPathItem,
                                QGraphicsSimpleTextItem, QGraphicsTextItem, QGraphicsView,
                                QGraphicsBlurEffect, QGraphicsDropShadowEffect,
+                               QMenu,
                                QStyle, QStyleOptionGraphicsItem,
                                QHBoxLayout, QLabel, QStackedLayout, QVBoxLayout, QWidget)
 
@@ -30,7 +31,10 @@ from core.sfx_transform import (
     MESH_NODES, bezier_baseline, build_warp, mesh_node_position,
     mesh_offset_for_position,
 )
-from core.text_layout import balloon_layout_signature, fit_rectangular_text, layout_signature
+from core.text_layout import (
+    balloon_layout_signature, fit_rectangular_text, layout_signature,
+    translate_balloon_snapshot, valid_balloon_snapshot,
+)
 from core.watermark_manager import prepare_watermark, watermark_positions, watermark_vertical_bounds, normalized_watermark
 from ui.widgets.controls import ModernButton
 from ui.widgets.icons import icon
@@ -255,17 +259,25 @@ class SFXNodeHandle(QGraphicsEllipseItem):
 class TextRegionItem(QGraphicsRectItem):
     """Transparent, draggable region with resize handles and Ctrl-click deletion."""
 
+    BORDER_COLOR = "#9B6DDB"
+    SELECTED_COLOR = "#B989FF"
+    HANDLE_COLOR = "#E9D8FF"
     HANDLE_SIZE = 14.0
     MINIMUM_SIZE = 12.0
     HANDLE_RADIUS = 5.5
 
-    def __init__(self, region: dict, on_changed, on_deleted, on_preview=None) -> None:
+    def __init__(self, region: dict, on_changed, on_deleted, on_preview=None,
+                 on_moved=None, on_kind_change=None, on_hyphenation_change=None) -> None:
         super().__init__(region["x"], region["y"], region["width"], region["height"])
         self.region = region
         self.locked = bool(region.get("locked", False))
         self._on_changed = on_changed
         self._on_deleted = on_deleted
         self._on_preview = on_preview
+        self._on_moved = on_moved
+        self._on_kind_change = on_kind_change
+        self._on_hyphenation_change = on_hyphenation_change
+        self._gesture_start_geometry: tuple[int, int, int, int] | None = None
         self._resize_edges: tuple[bool, bool, bool, bool] | None = None
         self._gesture_size: tuple[int, int] | None = None
         self._gesture_scaled = False
@@ -274,7 +286,7 @@ class TextRegionItem(QGraphicsRectItem):
         self._initial_text_scene_origin: QPointF | None = None
         self._initial_text_scale = 1.0
         self._hovered = False
-        self.setPen(QPen(QColor("#00CFE8"), 1.8))
+        self.setPen(QPen(QColor(self.BORDER_COLOR), 2.2))
         self.setBrush(Qt.NoBrush)
         self.setFlag(QGraphicsRectItem.ItemIsSelectable, True)
         self.setFlag(QGraphicsRectItem.ItemIsMovable, not self.locked)
@@ -324,6 +336,10 @@ class TextRegionItem(QGraphicsRectItem):
         if self.locked:
             event.accept()
             return
+        if event.button() == Qt.LeftButton:
+            self._gesture_start_geometry = tuple(int(self.region.get(name, 0)) for name in (
+                "x", "y", "width", "height",
+            ))
         edges = self._edges_at(event.pos())
         if event.button() == Qt.LeftButton and any(edges):
             # A corner keeps priority over the Ctrl-click delete shortcut.
@@ -438,27 +454,42 @@ class TextRegionItem(QGraphicsRectItem):
         self._commit_geometry(notify=False)
 
     def mouseReleaseEvent(self, event) -> None:
+        start = self._gesture_start_geometry
         current_size = (
             int(round(self.region.get("width", self.rect().width()))),
             int(round(self.region.get("height", self.rect().height()))),
         )
         resized = bool(self._gesture_size and current_size != self._gesture_size)
         change_kind = "scale" if resized and self._gesture_scaled else "resize" if resized else "move"
-        if resized or self._gesture_moved:
+        if resized:
             self.region["typeset_box_manual"] = True
         self._scale_font_gesture = False
         self._gesture_scaled = False
         self._gesture_moved = False
         if self._resize_edges and any(self._resize_edges):
             self._resize_edges = None
-            self._commit_geometry(change_kind=change_kind, notify=True)
+            self._commit_geometry(change_kind=change_kind, notify=False)
+            changed = start is not None and tuple(int(self.region.get(name, 0)) for name in (
+                "x", "y", "width", "height",
+            )) != start
+            if changed:
+                self._on_changed(change_kind)
             self._gesture_size = None
+            self._gesture_start_geometry = None
             self.setCursor(Qt.SizeAllCursor)
             event.accept()
             return
         super().mouseReleaseEvent(event)
-        self._commit_geometry(change_kind=change_kind, notify=True)
+        self._commit_geometry(change_kind=change_kind, notify=False)
+        changed = start is not None and tuple(int(self.region.get(name, 0)) for name in (
+            "x", "y", "width", "height",
+        )) != start
+        if changed:
+            if change_kind == "move" and self._on_moved is not None:
+                self._on_moved(self, start[0], start[1])
+            self._on_changed(change_kind)
         self._gesture_size = None
+        self._gesture_start_geometry = None
 
     def hoverMoveEvent(self, event) -> None:
         if self.locked:
@@ -476,8 +507,33 @@ class TextRegionItem(QGraphicsRectItem):
         if self.locked:
             event.accept()
             return
+        translator = getattr(QApplication.instance(), "_kuro_ui_translator", None)
+        language = getattr(translator, "language", "es")
         menu = QMenu()
-        del_action = menu.addAction("🗑 Eliminar cuadro de texto (Supr / Delete)")
+        kind_menu = menu.addMenu(translate_text("Tipo de globo", language))
+        group = QActionGroup(kind_menu)
+        group.setExclusive(True)
+        current = str(self.region.get("balloon_kind", "dialogue")) if self.region.get("balloon_kind_manual") else "auto"
+        for kind, label in (
+            ("auto", "Automático"), ("dialogue", "Diálogo"),
+            ("shout", "Grito"), ("caption", "Cuadro"),
+        ):
+            action = kind_menu.addAction(translate_text(label, language))
+            action.setCheckable(True)
+            action.setChecked(current == kind)
+            group.addAction(action)
+            action.triggered.connect(lambda _checked=False, selected=kind: self._on_kind_change(self, selected)
+                                     if self._on_kind_change is not None else None)
+        menu.addSeparator()
+        hyphenation = menu.addAction(translate_text("Separar palabras largas con guion", language))
+        hyphenation.setCheckable(True)
+        hyphenation.setChecked(bool(self.region.get("style", {}).get("hyphenation", True)))
+        hyphenation.triggered.connect(
+            lambda checked: self._on_hyphenation_change(self, bool(checked))
+            if self._on_hyphenation_change is not None else None
+        )
+        menu.addSeparator()
+        del_action = menu.addAction(translate_text("Eliminar cuadro de texto (Supr / Delete)", language))
         del_action.triggered.connect(lambda: self._on_deleted(self))
         menu.exec(event.screenPos())
         event.accept()
@@ -511,20 +567,24 @@ class TextRegionItem(QGraphicsRectItem):
             self._on_changed(change_kind)
 
     def paint(self, painter, option, widget=None) -> None:
-        pen = QPen(QColor("#24DCEF") if self.isSelected() else QColor("#00CFE8"), 2 if self.isSelected() else 1.8)
+        selected = self.isSelected()
+        pen = QPen(QColor(self.SELECTED_COLOR if selected else self.BORDER_COLOR), 2.8 if selected else 2.2)
+        pen.setCosmetic(True)
         painter.setPen(pen)
         painter.setBrush(Qt.NoBrush)
         painter.drawRect(self.rect())
-        if self.isSelected() or self._hovered:
-            painter.setPen(Qt.NoPen)
-            painter.setBrush(QColor("#00CFE8"))
+        if selected or self._hovered:
+            handle_pen = QPen(QColor("#5D2F9A"), 1.4)
+            handle_pen.setCosmetic(True)
+            painter.setPen(handle_pen)
+            painter.setBrush(QColor(self.HANDLE_COLOR))
             for point in (self.rect().topLeft(), self.rect().topRight(), self.rect().bottomLeft(), self.rect().bottomRight()):
                 painter.drawEllipse(point, self.HANDLE_RADIUS, self.HANDLE_RADIUS)
         number = str(self.region.get("number", ""))
         if number:
             badge = QRectF(self.rect().left() + 5, self.rect().top() + 5, 18, 18)
             painter.setPen(Qt.NoPen)
-            painter.setBrush(QColor("#0797AC"))
+            painter.setBrush(QColor("#6F3FA8"))
             painter.drawEllipse(badge)
             painter.setPen(QColor("#F5F7FA"))
             painter.setFont(QFont("Segoe UI", 8, QFont.Bold))
@@ -572,6 +632,8 @@ class CanvasView(QGraphicsView):
     watermark_positions_changed = Signal(object)
     sfx_nodes_changed = Signal(int, object)
     region_edit_requested = Signal(int)
+    region_kind_requested = Signal(str, str)
+    region_hyphenation_requested = Signal(str, bool)
     inline_text_committed = Signal(int, str)
     performance_measured = Signal(str, float)
 
@@ -1114,7 +1176,9 @@ class CanvasView(QGraphicsView):
                 self.scene.removeItem(item)
             self._regions.clear()
             for index, region in enumerate(regions):
-                item = TextRegionItem(region, self._emit_regions, self._delete_region_item, self._preview_region_geometry)
+                item = TextRegionItem(region, self._emit_regions, self._delete_region_item,
+                                      self._preview_region_geometry, self._finalize_region_move,
+                                      self._request_region_kind, self._request_region_hyphenation)
                 self._set_region_interaction(item, self._brush_mode is None and not self._comparison_enabled)
                 self.scene.addItem(item)
                 self._regions.append(item)
@@ -1762,7 +1826,9 @@ class CanvasView(QGraphicsView):
             "width": int(rectangle.width()), "height": int(rectangle.height()),
             "confidence": 1.0, "label": "manual", "number": len(self._regions) + 1,
         }
-        item = TextRegionItem(region, self._emit_regions, self._delete_region_item, self._preview_region_geometry)
+        item = TextRegionItem(region, self._emit_regions, self._delete_region_item,
+                              self._preview_region_geometry, self._finalize_region_move,
+                              self._request_region_kind, self._request_region_hyphenation)
         self.scene.addItem(item)
         self._regions.append(item)
         return item
@@ -1784,6 +1850,14 @@ class CanvasView(QGraphicsView):
         for item in self._regions:
             item.update()
         self.regions_changed.emit([dict(item.region) for item in self._regions])
+
+    def _request_region_kind(self, item: TextRegionItem, kind: str) -> None:
+        if item in self._regions:
+            self.region_kind_requested.emit(str(item.region.get("id", "")), kind)
+
+    def _request_region_hyphenation(self, item: TextRegionItem, enabled: bool) -> None:
+        if item in self._regions:
+            self.region_hyphenation_requested.emit(str(item.region.get("id", "")), enabled)
 
     def set_manga_mode(self, enabled: bool) -> None:
         enabled = bool(enabled)
@@ -1853,12 +1927,30 @@ class CanvasView(QGraphicsView):
                 style["auto_fit"] = False
         current_size = (int(region["width"]), int(region["height"]))
         previous_size = old_item.data(0)
-        if (change_kind in {"resize", "geometry"} or previous_size != current_size) and isinstance(old_item, QGraphicsTextItem):
-            if not bool(region.get("style", {}).get("balloon_fit", False)):
-                self._preview_text_reflow(index, old_item, region)
+        if (change_kind == "resize" or previous_size != current_size) and isinstance(old_item, QGraphicsTextItem):
+            # Reflow even for balloon-fitted dialogue. During a drag the user's
+            # rectangle is the live constraint; the precise balloon mask is
+            # recomputed once on release, never on every mouse movement.
+            self._preview_text_reflow(index, old_item, region)
             old_item.setData(0, current_size)
             old_item.setData(6, True)
         self._position_text_item(old_item, region)
+
+    def _finalize_region_move(self, region_item: TextRegionItem, old_x: int, old_y: int) -> None:
+        try:
+            index = self._regions.index(region_item)
+        except ValueError:
+            return
+        region = region_item.region
+        style = TypographyManager.normalized(region.get("style", {}))
+        if not style.get("balloon_fit") or index >= len(self._text_values):
+            return
+        text = str(self._text_values[index])
+        if style.get("text_case") == "upper":
+            text = text.upper()
+        elif style.get("text_case") == "lower":
+            text = text.lower()
+        translate_balloon_snapshot(region, text, style, old_x, old_y)
 
     def _preview_text_reflow(
         self, index: int, item: QGraphicsTextItem, region: dict,
@@ -1878,32 +1970,50 @@ class CanvasView(QGraphicsView):
         if style.get("vertical_text"):
             text = "\n".join(text.replace("\n", ""))
 
-        margin = max(0, int(style.get("text_margin", style.get("margin", 8))))
+        if style.get("balloon_fit", False):
+            outline = int(style.get("stroke_width", 0)) + (
+                int(style.get("stroke2_width", 0)) if style.get("stroke2_enabled", False) else 0
+            )
+            margin = effective_balloon_padding(
+                int(region["width"]), int(region["height"]),
+                int(style.get("balloon_padding", 10)), outline,
+            )
+        else:
+            margin = max(0, int(style.get("text_margin", style.get("margin", 8))))
         available_width = max(1.0, float(region["width"]) - margin * 2)
         available_height = max(1.0, float(region["height"]) - margin * 2)
-        # A manual box manipulation must not change the visible font size.
-        # Resizing can rewrap the lines, but the size currently on the canvas
-        # becomes authoritative until the user explicitly enables auto-fit.
+        # Keep automatic fitting active for balloons. Their drag preview uses
+        # the rectangle as a cheap approximation and recomputes the precise
+        # interior mask only after release.
+        adaptive_balloon = bool(style.get("balloon_fit", False) and style.get("auto_fit", False))
         font = QFont(item.font())
         font_size = int(
             region.get("font_size")
-            or (region.get("style", {}).get("font_size") if not region.get("style", {}).get("auto_fit", False) else 0)
+            or (style.get("font_size") if adaptive_balloon or not style.get("auto_fit", False) else 0)
             or font.pointSize()
         )
         font.setPointSize(max(6, font_size))
-        style["font_size"] = max(6, font_size)
-        style["auto_fit"] = False
         region["style"] = style
-        item.setFont(font)
-        item.document().setDefaultFont(font)
-        item.setPlainText(text)
-        item.setTextWidth(available_width)
+        if adaptive_balloon:
+            preview_style = {**style, "text_margin": margin}
+            self._fit_text_to_rectangle(item, text, region, font, preview_style)
+        else:
+            # A manually sized, nonadaptive box keeps the font size visible
+            # at the start of the gesture while its line breaks update.
+            style["font_size"] = max(6, font_size)
+            style["auto_fit"] = False
+            item.setFont(font)
+            item.document().setDefaultFont(font)
+            item.setPlainText(text)
+            item.setTextWidth(available_width)
         item.setData(2, None)
+        item.setData(11, margin)
 
         scale_y = max(0.5, min(2.0, int(style.get("scale_y", 100)) / 100.0))
-        region["text_overflow"] = bool(
-            item.boundingRect().height() * scale_y > available_height + 1
-        )
+        if not adaptive_balloon:
+            region["text_overflow"] = bool(
+                item.boundingRect().height() * scale_y > available_height + 1
+            )
         item.setTransform(QTransform.fromScale(1.0, scale_y))
         item.setData(4, scale_y)
         item.setTransformOriginPoint(item.boundingRect().center())
@@ -2502,6 +2612,7 @@ class CanvasView(QGraphicsView):
                 layout = self._fit_text_to_balloon(item, display_text, region, font, style)
                 balloon_overflow = bool(layout is not None and layout.get("overflow"))
             if layout is None or layout["overflow"]:
+                region.pop("balloon_layout_snapshot", None)
                 item.setData(2, None)
                 item.setData(8, None)
                 layout = self._fit_text_to_rectangle(item, display_text, region, font, style)
@@ -2784,6 +2895,10 @@ class CanvasView(QGraphicsView):
     def _fit_text_to_balloon(
         self, item: QGraphicsTextItem, text: str, region: dict, font: QFont, style: dict,
     ) -> dict | None:
+        saved_layout = valid_balloon_snapshot(region, text, style)
+        if saved_layout is not None:
+            self._apply_saved_balloon_layout(item, region, font, style, saved_layout)
+            return saved_layout
         base = self._pixmap_item.pixmap().toImage()
         if base.isNull():
             return None
@@ -2879,6 +2994,7 @@ class CanvasView(QGraphicsView):
         layout = dict(layout)
         region["text_overflow"] = bool(layout["overflow"])
         if layout["overflow"]:
+            region.pop("balloon_layout_snapshot", None)
             return layout
 
         layout["layout_rect"] = layout_rect
@@ -2951,6 +3067,43 @@ class CanvasView(QGraphicsView):
         else:
             region.pop("balloon_layout_snapshot", None)
         return layout
+
+    @staticmethod
+    def _apply_saved_balloon_layout(
+        item: QGraphicsTextItem, region: dict, font: QFont, style: dict, layout: dict,
+    ) -> None:
+        """Render the same lines and position after a manually placed box moves."""
+        layout_rect = layout["layout_rect"]
+        width = float(layout_rect[2])
+        font.setPointSize(int(layout["font_size"]))
+        font.setStretch(max(50, min(200, round(
+            int(style.get("scale_x", 100)) * float(layout.get("scale_x", 1.0))
+        ))))
+        item.setFont(font)
+        item.setPlainText(str(layout["text"]))
+        item.setTextWidth(width)
+        item.document().setDocumentMargin(0)
+        block = item.document().begin()
+        for left, right in layout["intervals"]:
+            if not block.isValid():
+                break
+            cursor = QTextCursor(block)
+            block_format = cursor.blockFormat()
+            block_format.setLeftMargin(max(0.0, float(left)))
+            block_format.setRightMargin(max(0.0, float(width - right)))
+            block_format.setAlignment({
+                "left": Qt.AlignLeft, "right": Qt.AlignRight,
+            }.get(style.get("alignment"), Qt.AlignCenter))
+            block_format.setLineHeight(
+                float(layout["line_height"]), QTextBlockFormat.LineHeightTypes.FixedHeight.value,
+            )
+            cursor.setBlockFormat(block_format)
+            block = block.next()
+        item.setData(2, layout["intervals"])
+        item.setData(8, float(layout["center_y"]))
+        item.setData(9, layout_rect)
+        item.setData(10, (int(region["x"]), int(region["y"])))
+        region["text_overflow"] = False
 
     @staticmethod
     def _effect_clone(
@@ -3076,7 +3229,9 @@ class CanvasView(QGraphicsView):
                 float(region["y"]) + (float(region["height"]) - bounds.height()) / 2.0 - bounds.y(),
             )
             return
-        margin = int(style.get("text_margin", style.get("margin", 8)))
+        margin = int(item.data(11)) if item.data(11) is not None else int(
+            style.get("text_margin", style.get("margin", 8))
+        )
         text_height = item.boundingRect().height() * float(item.data(4) or 1.0)
         vertical_alignment = style.get("vertical_alignment", "center")
         if vertical_alignment == "top":

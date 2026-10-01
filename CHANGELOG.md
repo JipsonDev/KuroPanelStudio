@@ -1,5 +1,13 @@
 # Historial de cambios
 
+## 0.2.9
+
+- Clasificación automática y selección manual del tipo de globo por caja: diálogo, grito y cuadro, con las fuentes configuradas para esos roles.
+- Menú de clic derecho para cambiar el tipo y la separación de palabras largas con guion; el texto original conserva su contenido y saltos de línea.
+- Composición estable al tocar o mover cajas, redimensionado en vivo y borde morado más visible.
+- Cola de traducciones visible en Guión, con devolución de entradas al deshacer la creación de una caja.
+- Canal de actualización local para instaladores generados en el equipo, además de GitHub Releases.
+
 ## 0.2.3
 
 - Las cajas de texto movidas o redimensionadas manualmente limitan la composición a sus propios bordes, incluso dentro de un globo grande.

@@ -497,6 +497,18 @@ class DocumentWorkflowTests(unittest.TestCase):
         self.assertEqual([strip_numeric_prefix(value) for value in variants], ["Hola"] * len(variants))
         self.assertEqual(parse_numbered_entries("#01 Uno\n#02 Dos"), ["Uno", "Dos"])
 
+    def test_translation_batch_accepts_numbering_and_separated_paragraphs(self) -> None:
+        self.assertEqual(
+            parse_numbered_entries("1. Primera línea\ncontinuación\n2) Segunda\n[3] Tercera"),
+            ["Primera línea\ncontinuación", "Segunda", "Tercera"],
+        )
+        self.assertEqual(
+            parse_numbered_entries("Primer párrafo\ncon salto manual\n\nSegundo párrafo"),
+            ["Primer párrafo\ncon salto manual", "Segundo párrafo"],
+        )
+        self.assertEqual(parse_numbered_entries("1\nHola\n2\nAdiós"), ["Hola", "Adiós"])
+        self.assertEqual(parse_numbered_entries("1. 2 kilos\n2. 3 días"), ["2 kilos", "3 días"])
+
     def test_ocr_regions_are_cached_after_parallel_api_run(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             source = Path(temp) / "page.png"

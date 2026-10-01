@@ -1,7 +1,9 @@
-"""Fetch and verify an installer from the project's published GitHub Releases."""
+"""Find verified local installers or published GitHub Releases."""
 from __future__ import annotations
 
 import hashlib
+import json
+import os
 import re
 from dataclasses import dataclass
 from pathlib import Path
@@ -35,6 +37,7 @@ class UpdateInfo:
     sha256: str
     release_url: str
     notes: str
+    local_path: Path | None = None
 
 
 def version_tuple(value: str) -> tuple[int, int, int]:
@@ -46,6 +49,61 @@ def version_tuple(value: str) -> tuple[int, int, int]:
 
 def _safe_release_url(value: str) -> bool:
     return value.startswith(f"https://github.com/{OWNER}/{REPOSITORY}/releases/download/")
+
+
+def local_update_manifest_path() -> Path:
+    root = Path(os.environ.get("LOCALAPPDATA") or Path.home() / "AppData" / "Local")
+    return root / "ManhuaSuiteEditor" / "Updates" / "local-release.json"
+
+
+class LocalInstallerUpdater:
+    """Read a manifest written only after a local installer is fully built."""
+
+    def __init__(self, manifest_path: Path | None = None) -> None:
+        self.manifest_path = manifest_path or local_update_manifest_path()
+
+    def check(self, current_version: str) -> UpdateInfo | None:
+        if not self.manifest_path.is_file():
+            return None
+        try:
+            if self.manifest_path.stat().st_size > 16 * 1024:
+                raise UpdateError("El manifiesto de actualización local no es válido.")
+            data = json.loads(self.manifest_path.read_text(encoding="utf-8"))
+            version = str(data["version"])
+            if version_tuple(version) <= version_tuple(current_version):
+                return None
+            filename = f"KuroPanelStudio-Setup-{version}-Windows-x64.exe"
+            installer = Path(str(data["installer"]))
+            expected_size = int(data["size"])
+            expected_sha = str(data["sha256"]).lower()
+            if (
+                not installer.is_absolute() or installer.name != filename
+                or str(data.get("filename")) != filename
+                or ASSET_NAME.fullmatch(filename) is None
+                or not 0 < expected_size <= MAX_INSTALLER_BYTES
+                or not re.fullmatch(r"[0-9a-f]{64}", expected_sha)
+                or not installer.is_file() or installer.stat().st_size != expected_size
+            ):
+                raise UpdateError("El instalador local no existe o no coincide con el manifiesto.")
+            digest = hashlib.sha256()
+            with installer.open("rb") as source:
+                for block in iter(lambda: source.read(1024 * 1024), b""):
+                    digest.update(block)
+            if digest.hexdigest() != expected_sha:
+                raise UpdateError("El SHA-256 del instalador local no coincide.")
+            return UpdateInfo(
+                version, filename, "", expected_size, expected_sha, "",
+                "Instalador local verificado", installer,
+            )
+        except (OSError, ValueError, TypeError, KeyError, json.JSONDecodeError) as error:
+            raise UpdateError(f"No se pudo leer la actualización local: {error}") from error
+
+
+def check_available_update(current_version: str, channel: str = "github") -> UpdateInfo | None:
+    local = LocalInstallerUpdater().check(current_version)
+    if local is not None or channel == "local":
+        return local
+    return ReleaseUpdater().check(current_version)
 
 
 class ReleaseUpdater:
