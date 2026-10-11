@@ -7,6 +7,7 @@ This module owns those decisions and stores a small snapshot on every layer.
 from __future__ import annotations
 
 from hashlib import sha1
+import math
 from typing import Callable
 
 from core.linguistic_composer import detect_language, linguistic_wrap
@@ -159,6 +160,34 @@ def valid_snapshot(region: dict, text: str, style: dict) -> dict | None:
         return None
     expected = layout_signature(text, region.get("width", 1), region.get("height", 1), style)
     if snapshot.get("signature") != expected or not isinstance(snapshot.get("lines"), list):
+        return None
+    return dict(snapshot)
+
+
+def render_layout_signature(region: dict, text: str, style: dict) -> str:
+    """Render positions are local to the box and can move with it unchanged."""
+    base = layout_signature(text, region.get("width", 1), region.get("height", 1), style)
+    return sha1(repr((base, bool(style.get("optical_center", False)))).encode()).hexdigest()
+
+
+def valid_render_snapshot(region: dict, text: str, style: dict) -> dict | None:
+    snapshot = region.get("text_render_snapshot")
+    if not isinstance(snapshot, dict) or snapshot.get("signature") != render_layout_signature(region, text, style):
+        return None
+    try:
+        lines, positions = snapshot["lines"], snapshot["positions"]
+        if not lines or len(lines) != len(positions) or not all(isinstance(line, str) for line in lines):
+            return None
+        values = [snapshot["width"], snapshot["height"], snapshot["font_pixels"],
+                  snapshot["stretch"], snapshot["scale_y"], *snapshot["origin"]]
+        values.extend(value for position in positions for value in position)
+        if not all(math.isfinite(float(value)) for value in values):
+            return None
+        if min(float(snapshot[key]) for key in ("width", "height", "font_pixels", "stretch", "scale_y")) <= 0:
+            return None
+        if len(snapshot["origin"]) != 2 or any(len(position) != 2 for position in positions):
+            return None
+    except (KeyError, TypeError, ValueError):
         return None
     return dict(snapshot)
 

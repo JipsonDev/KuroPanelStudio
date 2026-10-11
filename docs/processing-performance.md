@@ -149,3 +149,36 @@ con `.venv/Scripts/python.exe -m pytest -q`. Incluye cuatro formatos de exportac
 (PNG, JPG, WebP y PSD), cuatro bordes de página y las regresiones de edición del
 guion. Esta ejecución pasó también las pruebas de idioma; no se ha identificado
 ni corregido la causa del cierre nativo intermitente de Qt registrado más arriba.
+
+### Composición visible y exportación 0.2.14 local
+
+El lienzo configuraba fuentes en puntos; Pillow recibía el mismo número como
+píxeles. A 96 DPI, 24 puntos corresponden a 32 píxeles. La exportación volvía
+a medir las líneas y podía cambiar su espaciado, posición y caracteres de
+respaldo al usar fuentes de manga con cobertura parcial de acentos.
+
+El lienzo guarda ahora el documento y sus medidas finales junto a cada región,
+con una firma que invalida esos datos al cambiar el texto, estilo o dimensiones.
+Mover una caja conserva su composición y traslada el origen relativo.
+La exportación rasteriza el documento con Qt sobre QImage, sin crear widgets
+en el trabajador. Conserva puntos, contornos, pinceles, espaciado y fuentes de
+respaldo. Los datos se conservan también al guardar y abrir un proyecto.
+En exportaciones sin aplicación Qt o sin documento vigente, se usa el motor
+de respaldo con la conversión de puntos a píxeles corregida.
+
+PSD recibe el resultado del mismo compositor. Su constructor coloca juntos el
+contenido y la máscara; los límites incluyen el texto fuera de la caja inicial
+del OCR, recortados únicamente por los bordes de la página.
+
+Las pruebas comparan los píxeles de los glifos en ambas direcciones, tolerando
+hasta cuatro píxeles por redondeo y rasterización. Cubren alineación, interlineado,
+escala, movimiento, formatos, proyecto guardado, documentos invalidados,
+trabajador, contornos y subrayado con degradado. Tres pruebas adicionales usan
+fuentes de manga instaladas en este equipo y se omiten si no están disponibles.
+No se ha validado el proyecto original de las capturas del usuario; se reprodujo
+su texto con fuentes instaladas y páginas controladas.
+
+Verificación del 11 de octubre de 2026: **496 pruebas y 11 subpruebas aprobadas**
+con `.venv/Scripts/python.exe -m pytest -q`, incluidas 21 comparaciones nuevas
+de composición. Este resultado no atribuye ni resuelve el cierre nativo
+intermitente de Qt documentado en las verificaciones anteriores.

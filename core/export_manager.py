@@ -18,7 +18,9 @@ from core.balloon_typesetter import (
 )
 from core.sfx_layout import automatic_sfx_lines
 from core.sfx_transform import bezier_baseline, build_warp
-from core.text_layout import fit_rectangular_text, layout_signature, valid_balloon_snapshot, valid_snapshot
+from core.text_layout import (
+    fit_rectangular_text, layout_signature, valid_balloon_snapshot, valid_snapshot, valid_render_snapshot,
+)
 from core.typography_manager import TypographyManager
 from core.watermark_manager import compose_watermark
 
@@ -161,7 +163,7 @@ def _paste_with_blend(image: Image.Image, overlay: Image.Image, position: tuple[
     image.paste(Image.fromarray(result, "RGB"), (left, top))
 
 
-def _draw_sfx_text(image: Image.Image, region: dict, style: dict, text: str) -> None:
+def _draw_sfx_text(image: Image.Image, region: dict, style: dict, text: str, *, layer_sink=None) -> None:
     """Rasterize the same per-glyph vector trajectory used by the canvas."""
     x, y = int(region["x"]), int(region["y"])
     width, height = max(1, int(region["width"])), max(1, int(region["height"]))
@@ -281,12 +283,15 @@ def _draw_sfx_text(image: Image.Image, region: dict, style: dict, text: str) -> 
     opacity = max(0, min(100, int(region.get("opacity", 100))))
     if opacity < 100:
         layer.putalpha(layer.getchannel("A").point(lambda value: value * opacity // 100))
-    _paste_with_blend(
-        image, layer, (round(x - pad), round(y - pad)), str(style.get("blend_mode", "normal")),
-    )
+    position = (round(x - pad), round(y - pad))
+    mode = str(style.get("blend_mode", "normal"))
+    if layer_sink is not None:
+        layer_sink(layer, position, mode)
+    else:
+        _paste_with_blend(image, layer, position, mode)
 
 
-def _draw_region_text(image: Image.Image, region: dict, default_style: dict) -> None:
+def _draw_region_text(image: Image.Image, region: dict, default_style: dict, *, layer_sink=None) -> None:
     text = str(region.get("applied_text", "")).strip()
     if not text:
         return
@@ -298,7 +303,7 @@ def _draw_region_text(image: Image.Image, region: dict, default_style: dict) -> 
     x, y = int(region["x"]), int(region["y"])
     width, height = max(1, int(region["width"])), max(1, int(region["height"]))
     if style.get("sfx_enabled", False):
-        _draw_sfx_text(image, region, style, text)
+        _draw_sfx_text(image, region, style, text, layer_sink=layer_sink)
         return
     margin = max(0, int(style.get("text_margin", style.get("margin", 8))))
     available_width, available_height = max(1, width - margin * 2), max(1, height - margin * 2)
@@ -321,14 +326,24 @@ def _draw_region_text(image: Image.Image, region: dict, default_style: dict) -> 
     primary_family = str(style.get("font_family", "Segoe UI"))
     resolved_family = primary_family
     wrapped = text
-    selected_font = _font(
-        requested, resolved_family, style.get("font_file"), font_weight, italic,
-    )
+    # Qt's style size is in points; FreeType/Pillow expects raster pixels.
+    # Older/offscreen exports without a canvas snapshot use the 96-DPI logical
+    # Windows canvas. New snapshots retain the actual resolved raster size.
+    def font_for_points(size: int):
+        return _font(max(1, int(math.floor(size * 96.0 / 72.0 + .5))),
+                     resolved_family, style.get("font_file"), font_weight, italic)
+
+    render_snapshot = valid_render_snapshot(region, text, style)
+    selected_font = font_for_points(requested)
     balloon_layout = None
     rectangle_layout = None
-    if style.get("balloon_fit", False) and not vertical:
+    if render_snapshot is not None:
+        selected_font = _font(int(render_snapshot["font_pixels"]), resolved_family,
+                              style.get("font_file"), font_weight, italic)
+        wrapped = "\n".join(render_snapshot["lines"])
+    elif style.get("balloon_fit", False) and not vertical:
         def font_for_size(size: int):
-            return _font(size, resolved_family, style.get("font_file"), font_weight, italic)
+            return font_for_points(size)
 
         balloon_layout = valid_balloon_snapshot(region, text, style)
         if balloon_layout is not None:
@@ -393,7 +408,7 @@ def _draw_region_text(image: Image.Image, region: dict, default_style: dict) -> 
             signature = layout_signature(text, width, height, style)
 
             def rectangle_font(size: int):
-                return _font(size, resolved_family, style.get("font_file"), font_weight, italic)
+                return font_for_points(size)
 
             rectangle_layout = fit_rectangular_text(
                 text, available_width, available_height / manual_scale_y,
@@ -413,16 +428,11 @@ def _draw_region_text(image: Image.Image, region: dict, default_style: dict) -> 
             )
             region["layout_snapshot"] = dict(rectangle_layout)
         wrapped = str(rectangle_layout["text"])
-        selected_font = _font(
-            int(rectangle_layout["font_size"]), resolved_family, style.get("font_file"),
-            font_weight, italic,
-        )
+        selected_font = font_for_points(int(rectangle_layout["font_size"]))
         region["text_overflow"] = bool(rectangle_layout.get("overflow", False))
     sizes = range(requested, 5, -1) if style.get("auto_fit", False) else (requested,)
-    for size in (() if ((balloon_layout and not balloon_layout["overflow"]) or rectangle_layout) else sizes):
-        candidate_font = _font(
-            size, resolved_family, style.get("font_file"), font_weight, italic,
-        )
+    for size in (() if (render_snapshot or (balloon_layout and not balloon_layout["overflow"]) or rectangle_layout) else sizes):
+        candidate_font = font_for_points(size)
         candidate = text if vertical else _wrap_text(draw, text, candidate_font, available_width)
         bbox = draw.multiline_textbbox((0, 0), candidate, font=candidate_font, spacing=spacing, stroke_width=render_stroke, align=alignment)
         if bbox[2] - bbox[0] <= available_width and bbox[3] - bbox[1] <= available_height:
@@ -430,7 +440,25 @@ def _draw_region_text(image: Image.Image, region: dict, default_style: dict) -> 
             break
     balloon_specs: list[tuple[str, tuple[float, float]]] = []
     balloon_success = bool(balloon_layout and not balloon_layout["overflow"])
-    if balloon_success:
+    positioned_text = bool(render_snapshot or balloon_success)
+    anchor = "ls" if render_snapshot else None
+    effective_scale_x = float(render_snapshot["stretch"]) if render_snapshot else manual_scale_x * (
+        float(balloon_layout.get("scale_x", 1.0)) if balloon_success else 1.0
+    )
+    effective_scale_y = float(render_snapshot["scale_y"]) if render_snapshot else manual_scale_y * (
+        float(balloon_layout.get("scale_y", 1.0)) if balloon_success else 1.0
+    )
+    pad = render_stroke * 2 + 2
+    if render_snapshot:
+        pad = max(pad, int(render_snapshot["font_pixels"]))
+        text_width = float(render_snapshot["width"]) / effective_scale_x
+        text_height = float(render_snapshot["height"])
+        bbox = (0, 0, text_width, text_height)
+        balloon_specs = [
+            (line, (pad + float(position[0]) / effective_scale_x, pad + float(position[1])))
+            for line, position in zip(render_snapshot["lines"], render_snapshot["positions"])
+        ]
+    elif balloon_success:
         layout_rect = balloon_layout.get("layout_rect", (x, y, width, height))
         text_width = int(layout_rect[2])
         text_height = int(math.ceil(float(balloon_layout["line_height"]) * len(balloon_layout["lines"])))
@@ -441,123 +469,125 @@ def _draw_region_text(image: Image.Image, region: dict, default_style: dict) -> 
             stroke_width=render_stroke, align=alignment,
         )
         text_width, text_height = bbox[2] - bbox[0], bbox[3] - bbox[1]
-    text_layer = Image.new(
+    qt_layer = None
+    if render_snapshot is not None:
+        from core.qt_text_renderer import render_canvas_text
+        qt_layer = render_canvas_text(render_snapshot, style, pad)
+        if qt_layer is not None:
+            # Font stretching is already part of the captured Qt document.
+            effective_scale_x = 1.0
+    text_layer = qt_layer if qt_layer is not None else Image.new(
         "RGBA",
         (
-            max(1, int(math.ceil(text_width + render_stroke * 4 + 4))),
-            max(1, int(math.ceil(text_height + render_stroke * 4 + 4))),
+            max(1, int(math.ceil(text_width + pad * 2))),
+            max(1, int(math.ceil(text_height + pad * 2))),
         ),
         (0, 0, 0, 0),
     )
-    layer_draw = ImageDraw.Draw(text_layer)
-    origin = (render_stroke * 2 + 2 - bbox[0], render_stroke * 2 + 2 - bbox[1])
-    if balloon_success:
-        pad = render_stroke * 2 + 2
-        for line_index, (line, interval) in enumerate(zip(balloon_layout["lines"], balloon_layout["intervals"])):
-            line_bbox = layer_draw.textbbox((0, 0), line or " ", font=selected_font, stroke_width=render_stroke)
-            line_width = float(layer_draw.textlength(line or " ", font=selected_font))
-            left, right = interval
-            if alignment == "left":
-                line_x = float(left)
-            elif alignment == "right":
-                line_x = float(right) - line_width
-            else:
-                line_x = (float(left) + float(right) - line_width) / 2.0
-            line_y = line_index * float(balloon_layout["line_height"])
-            balloon_specs.append((line, (pad + line_x - line_bbox[0], pad + line_y - line_bbox[1])))
-    if outer_stroke_width:
+    if qt_layer is None:
+        layer_draw = ImageDraw.Draw(text_layer)
+        origin = (pad - bbox[0], pad - bbox[1])
         if balloon_success:
+            pad = render_stroke * 2 + 2
+            for line_index, (line, interval) in enumerate(zip(balloon_layout["lines"], balloon_layout["intervals"])):
+                line_bbox = layer_draw.textbbox((0, 0), line or " ", font=selected_font, stroke_width=render_stroke)
+                line_width = float(layer_draw.textlength(line or " ", font=selected_font))
+                left, right = interval
+                if alignment == "left":
+                    line_x = float(left)
+                elif alignment == "right":
+                    line_x = float(right) - line_width
+                else:
+                    line_x = (float(left) + float(right) - line_width) / 2.0
+                line_y = line_index * float(balloon_layout["line_height"])
+                balloon_specs.append((line, (pad + line_x - line_bbox[0], pad + line_y - line_bbox[1])))
+        if outer_stroke_width:
+            if positioned_text:
+                for line, position in balloon_specs:
+                    layer_draw.text(
+                        position, line, font=selected_font, anchor=anchor, fill=(0, 0, 0, 0),
+                        stroke_width=outer_stroke_width, stroke_fill=style.get("stroke2_color", "#111111"),
+                    )
+            else:
+                layer_draw.multiline_text(
+                    origin, wrapped, font=selected_font, anchor=None, align=alignment, spacing=spacing,
+                    fill=(0, 0, 0, 0), stroke_width=outer_stroke_width,
+                    stroke_fill=style.get("stroke2_color", "#111111"),
+                )
+        if stroke_width:
+            if positioned_text:
+                for line, position in balloon_specs:
+                    layer_draw.text(
+                        position, line, font=selected_font, anchor=anchor, fill=(0, 0, 0, 0),
+                        stroke_width=stroke_width, stroke_fill=style.get("stroke_color", "#FFFFFF"),
+                    )
+            else:
+                layer_draw.multiline_text(
+                    origin, wrapped, font=selected_font, anchor=None, align=alignment, spacing=spacing,
+                    fill=(0, 0, 0, 0), stroke_width=stroke_width,
+                    stroke_fill=style.get("stroke_color", "#FFFFFF"),
+                )
+        if positioned_text:
             for line, position in balloon_specs:
                 layer_draw.text(
-                    position, line, font=selected_font, fill=(0, 0, 0, 0),
-                    stroke_width=outer_stroke_width, stroke_fill=style.get("stroke2_color", "#111111"),
+                    position, line, font=selected_font, anchor=anchor, fill=style.get("text_color", "#111111"),
+                    stroke_width=0,
                 )
         else:
             layer_draw.multiline_text(
-                origin, wrapped, font=selected_font, anchor=None, align=alignment, spacing=spacing,
-                fill=(0, 0, 0, 0), stroke_width=outer_stroke_width,
-                stroke_fill=style.get("stroke2_color", "#111111"),
+                origin,
+                wrapped, font=selected_font, anchor=None, align=alignment, spacing=spacing,
+                fill=style.get("text_color", "#111111"), stroke_width=0,
             )
-    if stroke_width:
-        if balloon_success:
-            for line, position in balloon_specs:
-                layer_draw.text(
-                    position, line, font=selected_font, fill=(0, 0, 0, 0),
-                    stroke_width=stroke_width, stroke_fill=style.get("stroke_color", "#FFFFFF"),
-                )
-        else:
-            layer_draw.multiline_text(
-                origin, wrapped, font=selected_font, anchor=None, align=alignment, spacing=spacing,
-                fill=(0, 0, 0, 0), stroke_width=stroke_width,
-                stroke_fill=style.get("stroke_color", "#FFFFFF"),
-            )
-    if balloon_success:
-        for line, position in balloon_specs:
-            layer_draw.text(
-                position, line, font=selected_font, fill=style.get("text_color", "#111111"),
-                stroke_width=0,
-            )
-    else:
-        layer_draw.multiline_text(
-            origin,
-            wrapped, font=selected_font, anchor=None, align=alignment, spacing=spacing,
-            fill=style.get("text_color", "#111111"), stroke_width=0,
-        )
-    if style.get("underline") or style.get("strikeout"):
-        lines = wrapped.splitlines() or [wrapped]
-        sample_bbox = layer_draw.textbbox((0, 0), "Ag", font=selected_font, stroke_width=stroke_width)
-        line_height = max(1, sample_bbox[3] - sample_bbox[1])
-        block_width = max(1, text_width)
-        rendered_size = int(getattr(selected_font, "size", requested))
-        decoration_width = max(1, rendered_size // 14)
-        fill = style.get("text_color", "#111111")
-        for line_index, line in enumerate(lines):
-            line_bbox = layer_draw.textbbox((0, 0), line or " ", font=selected_font, stroke_width=stroke_width)
-            line_width = max(1, line_bbox[2] - line_bbox[0])
-            if balloon_success and line_index < len(balloon_specs):
-                left = int(round(balloon_specs[line_index][1][0] + line_bbox[0]))
-                top = int(round(balloon_specs[line_index][1][1] + line_bbox[1]))
-            elif alignment == "right":
-                offset_x = block_width - line_width
-            elif alignment == "center":
-                offset_x = (block_width - line_width) / 2
+        if style.get("underline") or style.get("strikeout"):
+            lines = wrapped.splitlines() or [wrapped]
+            sample_bbox = layer_draw.textbbox((0, 0), "Ag", font=selected_font, stroke_width=stroke_width)
+            line_height = max(1, sample_bbox[3] - sample_bbox[1])
+            block_width = max(1, text_width)
+            rendered_size = int(getattr(selected_font, "size", requested))
+            decoration_width = max(1, rendered_size // 14)
+            fill = style.get("text_color", "#111111")
+            for line_index, line in enumerate(lines):
+                line_bbox = layer_draw.textbbox((0, 0), line or " ", font=selected_font, anchor=anchor, stroke_width=stroke_width)
+                line_width = max(1, line_bbox[2] - line_bbox[0])
+                if positioned_text and line_index < len(balloon_specs):
+                    left = int(round(balloon_specs[line_index][1][0] + line_bbox[0]))
+                    top = int(round(balloon_specs[line_index][1][1] + line_bbox[1]))
+                elif alignment == "right":
+                    offset_x = block_width - line_width
+                elif alignment == "center":
+                    offset_x = (block_width - line_width) / 2
+                else:
+                    offset_x = 0
+                if not positioned_text:
+                    left = int(round(origin[0] + offset_x))
+                    top = int(round(origin[1] + line_index * (line_height + spacing)))
+                right = left + line_width
+                if style.get("underline"):
+                    underline_y = top + line_height + max(1, rendered_size // 14)
+                    layer_draw.line((left, underline_y, right, underline_y), fill=fill, width=decoration_width)
+                if style.get("strikeout"):
+                    strike_y = top + int(line_height * 0.55)
+                    layer_draw.line((left, strike_y, right, strike_y), fill=fill, width=decoration_width)
+        if style.get("gradient_enabled", False):
+            fill_mask = Image.new("L", text_layer.size, 0)
+            mask_draw = ImageDraw.Draw(fill_mask)
+            if positioned_text:
+                for line, position in balloon_specs:
+                    mask_draw.text(position, line, font=selected_font, anchor=anchor, fill=255, stroke_width=0)
             else:
-                offset_x = 0
-            if not balloon_success:
-                left = int(round(origin[0] + offset_x))
-                top = int(round(origin[1] + line_index * (line_height + spacing)))
-            right = left + line_width
-            if style.get("underline"):
-                underline_y = top + line_height + max(1, rendered_size // 14)
-                layer_draw.line((left, underline_y, right, underline_y), fill=fill, width=decoration_width)
-            if style.get("strikeout"):
-                strike_y = top + int(line_height * 0.55)
-                layer_draw.line((left, strike_y, right, strike_y), fill=fill, width=decoration_width)
-    if style.get("gradient_enabled", False):
-        fill_mask = Image.new("L", text_layer.size, 0)
-        mask_draw = ImageDraw.Draw(fill_mask)
-        if balloon_success:
-            for line, position in balloon_specs:
-                mask_draw.text(position, line, font=selected_font, fill=255, stroke_width=0)
-        else:
-            mask_draw.multiline_text(
-                origin, wrapped, font=selected_font, anchor=None, align=alignment,
-                spacing=spacing, fill=255, stroke_width=0,
+                mask_draw.multiline_text(
+                    origin, wrapped, font=selected_font, anchor=None, align=alignment,
+                    spacing=spacing, fill=255, stroke_width=0,
+                )
+            gradient = _gradient_image(
+                text_layer.width, text_layer.height,
+                style.get("gradient_start", "#FFFFFF"),
+                style.get("gradient_end", "#00CFE8"),
+                style.get("gradient_angle", 90),
             )
-        gradient = _gradient_image(
-            text_layer.width, text_layer.height,
-            style.get("gradient_start", "#FFFFFF"),
-            style.get("gradient_end", "#00CFE8"),
-            style.get("gradient_angle", 90),
-        )
-        text_layer.paste(gradient, (0, 0), fill_mask)
+            text_layer.paste(gradient, (0, 0), fill_mask)
 
-    effective_scale_x = manual_scale_x * (
-        float(balloon_layout.get("scale_x", 1.0)) if balloon_success else 1.0
-    )
-    effective_scale_y = manual_scale_y * (
-        float(balloon_layout.get("scale_y", 1.0)) if balloon_success else 1.0
-    )
     if abs(effective_scale_x - 1.0) > 0.005 or abs(effective_scale_y - 1.0) > 0.005:
         text_layer = text_layer.resize(
             (
@@ -606,13 +636,19 @@ def _draw_region_text(image: Image.Image, region: dict, default_style: dict) -> 
         stack.alpha_composite(expanded)
         text_layer = stack
     rotation = int(style.get("rotation", 0))
+    rotation_offset = (0.0, 0.0)
     if rotation:
+        previous_size = text_layer.size
         text_layer = text_layer.rotate(-rotation, expand=True, resample=Image.Resampling.BICUBIC)
+        rotation_offset = ((text_layer.width - previous_size[0]) / 2.0,
+                           (text_layer.height - previous_size[1]) / 2.0)
     opacity = max(0, min(100, int(region.get("opacity", 100))))
     if opacity < 100:
         alpha = text_layer.getchannel("A").point(lambda value: value * opacity // 100)
         text_layer.putalpha(alpha)
-    if balloon_success:
+    if render_snapshot:
+        px = x + float(render_snapshot["origin"][0]) - pad * effective_scale_x - effect_pad - rotation_offset[0]
+    elif balloon_success:
         px = float(layout_rect[0]) + (float(layout_rect[2]) - text_layer.width) / 2
     elif alignment == "left":
         px = x + margin - effect_pad
@@ -620,7 +656,9 @@ def _draw_region_text(image: Image.Image, region: dict, default_style: dict) -> 
         px = x + width - margin - text_layer.width + effect_pad
     else:
         px = x + (width - text_layer.width) / 2
-    if balloon_success:
+    if render_snapshot:
+        py = y + float(render_snapshot["origin"][1]) - pad * effective_scale_y - effect_pad - rotation_offset[1]
+    elif balloon_success:
         py = y + float(balloon_layout["center_y"]) - text_layer.height / 2
     elif vertical_alignment == "top":
         py = y + margin - effect_pad
@@ -628,7 +666,7 @@ def _draw_region_text(image: Image.Image, region: dict, default_style: dict) -> 
         py = y + height - margin - text_layer.height + effect_pad
     else:
         py = y + (height - text_layer.height) / 2
-    if style.get("optical_center", False):
+    if style.get("optical_center", False) and not render_snapshot:
         ink = text_layer.getchannel("A").getbbox()
         if ink:
             limit = max(1.0, float(getattr(selected_font, "size", requested)) * 0.16)
@@ -638,9 +676,12 @@ def _draw_region_text(image: Image.Image, region: dict, default_style: dict) -> 
                 px += max(-limit, min(limit, text_layer.width / 2.0 - ink_center_x))
             if vertical_alignment == "center":
                 py += max(-limit, min(limit, text_layer.height / 2.0 - ink_center_y))
-    _paste_with_blend(
-        image, text_layer, (int(round(px)), int(round(py))), str(style.get("blend_mode", "normal")),
-    )
+    position = (int(round(px)), int(round(py)))
+    mode = str(style.get("blend_mode", "normal"))
+    if layer_sink is not None:
+        layer_sink(text_layer, position, mode)
+    else:
+        _paste_with_blend(image, text_layer, position, mode)
 
 
 def compose_page(page: Page, regions: list[dict], clean_result: dict | None, styles: dict | None) -> Image.Image:
@@ -712,13 +753,12 @@ def export_layered_psd(
     """Export page with clean base image and separate transparent layers for each text balloon."""
     from psd_tools import PSDImage
     from psd_tools.api.layers import PixelLayer
+    from psd_tools.constants import BlendMode
 
     # 1. Base clean artwork without text boxes
     base_image = compose_page(page, [], clean_result, styles)
     psd = PSDImage.new(mode="RGB", size=base_image.size)
-    bg_layer = PixelLayer.frompil(base_image.convert("RGB"), psd, name="Fondo Limpio")
-    bg_layer.offset = (0, 0)
-    psd.append(bg_layer)
+    PixelLayer.frompil(base_image.convert("RGB"), psd, name="Fondo Limpio")
 
     # 2. Add each dialogue text box as an individual named PSD layer
     default_style = dict((styles or {}).get("typography", (styles or {}).get("translation", {})))
@@ -728,21 +768,37 @@ def export_layered_psd(
         text = str(region.get("applied_text") or region.get("translation") or region.get("text", "")).strip()
         if not text:
             continue
-        w = max(10, int(region.get("width", 100)))
-        h = max(10, int(region.get("height", 60)))
-        x = int(region.get("x", 0))
-        y = int(region.get("y", 0))
-
-        # Render dialogue text on transparent RGBA box
-        text_box = Image.new("RGBA", (w, h), (0, 0, 0, 0))
-        local_region = {**region, "x": 0, "y": 0}
-        _draw_region_text(text_box, local_region, default_style)
-
+        rendered = []
+        # Use the page for balloon detection and retain the same final overlay
+        # as flat exports. A small OCR box must not clip its full balloon text.
+        _draw_region_text(
+            base_image, {**region, "applied_text": text}, default_style,
+            layer_sink=lambda layer, position, mode: rendered.append((layer, position, mode)),
+        )
         clean_snippet = text.replace("\n", " ")[:28]
         layer_name = f"[{idx + 1:02d}] {clean_snippet}"
-        text_layer = PixelLayer.frompil(text_box, psd, name=layer_name)
-        text_layer.offset = (x, y)
-        psd.append(text_layer)
+        for overlay, (x, y), mode in rendered:
+            ink = overlay.getchannel("A").getbbox()
+            if not ink:
+                continue
+            # Retain the editable box bounds, expanding them only when the
+            # balloon/effects actually extend beyond it. Clip at page edges.
+            box_left, box_top = int(region["x"]) - x, int(region["y"]) - y
+            left = max(min(ink[0], box_left), -x)
+            top = max(min(ink[1], box_top), -y)
+            right = min(max(ink[2], box_left + int(region["width"])), base_image.width - x)
+            bottom = min(max(ink[3], box_top + int(region["height"])), base_image.height - y)
+            if right <= left or bottom <= top:
+                continue
+            # Give pixels and their alpha mask the same initial page position.
+            text_layer = PixelLayer.frompil(
+                overlay.crop((left, top, right, bottom)), psd, name=layer_name,
+                left=x + left, top=y + top,
+            )
+            text_layer.blend_mode = {
+                "multiply": BlendMode.MULTIPLY, "screen": BlendMode.SCREEN,
+                "overlay": BlendMode.OVERLAY,
+            }.get(mode, BlendMode.NORMAL)
 
     destination.parent.mkdir(parents=True, exist_ok=True)
     psd.save(str(destination))

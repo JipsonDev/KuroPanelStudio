@@ -1,5 +1,12 @@
 # Historial de cambios
 
+## 0.2.14 — composición al exportar
+
+- La exportación conserva las medidas, líneas, centrado y posición finales del lienzo. Corrige el texto más pequeño causado por interpretar puntos tipográficos como píxeles.
+- El documento tipográfico del lienzo se dibuja con Qt al exportar, conservando el espaciado y los caracteres de respaldo de las fuentes de manga, también en segundo plano.
+- PNG, JPG, WebP y PSD comparten la composición guardada. PSD coloca juntos los píxeles y su máscara y conserva texto que excede la caja inicial del OCR.
+- Los proyectos antiguos incorporan las medidas finales cuando se vuelven a mostrar sus páginas en el lienzo. Sin un documento del lienzo válido, se mantiene la composición de respaldo.
+
 ## 0.2.13 — limpieza, pegado de guion y exportación
 
 - Las tarjetas de Guión se actualizan sin recrear todos los editores. Conservan el cursor, el foco y el historial de deshacer cuando su contenido no cambia.

@@ -1,5 +1,13 @@
 # KuroPanel Studio @VERSION@
 
+## Composición de texto al exportar
+
+- Corregido el texto más pequeño al guardar: la exportación conserva el tamaño, las líneas y el centrado que muestra el lienzo.
+- Las fuentes de manga y sus letras acentuadas se dibujan con el mismo motor tipográfico de la interfaz, también durante la exportación en segundo plano.
+- Corregida la posición de las máscaras de texto en PSD y el recorte cuando la composición ocupa más espacio que la caja inicial del OCR.
+- Para un proyecto anterior, abre la página en el lienzo y vuelve a exportarla para incorporar sus medidas finales.
+- Verificación: 496 pruebas y 11 subpruebas aprobadas, incluidas 21 comparaciones nuevas de composición.
+
 ## Pegado de guion y exportación de imágenes
 
 - Guión actualiza las tarjetas existentes y conserva el cursor, el foco y deshacer cuando el contenido no cambia. Evita reconstruir toda la lista con cada refresco.

@@ -32,7 +32,7 @@ from core.sfx_transform import (
     mesh_offset_for_position,
 )
 from core.text_layout import (
-    balloon_layout_signature, fit_rectangular_text, layout_signature,
+    balloon_layout_signature, fit_rectangular_text, layout_signature, render_layout_signature,
     translate_balloon_snapshot, valid_balloon_snapshot,
 )
 from core.watermark_manager import prepare_watermark, watermark_positions, watermark_vertical_bounds, normalized_watermark
@@ -2634,6 +2634,7 @@ class CanvasView(QGraphicsView):
         item.setData(0, (int(region["width"]), int(region["height"])))
         item.setData(3, self._text_item_signature(text, region))
         self._position_text_item(item, region)
+        self._capture_text_render_snapshot(item, region, display_text, style)
         item.setTransformOriginPoint(item.boundingRect().center())
         item.setRotation(float(style.get("rotation", 0)))
         item.setAcceptedMouseButtons(Qt.NoButton)
@@ -2642,6 +2643,36 @@ class CanvasView(QGraphicsView):
         item.setZValue(2)
         self.scene.addItem(item)
         return item
+
+    @staticmethod
+    def _capture_text_render_snapshot(item: QGraphicsTextItem, region: dict, text: str, style: dict) -> None:
+        """Persist the actual document baselines, not another rasterizer's guess."""
+        lines, positions = [], []
+        block = item.document().begin()
+        while block.isValid():
+            layout = block.layout()
+            for index in range(layout.lineCount()):
+                line = layout.lineAt(index)
+                lines.append(block.text()[line.textStart():line.textStart() + line.textLength()])
+                positions.append([
+                    float(layout.position().x() + line.cursorToX(line.textStart())[0]),
+                    float(layout.position().y() + line.y() + line.ascent()),
+                ])
+            block = block.next()
+        metrics = QFontMetricsF(item.font())
+        region["text_render_snapshot"] = {
+            "signature": render_layout_signature(region, text, style),
+            "lines": lines, "positions": positions,
+            "document_html": item.document().toHtml(), "font": item.font().toString(),
+            "font_dpi": float(metrics.fontDpi()),
+            "alignment": int(item.document().defaultTextOption().alignment()),
+            "wrap_mode": item.document().defaultTextOption().wrapMode().value,
+            "font_pixels": max(1, int(math.floor(item.font().pointSizeF() * metrics.fontDpi() / 72.0 + .5))),
+            "stretch": item.font().stretch() / 100.0,
+            "scale_y": float(item.data(4) or 1.0),
+            "width": float(item.boundingRect().width()), "height": float(item.boundingRect().height()),
+            "origin": [float(item.pos().x() - region["x"]), float(item.pos().y() - region["y"])],
+        }
 
     @staticmethod
     def _fit_text_to_rectangle(
