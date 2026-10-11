@@ -5,6 +5,60 @@ import cv2
 import numpy as np
 
 
+def closed_balloon_text_candidates(rgb: np.ndarray) -> list[tuple[int, ...]]:
+    """Find flat closed balloons with plausible ink for a detailed YOLO pass.
+
+    Returns balloon and ink rectangles, never an accepted detection. Empty
+    balloons, page backgrounds, textured artwork and long frame strokes are
+    excluded before invoking the detector at a more useful scale.
+    """
+    source = np.ascontiguousarray(rgb[:, :, :3], dtype=np.uint8)
+    height, width = source.shape[:2]
+    gray = cv2.cvtColor(source, cv2.COLOR_RGB2GRAY)
+    edges = cv2.Canny(cv2.GaussianBlur(gray, (3, 3), .6), 30, 90)
+    edges = cv2.morphologyEx(edges, cv2.MORPH_CLOSE, np.ones((3, 3), np.uint8))
+    edges = cv2.dilate(edges, np.ones((3, 3), np.uint8))
+    count, labels, stats, _ = cv2.connectedComponentsWithStats(cv2.bitwise_not(edges), 8)
+    candidates = []
+    for label in range(1, count):
+        x, y, w, h, area = (int(value) for value in stats[label])
+        if (x <= 1 or y <= 1 or x + w >= width - 1 or y + h >= height - 1
+                or min(w, h) < 48 or area < 1600 or w * h > width * height * .7):
+            continue
+        component = np.where(labels[y:y+h, x:x+w] == label, 255, 0).astype(np.uint8)
+        contours, _ = cv2.findContours(component, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        interior = np.zeros_like(component)
+        cv2.drawContours(interior, contours, -1, 255, cv2.FILLED)
+        interior_area = np.count_nonzero(interior)
+        if area < interior_area * .6:
+            continue
+        local = source[y:y+h, x:x+w]
+        samples = local[component > 0].astype(np.float32)
+        background = np.median(samples, axis=0)
+        if np.percentile(np.max(np.abs(samples - background), axis=1), 90) > 10:
+            continue
+        inset = cv2.erode(interior, np.ones((7, 7), np.uint8)) > 0
+        difference = np.max(np.abs(local.astype(np.float32) - background), axis=2)
+        ink = np.where(inset & (difference > 24), 255, 0).astype(np.uint8)
+        n, ink_labels, ink_stats, _ = cv2.connectedComponentsWithStats(ink, 8)
+        glyphs = np.zeros_like(ink)
+        accepted = 0
+        for item in range(1, n):
+            ix, iy, iw, ih, pixels = (int(value) for value in ink_stats[item])
+            if (pixels < 5 or pixels > interior_area * .1 or max(iw, ih) > max(w, h) * .6
+                    or max(iw, ih) / max(1, min(iw, ih)) > 12):
+                continue
+            glyphs[ink_labels == item] = 255
+            accepted += 1
+        ink_area = np.count_nonzero(ink)
+        kept = np.count_nonzero(glyphs)
+        if accepted < 3 or kept < 30 or kept < ink_area * .85 or kept > interior_area * .3:
+            continue
+        tx, ty, tw, th = cv2.boundingRect(glyphs)
+        candidates.append((x, y, w, h, x + tx, y + ty, tw, th))
+    return candidates
+
+
 def enclosed_balloon_mask(rgb: np.ndarray, selection: np.ndarray | None = None) -> np.ndarray | None:
     """Find an enclosed background, filling glyph holes but never a crop frame.
 

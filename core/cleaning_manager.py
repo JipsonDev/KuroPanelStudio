@@ -42,7 +42,7 @@ class CleaningManager:
     # of boxes scale poorly on CPU.
     DETECTION_CONTEXT = 80
     INPAINT_CONTEXT = 64
-    MASK_PIPELINE_VERSION = 42
+    MASK_PIPELINE_VERSION = 43
 
     def __init__(self, models_root: Path) -> None:
         self.paths = ModelPaths(models_root)
@@ -758,13 +758,20 @@ class CleaningManager:
             area = int(stats[label, cv2.CC_STAT_AREA])
             if area < 8:
                 continue
-            component = np.where(labels == label, 255, 0).astype(np.uint8)
+            x, y, width, height = (int(value) for value in stats[label, :4])
+            radius = 8  # Half of the 17-pixel dilation kernel below.
+            x1, y1 = max(0, x - radius), max(0, y - radius)
+            x2 = min(hard.shape[1], x + width + radius)
+            y2 = min(hard.shape[0], y + height + radius)
+            local_labels = labels[y1:y2, x1:x2]
+            component = np.where(local_labels == label, 255, 0).astype(np.uint8)
             ring = (
                 (cv2.dilate(component, kernel, iterations=1) > 0)
-                & (hard == 0)
-                & (selection > 0)
+                & (hard[y1:y2, x1:x2] == 0)
+                & (selection[y1:y2, x1:x2] > 0)
             )
-            samples = lab[ring]
+            local_lab = lab[y1:y2, x1:x2]
+            samples = local_lab[ring]
             if samples.shape[0] < 32:
                 continue
 
@@ -779,8 +786,8 @@ class CleaningManager:
             if float(np.percentile(spread, 90)) > 4.0:
                 continue
 
-            difference = np.linalg.norm(lab - background, axis=2)
-            residual[(difference > 3.0) & (labels == label)] = 255
+            difference = np.linalg.norm(local_lab - background, axis=2)
+            residual[y1:y2, x1:x2][(difference > 3.0) & (local_labels == label)] = 255
 
         if not np.any(residual):
             return residual

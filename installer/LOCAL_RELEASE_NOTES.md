@@ -1,5 +1,21 @@
 # KuroPanel Studio @VERSION@
 
+## Detección, consumo OCR y restos de letras
+
+- Una segunda búsqueda local revisa los globos cerrados con tinta que no quedaron cubiertos por las cajas iniciales. Solo esas zonas pasan de nuevo por YOLO, a una escala más útil para letras pequeñas.
+- Los bloques grandes recortados por el borde se conservan cuando los respaldan al menos tres líneas alineadas sobre fondo uniforme. En el globo dentado de prueba se recupera la cuarta línea que antes desaparecía del marcado.
+- El OCR recorta márgenes uniformes conservando trazos tenues y puntuación, y evita ampliar innecesariamente las imágenes habituales. Las letras pequeñas y los diálogos muy verticales mantienen sus protecciones de resolución.
+- Dos recortes idénticos comparten una sola petición, incluso entre páginas o después de reiniciar. La relectura explícita sigue haciendo una petición nueva.
+- Las respuestas cortadas por el límite de salida se muestran como error, no se guardan como una lectura completa ni se repiten automáticamente.
+- La limpieza completa también pequeños restos grises, coloreados o claros sobre fondo oscuro cuando pertenecen a una letra ya casi cubierta por la máscara. Rechaza textura y componentes aislados.
+- Validación local: 448 pruebas y 11 subpruebas aprobadas, incluidos cinco recortes reales y siete globos anotados. Cero residuos oscuros en las zonas de texto medidas; el resultado puede necesitar retoques de huellas grises o dibujo superpuesto.
+
+## OCR, limpieza y revisión visual
+
+- El OCR conserva más ancho de carácter en cajas de diálogo muy verticales. El recorte sigue sujeto al límite de píxeles del perfil para controlar el consumo de Alibaba.
+- La detección de residuos tras limpiar procesa solo el entorno de cada componente de texto. Mantiene la misma máscara protegida y evita repetir cálculos sobre toda la página.
+- El control de calidad separa navegación y acciones para que los botones no queden amontonados. Las tres vistas se reajustan al cambiar el tamaño de la ventana usando los píxeles originales.
+
 ## Menú de caja y palabras largas
 
 - Clic derecho en una caja abre **Tipo de globo** con Automático, Diálogo, Grito y Cuadro; la selección afecta solo a esa caja.

@@ -59,3 +59,45 @@ durante estas pruebas.
 ```powershell
 python -m pytest tests/test_ocr_cost_control.py -q
 ```
+
+
+## Recortes y contenido idéntico (8 de octubre de 2026)
+
+Antes de codificar JPEG, se recortan solo márgenes con color uniforme comprobado
+(98 % del borde). Se conserva todo píxel con diferencia de color mayor de tres
+niveles y seis píxeles de contexto; la tinta tenue y la puntuación desconectada
+participan en el cálculo. Un fondo texturado no se recorta. Las imágenes normales
+ya no se amplían para llevar su lado menor a 128 píxeles: solo las muy pequeñas
+se amplían hasta 48, con un máximo de 2×. Los límites de área y la protección de
+las columnas verticales siguen vigentes.
+
+Una segunda clave de caché combina SHA-256 del JPEG exacto, servidor, modelo,
+proveedor y prompt. Permite compartir lecturas entre cajas con distinto ID o
+coordenadas y entre páginas. Las peticiones simultáneas con la misma clave
+esperan una sola respuesta; conservan sus IDs y el orden de entrega. El perfil
+solo requiere una nueva lectura si cambia los píxeles enviados. La relectura
+explícita omite esa reutilización y actualiza el resultado guardado.
+
+Las pruebas simuladas de dos cajas idénticas y una segunda página, con reinicio
+del gestor, cuentan una petición total. No se contactó con Alibaba. Reducir
+píxeles puede reducir tokens de imagen, pero el proveedor aplica mínimos y reglas
+según el modelo, por lo que no se afirma un porcentaje de ahorro en dinero.
+`max_tokens=4096` limita salidas descontroladas; no reduce por sí solo el texto
+normal generado. Una respuesta con `finish_reason=length` no se guarda ni se
+reintenta automáticamente. Véase la [referencia oficial de Qwen OCR](https://www.alibabacloud.com/help/en/model-studio/qwen-vl-ocr-api-reference).
+
+
+Comparación de JPEG enviados, usando los siete recortes reales anotados contra
+la preparación de `HEAD` antes de estas mejoras:
+
+| Recorte | Píxeles antes | Píxeles ahora |
+| --- | ---: | ---: |
+| Globo angular corto | 62 592 | 16 632 |
+| Globo radial | 31 416 | 21 854 |
+| Diálogo oval con línea larga | 72 000 | 96 164 |
+| Total de los siete | 621 580 | 590 222 |
+
+La línea larga recibe más resolución para conservar caracteres legibles; en
+conjunto se envían 5,0 % menos píxeles en esta muestra. Los recortes con márgenes
+texturados conservan su resolución. Estas cifras no son tokens facturados ni
+una validación del reconocimiento remoto: no se hicieron peticiones reales.

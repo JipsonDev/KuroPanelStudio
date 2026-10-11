@@ -666,6 +666,7 @@ class DocumentWorkflowTests(unittest.TestCase):
             page = Image.new("RGB", (320, 220), (255, 255, 255))
             draw = ImageDraw.Draw(page)
             draw.text((70, 80), "inner", fill=(0, 0, 0))
+            draw.text((70, 150), "outer wide words are here", fill=(0, 0, 0))
             page.save(source)
             image_counts: list[int] = []
 
@@ -685,7 +686,7 @@ class DocumentWorkflowTests(unittest.TestCase):
                     image_counts.append(len(images))
                     payload = base64.b64decode(images[0]["image_url"]["url"].split(",", 1)[1])
                     with Image.open(BytesIO(payload)) as crop:
-                        label = "globo completo" if crop.height > 150 else "línea interior"
+                        label = "globo completo" if crop.width > 100 else "línea interior"
                     return FakeResponse(label)
 
             regions = [
@@ -731,7 +732,11 @@ class DocumentWorkflowTests(unittest.TestCase):
     def test_ocr_never_groups_unrelated_regions_in_one_provider_request(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             source = Path(temp) / "page.png"
-            Image.new("RGB", (420, 180), (255, 255, 255)).save(source)
+            page = Image.new("RGB", (420, 180), (255, 255, 255))
+            draw = ImageDraw.Draw(page)
+            for index in range(3):
+                draw.text((25 + index * 110, 60), f"Unique {index}", fill="black")
+            page.save(source)
             calls = 0
             images_per_call: list[int] = []
 
@@ -797,7 +802,8 @@ class DocumentWorkflowTests(unittest.TestCase):
                     )
                     payload = base64.b64decode(image_url.split(",", 1)[1])
                     with Image.open(BytesIO(payload)) as image:
-                        is_colour_crop = image.width < 210
+                        pixels = np.asarray(image.convert("RGB"), dtype=np.int16)
+                        is_colour_crop = bool(np.any(np.max(pixels, axis=2) - np.min(pixels, axis=2) > 60))
                     if is_colour_crop:
                         colour_attempts += 1
                         return FakeResponse("" if colour_attempts == 1 else "color recuperado")
@@ -819,7 +825,11 @@ class DocumentWorkflowTests(unittest.TestCase):
     def test_long_page_ocr_keeps_every_region_independent_and_ordered(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             source = Path(temp) / "long-page.png"
-            Image.new("RGB", (600, 4200), (255, 255, 255)).save(source)
+            page = Image.new("RGB", (600, 4200), (255, 255, 255))
+            draw = ImageDraw.Draw(page)
+            for index in range(42):
+                draw.text((30, index * 90 + 15), f"Unique {index:02}", fill="black")
+            page.save(source)
             calls = 0
 
             class FakeResponse:
@@ -1827,6 +1837,21 @@ class DocumentWorkflowTests(unittest.TestCase):
         residual = CleaningManager._residual_mask(cleaned, text_mask, selection)
 
         self.assertGreater(np.count_nonzero(residual[52:61, 100:115]), 0)
+        self.assertEqual(np.count_nonzero(residual[text_mask == 0]), 0)
+
+    def test_residual_retry_finds_distant_components_without_touching_art(self) -> None:
+        cleaned = np.full((900, 1200, 3), 255, dtype=np.uint8)
+        text_mask = np.zeros((900, 1200), dtype=np.uint8)
+        selection = np.full_like(text_mask, 255)
+        for x, y in ((70, 60), (1050, 790)):
+            text_mask[y:y + 50, x:x + 70] = 255
+            cleaned[y + 20:y + 24, x + 25:x + 35] = 237
+        cleaned[450:470, 500:540] = 0  # Drawing beyond validated text.
+
+        residual = CleaningManager._residual_mask(cleaned, text_mask, selection)
+
+        self.assertGreater(np.count_nonzero(residual[75:95, 85:120]), 0)
+        self.assertGreater(np.count_nonzero(residual[805:825, 1065:1100]), 0)
         self.assertEqual(np.count_nonzero(residual[text_mask == 0]), 0)
 
     def test_residual_retry_is_disabled_on_textured_background(self) -> None:

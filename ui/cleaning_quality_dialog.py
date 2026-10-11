@@ -26,6 +26,28 @@ def _numpy_image(rgb: np.ndarray) -> QImage:
     ).copy()
 
 
+class ImagePreview(QLabel):
+    """Keep the source pixels so a resized review pane stays sharp and filled."""
+
+    def __init__(self, text: str = "") -> None:
+        super().__init__(text)
+        self._source_pixmap: QPixmap | None = None
+
+    def set_image(self, rgb: np.ndarray) -> None:
+        self._source_pixmap = QPixmap.fromImage(_numpy_image(rgb))
+        self._fit_image()
+
+    def resizeEvent(self, event) -> None:
+        super().resizeEvent(event)
+        self._fit_image()
+
+    def _fit_image(self) -> None:
+        if self._source_pixmap is not None and not self._source_pixmap.isNull():
+            self.setPixmap(self._source_pixmap.scaled(
+                self.size(), Qt.KeepAspectRatio, Qt.SmoothTransformation,
+            ))
+
+
 class CleaningQualityDialog(QDialog):
     """Per-box original/mask/result review without modifying the source image."""
 
@@ -70,11 +92,21 @@ class CleaningQualityDialog(QDialog):
         self.status.setWordWrap(True)
         root.addWidget(self.status)
 
-        controls = QHBoxLayout()
+        controls = QVBoxLayout()
+        controls.setSpacing(8)
+        navigation = QHBoxLayout()
+        navigation.setSpacing(8)
         previous = ModernButton("Anterior", icon_name="arrow-left")
         previous.clicked.connect(lambda: self._move(-1))
         next_button = ModernButton("Siguiente", icon_name="arrow-right")
         next_button.clicked.connect(lambda: self._move(1))
+        navigation.addWidget(previous)
+        navigation.addWidget(next_button)
+        navigation.addStretch()
+        controls.addLayout(navigation)
+
+        actions = QHBoxLayout()
+        actions.setSpacing(8)
         self.accept_button = ModernButton("Aceptar caja", "Primary", icon_name="check")
         self.accept_button.clicked.connect(self._accept_current)
         repeat = ModernButton("Repetir limpieza", icon_name="refresh")
@@ -83,8 +115,10 @@ class CleaningQualityDialog(QDialog):
         correct.clicked.connect(self._correct_current)
         accept_clean = ModernButton("Aceptar todas sin residuos")
         accept_clean.clicked.connect(self._accept_clean)
-        for button in (previous, next_button, self.accept_button, repeat, correct, accept_clean):
-            controls.addWidget(button)
+        for button in (self.accept_button, repeat, correct, accept_clean):
+            actions.addWidget(button)
+        actions.addStretch()
+        controls.addLayout(actions)
         root.addLayout(controls)
         self._refresh()
 
@@ -95,7 +129,7 @@ class CleaningQualityDialog(QDialog):
         layout = QVBoxLayout(frame)
         layout.setContentsMargins(8, 8, 8, 8)
         layout.addWidget(SectionTitle(title))
-        label = QLabel("Sin resultado")
+        label = ImagePreview("Sin resultado")
         label.setAlignment(Qt.AlignCenter)
         label.setMinimumSize(260, 260)
         label.setStyleSheet("background:#090B0E; border:1px solid #29323A; border-radius:7px;")
@@ -179,8 +213,11 @@ class CleaningQualityDialog(QDialog):
 
     @staticmethod
     def _set_pixmap(label: QLabel, rgb: np.ndarray) -> None:
-        pixmap = QPixmap.fromImage(_numpy_image(rgb))
-        label.setPixmap(pixmap.scaled(label.size(), Qt.KeepAspectRatio, Qt.SmoothTransformation))
+        if isinstance(label, ImagePreview):
+            label.set_image(rgb)
+        else:
+            pixmap = QPixmap.fromImage(_numpy_image(rgb))
+            label.setPixmap(pixmap.scaled(label.size(), Qt.KeepAspectRatio, Qt.SmoothTransformation))
 
     def _refresh(self) -> None:
         patch = self._current()

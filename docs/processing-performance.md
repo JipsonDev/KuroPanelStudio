@@ -75,3 +75,31 @@ de confianza. Sin ese argumento solo se mide el código de trabajo actual.
 Se añadieron 28 casos de regresión. Resultado final: **253 pruebas y 8 subtests
 aprobados**. La suite UI emite cuatro mensajes Qt `Slot 'CanvasView::' not found`
 al finalizar, también presentes en las 225 pruebas de la revisión original.
+
+## Verificación del repositorio — 11 de octubre de 2026
+
+La ejecución completa en Windows con Python 3.14 aprobó **448 pruebas y 11
+subpruebas** usando una carpeta temporal para `LOCALAPPDATA`. Incluye los
+recortes reales disponibles en este equipo y las nuevas pruebas de detección,
+recorte OCR, reutilización de peticiones y fragmentos de limpieza.
+
+Con el perfil habitual, dos ejecuciones completas se interrumpieron por una
+violación de acceso nativa de Qt al procesar eventos en
+`test_runtime_language_switch_keeps_stable_filter_ids_and_user_text`. Las siete
+pruebas de idioma aprobaron por separado, y las otras 441 pruebas y 11
+subpruebas aprobaron juntas. Usar la carpeta temporal permitió ejecutar la suite
+completa; eso no demuestra que la causa del cierre esté corregida en la app.
+
+Para verificar sin mezclar las preferencias y archivos del usuario:
+
+```powershell
+$taskPreviousData = $env:LOCALAPPDATA
+$taskTestData = Join-Path $env:TEMP ('kuro-repo-tests-' + [guid]::NewGuid().ToString('N'))
+New-Item -ItemType Directory -Path $taskTestData | Out-Null
+try {
+    $env:LOCALAPPDATA = $taskTestData
+    .\.venv\Scripts\python.exe -m pytest -q
+} finally {
+    $env:LOCALAPPDATA = $taskPreviousData
+}
+```

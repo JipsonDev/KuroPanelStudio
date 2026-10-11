@@ -61,9 +61,21 @@ def test_thin_crops_meet_image_dimensions_without_changing_box(size):
     with Image.open(io.BytesIO(payload)) as crop:
         assert crop.size == dimensions
         assert min(crop.size) >= 32
-        assert max(crop.size) <= 720
+        assert max(crop.size) <= 1536
         assert crop.width * crop.height <= 320000
     assert (region["width"], region["height"]) == size
+
+
+def test_long_vertical_dialogue_keeps_legible_character_width():
+    page = Image.new("RGB", (110, 2000), "white")
+    payload, dimensions = OCRManager()._prepare_crop(
+        page, dict(x=0, y=0, width=110, height=2000),
+    )
+    with Image.open(io.BytesIO(payload)) as crop:
+        assert crop.size == dimensions
+        assert crop.width >= 80
+        assert crop.height <= 1536
+        assert crop.width * crop.height <= 320000
 
 
 def test_404_has_actionable_context_and_no_network_retries(tmp_path):

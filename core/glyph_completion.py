@@ -75,8 +75,8 @@ def complete_boundary_glyphs(rgb, mask, selection, locator=None):
 def complete_anchored_glyph_fragments(rgb, mask, selection):
     """Finish tiny gaps in a glyph already covered by the cleaning mask.
 
-    The dark component must be almost entirely masked, text-sized, and fully
-    inside a light selection. This handles residual strokes without admitting
+    The contrasting component must be almost entirely masked, text-sized, and
+    inside a flat selection. This handles faint/colored strokes without admitting
     disconnected punctuation, balloon outlines or impact rays.
     """
     if rgb.shape[:2] != mask.shape or mask.shape != selection.shape:
@@ -85,10 +85,12 @@ def complete_anchored_glyph_fragments(rgb, mask, selection):
         return mask
     sx, sy, sw, sh = cv2.boundingRect(selection)
     selected = selection > 0
-    gray = cv2.cvtColor(rgb, cv2.COLOR_RGB2GRAY)
-    if float(np.median(gray[selected])) < 190:
+    samples = rgb[selected].astype(np.float32)
+    background = np.median(samples, axis=0)
+    if np.mean(np.max(np.abs(samples - background), axis=1) <= 10) < .68:
         return mask
-    dark = (gray < 135).astype(np.uint8)
+    difference = np.max(np.abs(rgb.astype(np.float32) - background), axis=2)
+    dark = (difference > 12).astype(np.uint8)
     count, labels, stats, _ = cv2.connectedComponentsWithStats(dark, 8)
     additions = np.zeros_like(mask)
     max_area = max(160, int(sw * sh * .06))

@@ -55,3 +55,29 @@ dependiendo de las heurísticas de respaldo y pueden requerir corrección manual
 .\.venv\Scripts\python.exe -m pytest tests/test_balloon_cleaning.py -q
 .\.venv\Scripts\python.exe -m pytest -q
 ```
+
+
+## Recuperación de globos y tinta (8 de octubre de 2026)
+
+Se buscan fondos planos dentro de contornos cerrados con varios componentes
+compatibles con letras. Si las cajas iniciales no cubren su tinta, YOLO vuelve
+a revisar solo ese globo a mayor escala, con confianza 0,18 como máximo. Estas
+propuestas geométricas nunca se aceptan como texto sin una predicción de YOLO.
+La pasada adicional es local y no consume tokens de ninguna API.
+
+Los bloques grandes sin contorno cerrado pueden conservarse cuando su confianza
+es al menos 0,65, ocupan como máximo el 45 % de la imagen y contienen tres líneas
+independientes alineadas, próximas y sobre fondo mayormente uniforme. En el
+recorte real `179-02-dialogo-grueso`, el marcado pasó de tres líneas a un bloque
+que incluye las cuatro. La cobertura del rectángulo de selección anotado pasó
+de 31,9 % a 95,7 %; cada rectángulo de línea queda cubierto al menos en 98 %.
+Esto mide cobertura geométrica, no exactitud del OCR remoto. Los otros cuatro
+recortes mantuvieron sus cajas. La búsqueda añade trabajo CPU; en esa ejecución
+local los recortes completos tardaron entre 0,14 y 0,36 segundos.
+
+La terminación de fragmentos usa contraste RGB respecto al fondo dominante,
+en lugar de exigir tinta negra sobre blanco. Admite restos grises, coloreados y
+texto claro sobre fondo oscuro, siempre que al menos el 85 % del mismo carácter
+ya esté enmascarado, falte una fracción pequeña y el componente esté dentro de la
+selección. Los fondos texturados, líneas largas y marcas aisladas se excluyen.
+La versión de máscaras cambia a 43 para recalcular las máscaras anteriores.

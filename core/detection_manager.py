@@ -323,6 +323,7 @@ class DetectionManager:
             return [dict(region) for region in cached]
         model = self._load_model()
         regions: list[TextRegion] = []
+        recovery_windows: dict[tuple[int, ...], tuple[int, ...]] = {}
         with load_source_image(image_path, source_states) as image:
             width, height = image.size
             starts = self._tile_starts(height, self.tile_height, self.tile_overlap)
@@ -367,7 +368,28 @@ class DetectionManager:
                             for box, score in zip(result.boxes.xyxy.cpu().numpy(), result.boxes.conf.cpu().numpy()):
                                 x1, y1, x2, y2 = (int(value) for value in box)
                                 regions.append(TextRegion(x1, y1 + top, x2 - x1, y2 - y1, float(score)))
-                progress(int(min(len(starts), offset + len(batch_starts)) * 100 / len(starts)))
+                from core.balloon_geometry import closed_balloon_text_candidates
+                for top, strip in zip(batch_starts, strips):
+                    for bx, by, bw, bh, tx, ty, tw, th in closed_balloon_text_candidates(strip):
+                        ty += top
+                        # A partially found line must not hide the rest of its
+                        # balloon. Require coverage of the full ink rectangle.
+                        covered = any(
+                            max(0, min(r.x + r.width, tx + tw) - max(r.x, tx))
+                            * max(0, min(r.y + r.height, ty + th) - max(r.y, ty))
+                            >= tw * th * .7 for r in regions
+                        )
+                        if covered:
+                            continue
+                        bounds = (max(0, bx - 16), max(0, top + by - 16),
+                                  min(width, bx + bw + 16), min(height, top + by + bh + 16))
+                        # Overlapping strips can propose the same balloon.
+                        identity = (round((tx + tw / 2) / 16), round((ty + th / 2) / 16))
+                        recovery_windows[identity] = (*bounds, tx, ty, tw, th)
+                progress(int(min(len(starts), offset + len(batch_starts)) * 90 / len(starts)))
+            regions.extend(self._recover_balloon_text(
+                model, image, list(recovery_windows.values()), batch_limit, progress, cancelled,
+            ))
             self.last_used = monotonic()
             if cancelled():
                 return []
@@ -376,7 +398,8 @@ class DetectionManager:
             page_area = max(1, width * height)
             regions = [item for item in regions if item.width > 0 and item.height > 0
                        and ((item.width * item.height) / page_area <= 0.15
-                            or self._shared_balloon(image, item, item) is True)]
+                            or self._shared_balloon(image, item, item) is True
+                            or self._supported_text_block(image, item, regions))]
             regions = self._deduplicate(regions)
             regions = self._merge_same_balloon_lines(regions, image, cancelled)
         if cancelled():
@@ -386,6 +409,74 @@ class DetectionManager:
         while len(self._result_cache) > self._cache_limit:
             self._result_cache.pop(next(iter(self._result_cache)))
         return [dict(region) for region in result]
+
+    @staticmethod
+    def _supported_text_block(image, candidate, regions):
+        """Keep a large block confirmed by aligned lines on a flat background.
+
+        A balloon cut by a page/crop edge has no closed contour. Rejecting its
+        whole block used to leave only some individual lines, omitting the last
+        line. Require three independent line predictions as supporting evidence.
+        """
+        area = candidate.width * candidate.height
+        if candidate.confidence < .65 or area > image.width * image.height * .45:
+            return False
+        lines = []
+        for region in regions:
+            if region is candidate or region.width * region.height > area * .3:
+                continue
+            intersection = max(0, min(candidate.x + candidate.width, region.x + region.width) - max(candidate.x, region.x)) * max(0, min(candidate.y + candidate.height, region.y + region.height) - max(candidate.y, region.y))
+            if (intersection >= region.width * region.height * .9
+                    and abs(region.x + region.width / 2 - candidate.x - candidate.width / 2) <= candidate.width * .15):
+                lines.append(region)
+        lines = sorted(DetectionManager._deduplicate(lines), key=lambda r: r.y)
+        if len(lines) < 3:
+            return False
+        if (sum(line.width * line.height for line in lines) < area * .12
+                or max(line.width for line in lines) < candidate.width * .25
+                or lines[-1].y + lines[-1].height - lines[0].y < candidate.height * .2):
+            return False
+        if any(b.y - a.y - a.height > max(a.height, b.height) * 1.5 for a, b in zip(lines, lines[1:])):
+            return False
+        crop = np.asarray(image.crop((candidate.x, candidate.y, candidate.x + candidate.width,
+                                      candidate.y + candidate.height)).convert("RGB"))
+        background = np.median(crop.reshape(-1, 3), axis=0)
+        return bool(np.mean(np.max(np.abs(crop.astype(np.float32) - background), axis=2) <= 10) >= .65)
+
+    def _recover_balloon_text(self, model, image, windows, batch_limit, progress, cancelled):
+        """Ask YOLO locally about missed closed balloons at their own scale."""
+        recovered = []
+        for offset in range(0, len(windows), batch_limit):
+            if cancelled():
+                return []
+            batch = windows[offset:offset + batch_limit]
+            crops = [np.asarray(image.crop(bounds[:4])) for bounds in batch]
+            confidence = min(self.confidence, .18)
+            if isinstance(model, _OnnxTextDetector):
+                predictions = model.predict_boxes(crops, confidence, .70)
+            else:
+                results = model.predict(
+                    [np.ascontiguousarray(crop[:, :, ::-1]) for crop in crops],
+                    conf=confidence, iou=.35, verbose=False, device=self._device,
+                    half=self._device != "cpu",
+                )
+                predictions = [
+                    list(zip(result.boxes.xyxy.cpu().numpy(), result.boxes.conf.cpu().numpy()))
+                    if result.boxes is not None else [] for result in results
+                ]
+            for bounds, predictions_for_crop in zip(batch, predictions):
+                left, top, right, bottom, tx, ty, tw, th = bounds
+                for box, score in predictions_for_crop:
+                    x1, y1, x2, y2 = (int(value) for value in box)
+                    x1, x2 = max(left, x1 + left), min(right, x2 + left)
+                    y1, y2 = max(top, y1 + top), min(bottom, y2 + top)
+                    area = max(0, x2 - x1) * max(0, y2 - y1)
+                    intersection = max(0, min(x2, tx + tw) - max(x1, tx)) * max(0, min(y2, ty + th) - max(y1, ty))
+                    if area and intersection >= area * .45 and area <= (right-left) * (bottom-top) * .65:
+                        recovered.append(TextRegion(x1, y1, x2-x1, y2-y1, float(score)))
+            progress(90 + int(min(len(windows), offset + len(batch)) * 10 / len(windows)))
+        progress(100)
+        return recovered
 
     @staticmethod
     def _tile_starts(height: int, tile_height: int, overlap: int) -> list[int]:

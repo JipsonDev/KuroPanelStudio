@@ -5,7 +5,7 @@ from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
 import pytest
-from PIL import Image
+from PIL import Image, ImageDraw
 
 from core.ocr_cache import OCRCache
 from core.ocr_manager import OCRManager, OCRConfigurationError
@@ -22,7 +22,11 @@ def response(text="Texto", usage=None):
 @pytest.fixture
 def page(tmp_path):
     path = tmp_path / "page.png"
-    Image.new("RGB", (300, 1500), "white").save(path)
+    image = Image.new("RGB", (300, 1500), "white")
+    draw = ImageDraw.Draw(image)
+    for i in range(20):
+        draw.text((35, 30 + i * 65), f"Unique {i:02}", fill="black")
+    image.save(path)
     regions = [dict(id=str(i), x=20, y=20 + i * 65, width=100, height=45) for i in range(20)]
     return path, regions, tmp_path / "ocr.sqlite3"
 
@@ -105,7 +109,8 @@ def test_persistent_cache_is_invalidated_when_inputs_change(page, change):
         reopened.run_regions(path, regions[:1], "Alibaba Cloud", "other-model", "fake-key", lambda _: None, lambda: False)
     else:
         run(reopened, path, regions[:1])
-    assert session.post.call_count == 2
+    # Moving the box without changing its trimmed pixels reuses the reading.
+    assert session.post.call_count == (1 if change == "geometry" else 2)
 
 
 def test_empty_reading_is_cached_across_restart(page):

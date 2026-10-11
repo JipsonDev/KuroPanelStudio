@@ -77,16 +77,25 @@ def _review_tile(before: np.ndarray, after: np.ndarray, mask: np.ndarray,
     sheet.save(output)
 
 
-def evaluate_case(case: dict, images: Path, output: Path, manager: CleaningManager,
-                  masks_only: bool = False) -> dict:
-    image = (images / case["image"]).resolve()
-    if not image.is_relative_to(images.resolve()) or not image.is_file():
-        raise FileNotFoundError(f"Falta la página de prueba: {case['image']}")
+def evaluate_case(case: dict, images: Path | None, output: Path, manager: CleaningManager,
+                  masks_only: bool = False, saved_crops: Path | None = None) -> dict:
     destination = output / case["id"]
     destination.mkdir(parents=True, exist_ok=True)
     left, top, right, bottom = (int(value) for value in case["crop"])
-    with Image.open(image) as page:
-        before = np.asarray(page.crop((left, top, right, bottom)).convert("RGB"))
+    if saved_crops is not None:
+        image = (saved_crops / case["id"] / "source.png").resolve()
+        if not image.is_relative_to(saved_crops.resolve()):
+            raise ValueError("El recorte sale de la carpeta de pruebas")
+        with Image.open(image) as crop:
+            if crop.size != (right - left, bottom - top):
+                raise ValueError(f"El recorte guardado de {case['id']} tiene dimensiones incorrectas")
+            before = np.asarray(crop.convert("RGB"))
+    else:
+        image = (images / case["image"]).resolve()
+        if not image.is_relative_to(images.resolve()) or not image.is_file():
+            raise FileNotFoundError(f"Falta la página de prueba: {case['image']}")
+        with Image.open(image) as page:
+            before = np.asarray(page.crop((left, top, right, bottom)).convert("RGB"))
     crop_path = destination / "source.png"
     Image.fromarray(before).save(crop_path)
     regions = []
@@ -176,7 +185,9 @@ def _overview(reports: list[dict], output: Path) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--images", required=True, type=Path, help="Carpeta que contiene 156/ y 179/")
+    sources = parser.add_mutually_exclusive_group(required=True)
+    sources.add_argument("--images", type=Path, help="Carpeta que contiene 156/ y 179/")
+    sources.add_argument("--saved-crops", type=Path, help="Revisión anterior con <caso>/source.png")
     parser.add_argument("--manifest", type=Path, default=DEFAULT_MANIFEST)
     parser.add_argument("--output", type=Path, default=Path("graphify-out/real-cleaning/review"))
     parser.add_argument("--case", action="append", help="Ejecutar solo este caso (repetible)")
@@ -191,7 +202,7 @@ def main() -> None:
     manager.set_aggressiveness(90)
     reports = []
     for case in cases:
-        report = evaluate_case(case, args.images, args.output, manager, args.masks_only)
+        report = evaluate_case(case, args.images, args.output, manager, args.masks_only, args.saved_crops)
         reports.append(report)
         print(json.dumps(report, ensure_ascii=False), flush=True)
     (args.output / "summary.json").write_text(

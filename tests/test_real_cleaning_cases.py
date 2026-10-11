@@ -23,13 +23,18 @@ LOCAL_IMAGES = Path(os.environ.get(
 @pytest.mark.parametrize("case", CASES, ids=lambda case: case["id"])
 def test_real_page_glyph_coverage_and_artwork_boundary(case, tmp_path):
     image = LOCAL_IMAGES / case["image"]
-    if not image.is_file():
-        pytest.skip("Las páginas reales de limpieza no están en este equipo")
+    saved = Path(os.environ.get(
+        "KURO_REAL_CLEANING_CROPS", "graphify-out/real-cleaning/final-v6"
+    )) / case["id"] / "source.png"
+    if not image.is_file() and not saved.is_file():
+        pytest.skip("No están disponibles las páginas ni sus recortes reales")
     if not (Path("Models/ocr.onnx").is_file() and Path("Models/lama.onnx").is_file()):
         pytest.skip("Faltan los modelos locales de limpieza")
     left, top, right, bottom = case["crop"]
-    with Image.open(image) as page:
-        original = np.asarray(page.crop((left, top, right, bottom)).convert("RGB"))
+    with Image.open(image if image.is_file() else saved) as page:
+        crop = page.crop((left, top, right, bottom)) if image.is_file() else page
+        assert crop.size == (right - left, bottom - top)
+        original = np.asarray(crop.convert("RGB"))
     source = tmp_path / "source.png"
     Image.fromarray(original).save(source)
     regions = []

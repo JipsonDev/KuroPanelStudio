@@ -10,7 +10,7 @@ from unittest.mock import patch
 import cv2
 import numpy as np
 import pytest
-from PIL import Image
+from PIL import Image, ImageDraw
 
 from core.detection_manager import DetectionManager, TextRegion, _OnnxTextDetector
 from core.ocr_manager import OCRManager
@@ -152,7 +152,11 @@ def response(text="dialogue"):
 @pytest.fixture
 def ocr_page(tmp_path):
     path = tmp_path / "page.png"
-    Image.new("RGB", (200, 3000), "white").save(path)
+    image = Image.new("RGB", (200, 3000), "white")
+    draw = ImageDraw.Draw(image)
+    for i in range(30):
+        draw.text((25, 20 + i * 70), f"Unique {i:02}", fill="black")
+    image.save(path)
     regions = [dict(id=str(i), x=10, y=10 + i * 70, width=150, height=40) for i in range(30)]
     manager = OCRManager()
     manager._session = SimpleNamespace(post=lambda *_args, **_kwargs: response())
@@ -218,7 +222,7 @@ def test_ocr_cancellation_stops_new_crops_and_requests(ocr_page):
     assert len(calls) == 1
     # A completed response may already be billed even if cancellation arrives
     # during the request. Keep it reusable without applying it to the canvas.
-    assert manager.cache_stats()["items"] == 1
+    assert manager.cache_stats()["items"] == 2
 
 
 def test_ocr_failed_request_retains_previous_successes(ocr_page):
@@ -236,17 +240,17 @@ def test_ocr_failed_request_retains_previous_successes(ocr_page):
     with pytest.raises(ValueError, match="invalid response"):
         run_ocr(path, regions, manager)
     assert len(calls) == 2
-    assert manager.cache_stats()["items"] == 1
+    assert manager.cache_stats()["items"] == 2
 
 
-def test_ocr_cache_tracks_quality_profile(ocr_page):
+def test_ocr_reuses_identical_encoded_pixels_across_quality_profiles(ocr_page):
     path, regions, manager = ocr_page
     calls = []
     manager._session.post = lambda *_args, **_kwargs: (calls.append(1) or response())
     run_ocr(path, regions[:1], manager)
     manager.set_resource_policy(SimpleNamespace(name="high", ocr_cache_items=512))
     run_ocr(path, regions[:1], manager)
-    assert len(calls) == 2
+    assert len(calls) == 1
 
 
 def test_low_resource_profile_keeps_two_requests_after_fast_responses():

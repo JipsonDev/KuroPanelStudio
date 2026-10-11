@@ -67,3 +67,22 @@ cobertura del texto oscuro en su máscara y no marca dibujo fuera de las
 anotaciones. El globo radial exige cobertura completa para impedir que
 reaparezcan las motas. En otros equipos, esas cinco pruebas se omiten; las pruebas
 sintéticas siguen ejecutándose normalmente.
+
+
+## Repetir la revisión con recortes guardados
+
+Cuando la carpeta original no está disponible, se pueden reutilizar los
+`source.png` originales guardados por una revisión anterior. Se verifican sus
+dimensiones contra el manifiesto; nunca se usan las imágenes ya limpiadas como
+entrada. Las imágenes continúan fuera del control de versiones.
+
+```powershell
+.\.venv\Scripts\python.exe -m scripts.evaluate_real_cleaning `
+  --saved-crops graphify-out/real-cleaning/final-v6 `
+  --output graphify-out/real-cleaning/ocr-clean-v11
+```
+
+La revisión del 8 de octubre de 2026 mantuvo cero píxeles oscuros en las siete
+zonas anotadas y cero cambios fuera de la unión de las selecciones y anotaciones.
+La suite ejecutó las cinco pruebas reales usando esos recortes: **448 pruebas y
+11 subpruebas aprobadas**. El umbral de oscuridad no mide huellas grises tenues.

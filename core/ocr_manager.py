@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import base64
+import hashlib
 import importlib
 import io
 import json
@@ -11,7 +12,7 @@ import threading
 import time
 from collections import OrderedDict, deque
 from collections.abc import Callable
-from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
+from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
 from contextlib import ExitStack
 from pathlib import Path
 from urllib.parse import urlsplit, urlunsplit
@@ -33,10 +34,9 @@ requests = _LazyRequests()
 
 ALIBABA_COMPATIBLE_URL = "https://dashscope-intl.aliyuncs.com/compatible-mode/v1/chat/completions"
 OCR_PROMPT = (
-    "Transcribe todo el texto visible, incluido el vertical, coloreado y la puntuación. "
-    "Devuelve solo el texto exacto, sin comentarios ni markdown. Une líneas visuales; "
-    "conserva párrafos reales y espacios coreanos, sin espacios añadidos en chino/japonés. "
-    "Si no hay texto legible, devuelve una cadena vacía."
+    "Transcribe all visible text, including vertical/color text and punctuation. "
+    "Text only; no commentary or markdown. Join wrapped lines, keep real paragraphs "
+    "and Korean word spaces; add no Chinese/Japanese spaces. Return empty if unreadable."
 )
 OCR_BATCH_PROMPT = (
     "Recibirás {count} recortes como {count} imágenes independientes y ordenadas. "
@@ -71,6 +71,10 @@ class OCRNetworkError(RuntimeError):
 
 class OCRBatchParseError(ValueError):
     pass
+
+
+class OCRIncompleteError(RuntimeError):
+    """A provider truncated the reading; do not cache it or retry automatically."""
 
 
 class OCRManager:
@@ -490,6 +494,9 @@ class OCRManager:
         if not pending:
             return [result for result in results if result is not None]
 
+        content_futures: dict[tuple, Future] = {}
+        content_lock = threading.Lock()
+
         def recognize(payload: bytes) -> str | None:
             if cancelled():
                 return None
@@ -512,6 +519,7 @@ class OCRManager:
                             },
                             json={
                                 "model": qwen_model,
+                                "max_tokens": 4096,
                                 "messages": [{
                                     "role": "user",
                                     "content": [
@@ -565,11 +573,43 @@ class OCRManager:
         # concurrency, exactly preserving future -> source-region ownership.
         def recognize_item(item: tuple) -> str:
             payload = self._enhanced_retry_payload(item[3]) if force_refresh else item[3]
-            text = recognize(payload)
+            content_key = (
+                "ocr-content-v1", provider, endpoint, qwen_model, OCR_PROMPT,
+                hashlib.sha256(item[3]).hexdigest(),
+            )
+            owner = True
+            shared = None
+            if not force_refresh:
+                # Identical encoded crops are reusable across pages and box
+                # coordinates. Only the fingerprint and reading are persisted.
+                with content_lock:
+                    with self._cache_lock:
+                        cached = self._cache.get(content_key)
+                    if cached is None and self._disk_cache is not None:
+                        cached = self._disk_cache.get_many([content_key]).get(content_key)
+                    if cached is not None:
+                        with self._cache_lock:
+                            self._cache_hits += 1
+                        self._store_reading(item[2], cached)
+                        return cached
+                    shared = content_futures.get(content_key)
+                    if shared is None:
+                        shared = content_futures[content_key] = Future()
+                    else:
+                        owner = False
+            try:
+                text = recognize(payload) if owner else shared.result()
+            except BaseException as error:
+                if owner and shared is not None:
+                    shared.set_exception(error)
+                raise
             if text is not None:
                 # Persist inside the worker: another concurrent request may
                 # fail before the coordinator consumes this successful result.
                 self._store_reading(item[2], text)
+                self._store_reading(content_key, text)
+            if owner and shared is not None:
+                shared.set_result(text)
             return text or ""
 
         # Keep only a bounded window of JPEGs/futures alive. Preparing the next
@@ -632,12 +672,12 @@ class OCRManager:
         left, top = max(0, x - padding), max(0, y - padding)
         right, bottom = min(page.width, x + width + padding), min(page.height, y + height + padding)
         crop = page.crop((left, top, right, bottom)).convert("RGB")
-        # Fine dialogue on a 60k-pixel strip may be only a few pixels
-        # high after detection. Upscale small crops before JPEG so the
-        # remote vision encoder receives complete glyph strokes.
+        crop = self._trim_uniform_margins(crop)
+        # Preserve native glyph detail without quadrupling ordinary dialogue
+        # images. Only genuinely tiny crops need interpolation before JPEG.
         shortest = min(crop.width, crop.height)
-        if shortest < 128:
-            scale = min(2.0, 128.0 / max(1, shortest))
+        if shortest < 48:
+            scale = min(2.0, 48.0 / max(1, shortest))
             crop = crop.resize(
                 (max(1, int(round(crop.width * scale))), max(1, int(round(crop.height * scale)))),
                 Image.Resampling.LANCZOS,
@@ -647,6 +687,13 @@ class OCRManager:
         # balloon backgrounds to the API.
         max_side = 640 if self._resource_profile == "low" else (840 if self._resource_profile == "high" else 720)
         max_pixels = 240_000 if self._resource_profile == "low" else (480_000 if self._resource_profile == "high" else 320_000)
+        # A long vertical dialogue column can be thousands of pixels tall but
+        # only a few dozen wide. Applying the ordinary side limit can shrink
+        # each character below readable size. Spend the same pixel budget on a
+        # longer canvas for these exceptional crops instead of enlarging every
+        # OCR request (and its provider cost).
+        if max(crop.size) / max(1, min(crop.size)) >= 3:
+            max_side = max(max_side, 1536)
         if crop.width > max_side or crop.height > max_side or crop.width * crop.height > max_pixels:
             scale = min(max_side / crop.width, max_side / crop.height, (max_pixels / (crop.width * crop.height)) ** 0.5)
             crop = crop.resize(
@@ -665,6 +712,28 @@ class OCRManager:
             subsampling=0,
         )
         return stream.getvalue(), crop.size
+
+    @staticmethod
+    def _trim_uniform_margins(crop: Image.Image) -> Image.Image:
+        """Trim only demonstrably flat margins, retaining faint ink/context."""
+        rgb = np.asarray(crop, dtype=np.uint8)
+        if min(crop.size) < 16:
+            return crop
+        border = np.concatenate((rgb[0], rgb[-1], rgb[1:-1, 0], rgb[1:-1, -1]))
+        background = np.median(border, axis=0)
+        if np.mean(np.max(np.abs(border.astype(np.float32) - background), axis=1) <= 6) < .98:
+            return crop
+        difference = np.max(np.abs(rgb.astype(np.float32) - background), axis=2)
+        if np.mean(difference <= 6) < .65:
+            return crop
+        ys, xs = np.nonzero(difference > 3)
+        if xs.size < 8:
+            return crop
+        left, top = max(0, int(xs.min()) - 6), max(0, int(ys.min()) - 6)
+        right, bottom = min(crop.width, int(xs.max()) + 7), min(crop.height, int(ys.max()) + 7)
+        if (right - left) * (bottom - top) >= crop.width * crop.height * .8:
+            return crop
+        return crop.crop((left, top, right, bottom))
 
     @staticmethod
     def _response_content(response) -> str:
@@ -707,7 +776,13 @@ class OCRManager:
             raise OCRConfigurationError(message)
         try:
             payload = response.json()
-            content = payload["choices"][0]["message"]["content"]
+            choice = payload["choices"][0]
+            if choice.get("finish_reason") == "length":
+                raise OCRIncompleteError(
+                    "La API cortó la lectura por su límite de salida. Divide la caja en "
+                    "selecciones más pequeñas y vuelve a leerla; no se guardó el texto incompleto."
+                )
+            content = choice["message"]["content"]
             if isinstance(content, list):
                 content = "".join(
                     str(part.get("text", "")) for part in content if isinstance(part, dict)

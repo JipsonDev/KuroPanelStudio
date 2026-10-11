@@ -1,5 +1,17 @@
 # Historial de cambios
 
+## 0.2.11 — mejoras disponibles en el código fuente y compilación local
+
+- Segunda búsqueda local de texto en globos cerrados que quedaron sin marcar, con una revisión de YOLO a mayor escala solo en esas zonas.
+- Conservación de bloques grandes respaldados por líneas alineadas; corrige el globo de prueba cuya cuarta línea desaparecía del marcado.
+- OCR con márgenes uniformes recortados, menos ampliaciones innecesarias y reutilización de recortes idénticos entre cajas, páginas y reinicios. Conserva resolución para diálogos muy alargados.
+- Detección de respuestas OCR truncadas, sin guardarlas como lecturas completas ni repetir automáticamente la solicitud.
+- Limpieza de pequeños restos grises, coloreados y claros sobre fondos oscuros cuando pertenecen a caracteres ya enmascarados, con protección de textura y contornos.
+- Cálculo de residuos limitado al entorno de cada componente, para evitar procesar repetidamente toda la imagen.
+- Revisión visual con navegación y acciones separadas; las vistas original, máscara y resultado se reajustan al redimensionar la ventana.
+- Evaluación de limpieza con recortes originales guardados y pruebas de cobertura, protección del dibujo y consumo OCR mediante API simulada.
+- Verificación del 11 de octubre de 2026: 448 pruebas y 11 subpruebas aprobadas con configuración temporal de usuario. La ejecución con el perfil habitual presentó un cierre nativo de Qt en la prueba de idioma; la reproducción y los comandos se documentan en `docs/processing-performance.md`.
+
 ## 0.2.9
 
 - Clasificación automática y selección manual del tipo de globo por caja: diálogo, grito y cuadro, con las fuentes configuradas para esos roles.

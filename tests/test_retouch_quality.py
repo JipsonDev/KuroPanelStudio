@@ -20,7 +20,7 @@ from core.cleaning_manager import CleaningManager
 from core.image_manager import ImageManager
 from core.project_manager import Page
 from ui.canvas_view import CanvasView
-from ui.cleaning_quality_dialog import CleaningQualityDialog
+from ui.cleaning_quality_dialog import CleaningQualityDialog, ImagePreview
 from ui.images_panel import ImagesPanel
 from ui.layers_panel import LayersPanel
 
@@ -202,6 +202,19 @@ class RetouchQualityTests(unittest.TestCase):
         self.assertEqual(accepted, ["quality-1"])
         self.assertEqual(patch["qc_status"], "accepted")
         dialog.close()
+
+    def test_cleaning_preview_refits_original_pixels_when_resized(self) -> None:
+        preview = ImagePreview()
+        preview.resize(120, 100)
+        preview.show()
+        self.app.processEvents()
+        preview.set_image(np.full((80, 120, 3), 240, dtype=np.uint8))
+        first = preview.pixmap().size()
+        preview.resize(240, 200)
+        self.app.processEvents()
+        self.assertGreater(preview.pixmap().width(), first.width())
+        self.assertEqual(preview.pixmap().size().width(), 240)
+        preview.close()
 
     def test_complete_chapter_quality_suite_covers_normal_pointed_and_transparent_balloons(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
