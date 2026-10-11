@@ -20,6 +20,12 @@ from core.cleaning_manager import CleaningManager
 DEFAULT_MANIFEST = Path(__file__).resolve().parents[1] / "tests/fixtures/real_cleaning_cases.json"
 
 
+def flat_residue_count(rgb: np.ndarray, colour, tolerance: int = 3) -> int:
+    """Count contrast in an explicitly annotated, known flat-background ROI."""
+    difference = np.max(np.abs(rgb.astype(np.int16) - np.asarray(colour, dtype=np.int16)), axis=2)
+    return int(np.count_nonzero(difference > tolerance))
+
+
 def _local_rect(rect: list[int], origin: tuple[int, int]) -> tuple[int, int, int, int]:
     x, y, width, height = (int(value) for value in rect)
     return x - origin[0], y - origin[1], width, height
@@ -132,12 +138,27 @@ def evaluate_case(case: dict, images: Path | None, output: Path, manager: Cleani
             dark_covered += int(np.count_nonzero(dark_ink & text_mask))
             mask_pixels += int(np.count_nonzero(text_mask))
             annotated_text[y:y + height, x:x + width] = True
-        measurements.append({
+        measurement = {
             "label": item["label"], "dark_before": dark_before,
             "dark_after": dark_after if not masks_only else None,
             "dark_mask_coverage": round(dark_covered / max(1, dark_before), 4),
             "mask_pixels": mask_pixels,
-        })
+        }
+        if item.get("flat_background_rois"):
+            colour = item["flat_background_color"]
+            flat_before = flat_after = 0
+            for flat_rect in item["flat_background_rois"]:
+                fx, fy, fw, fh = _local_rect(flat_rect, (left, top))
+                if not (0 <= fx < before.shape[1] and 0 <= fy < before.shape[0]
+                        and fw > 0 and fh > 0
+                        and fx + fw <= before.shape[1] and fy + fh <= before.shape[0]):
+                    raise ValueError(f"La zona de fondo plano de {case['id']} sale del recorte")
+                flat_before += flat_residue_count(before[fy:fy + fh, fx:fx + fw], colour)
+                flat_after += flat_residue_count(after[fy:fy + fh, fx:fx + fw], colour)
+            measurement.update(flat_contrast_before=flat_before,
+                               flat_contrast_after=flat_after if not masks_only else None,
+                               flat_reference_color=colour, flat_tolerance=3)
+        measurements.append(measurement)
         bx, by, bw, bh = _local_rect(item["selection"], (left, top))
         selected_area[by:by + bh, bx:bx + bw] = True
         _review_tile(before, after, mask, (bx, by, bw, bh), item["label"],

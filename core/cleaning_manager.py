@@ -19,6 +19,7 @@ from PIL import Image
 from core.model_paths import ModelPaths
 from core.glyph_completion import (
     complete_anchored_glyph_fragments, complete_boundary_glyphs,
+    complete_soft_text_halos,
 )
 from core.bubble_mask import colour_connected_balloon_mask
 from core.performance_manager import (
@@ -42,7 +43,7 @@ class CleaningManager:
     # of boxes scale poorly on CPU.
     DETECTION_CONTEXT = 80
     INPAINT_CONTEXT = 64
-    MASK_PIPELINE_VERSION = 43
+    MASK_PIPELINE_VERSION = 44
 
     def __init__(self, models_root: Path) -> None:
         self.paths = ModelPaths(models_root)
@@ -700,6 +701,11 @@ class CleaningManager:
             cutoff = max(2.0, float(np.percentile(residual[keep], 72)) * 1.8)
             keep = residual <= cutoff
         assert coefficients is not None
+        # A flat fit after excluding artwork can erase a drawing crossing
+        # the text. Require support from almost the entire ring; otherwise keep
+        # LaMa's reconstruction, including its line-art/texture inference.
+        if float(np.mean(keep)) < .90:
+            return restored, False
         accepted_residual = np.linalg.norm(samples[keep] - design[keep] @ coefficients, axis=1)
         if len(accepted_residual) < 64 or float(np.percentile(accepted_residual, 90)) > 5.5:
             return restored, False
@@ -716,12 +722,11 @@ class CleaningManager:
 
     @staticmethod
     def _composite_lama(original: np.ndarray, restored: np.ndarray, mask: np.ndarray) -> np.ndarray:
-        """Use the LaMa result exactly inside its mask and nowhere else.
+        """Use reconstruction only inside the reviewed mask.
 
-        LaMa already receives the original image together with the binary
-        inpainting mask. Colour replacement, background flattening and
-        post-model feathering can deform a balloon and are intentionally not
-        part of this compositor.
+        A smooth-gradient correction needs agreement from the surrounding
+        context. Otherwise preserve LaMa's reconstruction. No rectangular fill
+        or feathering modifies pixels outside the mask.
         """
         hard_mask = mask > 0
         if not np.any(hard_mask):
@@ -2912,6 +2917,7 @@ class CleaningManager:
                 final_mask = complete_anchored_glyph_fragments(
                     context_rgb, final_mask, selection
                 )
+            final_mask = complete_soft_text_halos(context_rgb, final_mask, selection)
             if not np.any(final_mask):
                 return index, None
             mx, my, width, height = cv2.boundingRect(final_mask)

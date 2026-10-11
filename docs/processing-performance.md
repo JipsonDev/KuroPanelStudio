@@ -103,3 +103,49 @@ try {
     $env:LOCALAPPDATA = $taskPreviousData
 }
 ```
+
+### Verificación posterior de limpieza 0.2.12
+
+El 11 de octubre de 2026 se aprobaron **452 pruebas y 11 subpruebas** con
+`--ignore=tests/test_ui_language.py`; las siete pruebas de idioma aprobaron en
+un proceso separado. La ejecución conjunta volvió a cerrar Qt en el mismo
+`app.processEvents()` de la prueba de idioma, esta vez también con
+`LOCALAPPDATA` temporal. Por tanto, un perfil temporal no elimina de forma
+fiable ese cierre nativo. No se ha corregido ni atribuido a una causa concreta.
+
+La nueva limpieza se verificó además ejecutando OCR-mask y LaMa locales sobre
+cinco recortes reales. No se enviaron peticiones a proveedores OCR ni se usaron
+credenciales durante esta evaluación. Detalles y límites de las mediciones en
+[balloon-cleaning.md](balloon-cleaning.md).
+
+### Guión y exportación 0.2.13
+
+`ScriptPanel.set_regions()` reconstruía todas las tarjetas, aunque la lista no
+hubiera cambiado. La actualización ahora reutiliza los editores por identificador
+y solo sustituye tarjetas cuyo texto OCR o rol haya cambiado. Conserva el cursor y
+deshacer de los demás. La cola tampoco se reconstruye cuando sus textos coinciden,
+y las vistas previas de párrafos largos se acortan sin modificar el texto guardado.
+
+Con Qt en modo `offscreen`, 500 tarjetas tardaban aproximadamente **872 ms** en
+refrescarse sin cambios. Después de la corrección, la mediana de cinco refrescos
+fue **8 ms**; para 100 tarjetas, **0,7 ms**. Pegar 500 entradas en el campo de cola
+tardó **1,3 ms** y crear sus elementos de lista **2,8 ms**. Son mediciones locales
+del panel; la creación inicial de las 500 tarjetas sigue siendo más costosa y
+estas cifras no representan la composición ni la exportación de un capítulo.
+
+La edición individual del guion actualiza inmediatamente el modelo y la vista
+previa del lienzo. La composición del contorno y los efectos se aplazan hasta
+180 ms después de la última edición y solo afectan a los índices pendientes.
+
+El fallo de exportación se reprodujo con una caja `(-12, 30, 100, 50)` en una
+página de 180 × 180: un recorte NumPy con coordenada negativa generaba una máscara
+de 50 × 0. El cálculo de límites llamaba `argmax` sobre un eje vacío. Las cajas
+que cruzan el borde ahora conservan su máscara rectangular completa, y el
+compositor recorta el resultado a la página. Las máscaras vacías también devuelven
+un resultado de desbordamiento que conserva el texto, sin lanzar esa excepción.
+
+Verificación del 11 de octubre: **475 pruebas y 11 subpruebas aprobadas juntas**
+con `.venv/Scripts/python.exe -m pytest -q`. Incluye cuatro formatos de exportación
+(PNG, JPG, WebP y PSD), cuatro bordes de página y las regresiones de edición del
+guion. Esta ejecución pasó también las pruebas de idioma; no se ha identificado
+ni corregido la causa del cierre nativo intermitente de Qt registrado más arriba.

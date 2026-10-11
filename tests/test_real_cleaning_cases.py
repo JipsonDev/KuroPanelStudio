@@ -54,6 +54,11 @@ def test_real_page_glyph_coverage_and_artwork_boundary(case, tmp_path):
     assert len(plan["entries"]) == len(case["regions"])
     assert not np.any(mask & ~annotated), "La máscara toca dibujo fuera de las anotaciones"
     for item in case["regions"]:
+        for flat_rect in item.get("flat_background_rois", []):
+            x, y, width, height = _local_rect(flat_rect, (left, top))
+            colour = np.asarray(item["flat_background_color"], dtype=np.int16)
+            contrast = np.max(np.abs(original[y:y + height, x:x + width].astype(np.int16) - colour), axis=2) > 3
+            assert not np.any(contrast & ~mask[y:y + height, x:x + width]), "Quedan halos grises fuera de la máscara"
         dark_count = covered = 0
         for text_rect in _text_rectangles(item):
             x, y, width, height = _local_rect(text_rect, (left, top))

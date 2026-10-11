@@ -6,7 +6,7 @@
       "image": "156/01.png",
       "crop": [0, 4500, 900, 6100],
       "regions": [
-        {"label": "globo blanco sobre viñeta", "selection": [82, 4785, 390, 176], "text_roi": [87, 4790, 380, 166]},
+        {"label": "globo blanco sobre viñeta", "selection": [82, 4785, 390, 176], "text_roi": [87, 4790, 380, 166], "flat_background_rois": [[90, 4790, 335, 108]], "flat_background_color": [255, 255, 255]},
         {"label": "globo translúcido", "selection": [411, 5724, 487, 218], "text_roi": [416, 5729, 484, 208]}
       ]
     },

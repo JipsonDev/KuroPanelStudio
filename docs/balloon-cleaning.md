@@ -81,3 +81,53 @@ texto claro sobre fondo oscuro, siempre que al menos el 85 % del mismo carácter
 ya esté enmascarado, falte una fracción pequeña y el componente esté dentro de la
 selección. Los fondos texturados, líneas largas y marcas aisladas se excluyen.
 La versión de máscaras cambia a 43 para recalcular las máscaras anteriores.
+
+## Halos de compresión y protección del dibujo (11 de octubre de 2026)
+
+La máscara también completa pequeños componentes de bajo contraste situados a
+un máximo de seis píxeles de tinta ya confirmada. El fondo se estima excluyendo
+el texto enmascarado: una caja con mucho texto no debe confundir sus letras con
+el color de fondo. Se exige que al menos el 68 % de las muestras de fondo estén
+a tres niveles RGB del color dominante. Los degradados y tramas no cumplen esa
+condición y mantienen el procesamiento neuronal.
+
+Solo se añaden componentes pequeños, enteramente dentro del margen seguro de la
+selección. Se rechazan líneas largas y fragmentos próximos a dibujo de alto
+contraste no aprobado. No se difumina la imagen ni se rellena todo el rectángulo.
+La versión de caché pasa a **44**; la máscara ampliada puede revisarse antes de
+limpiar. La corrección de degradados después de LaMa exige ahora apoyo del 90 %
+del anillo de contexto para evitar aplanar una ilustración que cruza el texto.
+
+Se revisaron cinco recortes reales y siete zonas. En la subzona blanca anotada
+de `156-01-dialogo-mixto` (`x=90, y=4790, ancho=335, alto=108` en la página),
+los píxeles con contraste mayor de tres niveles respecto al blanco pasaron de
+**87 a 0** frente a `04a83d1`. Las siete zonas mantienen cero residuos oscuros
+(criterio anterior: mínimo RGB menor de 80). No hubo cambios fuera de la unión
+de selecciones y rectángulos de texto; sí hubo 571 píxeles modificados fuera de
+los rectángulos estrictos de texto, incluidos dos originalmente oscuros, frente
+a 569 y dos en la revisión anterior. Los rectángulos no son máscaras exactas de
+las letras ni prueban ausencia de daño dentro de ellos.
+
+La revisión visual todavía muestra irregularidades en el borde gris de la
+viñeta que atraviesa el primer globo. Los globos translúcidos y el texto sobre
+dibujos siguen requiriendo revisión: estos resultados no garantizan limpieza
+perfecta en cualquier capítulo. Los originales y resultados se mantienen en
+`graphify-out/real-cleaning/soft-halos-v12-final/`, fuera de Git.
+
+### Herramientas revisadas
+
+Se aplicaron los skills de morfología, preprocesamiento y umbrales de
+[image-processing-skills](https://github.com/aeren23/image-processing-skills).
+Se revisaron [PanelCleaner](https://github.com/VoxelCubes/PanelCleaner),
+[Manga Cleaner Studio](https://github.com/BulganRdn/manga-text-cleaner) y
+[LaMa](https://github.com/advimman/lama) para contrastar la separación entre
+máscara, relleno plano y reconstrucción. Esta mejora tiene implementación propia;
+no incorpora código de esos proyectos ni nuevas dependencias.
+
+El `models/lama.onnx` existente coincide por SHA-256 con
+[lama-manga-onnx-dynamic](https://huggingface.co/ogkalu/lama-manga-onnx-dynamic),
+exportación de [AnimeMangaInpainting](https://huggingface.co/dreMaz/AnimeMangaInpainting).
+El exportador declara Apache-2.0 y el modelo original MIT en sus fichas. Huella:
+`de31ffa5ba26916b8ea35319f6c12151ff9654d4261bccf0583a69bb095315f9`.
+No se cambiaron ni descargaron pesos adicionales. La limpieza sigue siendo
+local y no utiliza tokens ni créditos de Alibaba u otra API.

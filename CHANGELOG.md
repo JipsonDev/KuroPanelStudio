@@ -1,5 +1,25 @@
 # Historial de cambios
 
+## 0.2.13 — limpieza, pegado de guion y exportación
+
+- Las tarjetas de Guión se actualizan sin recrear todos los editores. Conservan el cursor, el foco y el historial de deshacer cuando su contenido no cambia.
+- La cola conserva su selección en los refrescos sin cambios y limita el texto de las vistas previas; la traducción completa sigue disponible en el proyecto y en la ayuda emergente.
+- Al editar o pegar una traducción, el lienzo muestra una vista previa inmediata y agrupa la composición final tras 180 ms sin nuevas ediciones.
+- Corregido `attempt to get argmax of an empty sequence` al exportar cajas que cruzan los bordes de la página. La composición conserva el tamaño solicitado y el resultado se recorta al tamaño de la imagen.
+- Pruebas de exportación PNG, JPG, WebP y PSD con cajas parcialmente y completamente fuera de página, y de conservación del cursor, deshacer, filtros y cola.
+- Medición local con 500 diálogos: refresco sin cambios de aproximadamente 872 ms a 8 ms. Es una medición del panel, no de toda la edición del capítulo.
+- Verificación: 475 pruebas y 11 subpruebas aprobadas juntas. Este resultado no demuestra que el cierre nativo intermitente de Qt observado en ejecuciones anteriores esté resuelto.
+- Publicación para Windows mediante GitHub Releases, con las mejoras de limpieza de 0.2.12 y las de detección y consumo OCR de 0.2.11 que hasta ahora se distribuían en compilaciones locales.
+
+## 0.2.12 — limpieza de halos, compilación local
+
+- Recuperación de motas y halos grises junto a letras confirmadas, en fondos planos blancos, coloreados y oscuros, sin extender la máscara a marcas alejadas o líneas largas.
+- Estimación del fondo sin incluir texto ya enmascarado y protección del margen de selección y del dibujo próximo.
+- Corrección de degradados tras LaMa más conservadora para preservar reconstrucciones de ilustraciones que cruzan el texto.
+- Caché de máscaras versión 44 y evaluación adicional de contraste tenue en zonas de fondo plano anotadas. En una subzona real, residuos grises de 87 a 0; las siete zonas mantienen cero residuos oscuros con el criterio anterior.
+- Revisión de herramientas de GitHub y confirmación de que el modelo LaMa incluido ya es la variante especializada en manga. Sin nuevas llamadas API, pesos ni dependencias.
+- Verificación: 452 pruebas y 11 subpruebas aprobadas juntas; las siete pruebas de idioma aprobaron por separado. Persiste el cierre nativo de Qt al reunirlas en el mismo proceso, incluso con perfil temporal; documentado en `docs/processing-performance.md`.
+
 ## 0.2.11 — mejoras disponibles en el código fuente y compilación local
 
 - Segunda búsqueda local de texto en globos cerrados que quedaron sin marcar, con una revisión de YOLO a mayor escala solo en esas zonas.

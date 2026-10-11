@@ -60,6 +60,7 @@ class DialogueScriptCard(QFrame):
     def __init__(self, region: dict, index: int, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.region_id = str(region.get("id", f"region-{index}"))
+        self._source_key = (str(region.get("text", "")).strip(), str(region.get("font_role") or "Diálogo"))
         self._updating = False
         self.setObjectName("DialogueScriptCard")
         self.setFrameShape(QFrame.StyledPanel)
@@ -142,6 +143,8 @@ class DialogueScriptCard(QFrame):
             self.text_changed.emit(self.region_id, self.editor.toPlainText().strip())
 
     def set_active(self, active: bool) -> None:
+        if self.property("active") == active:
+            return
         self.setProperty("active", active)
         self.style().unpolish(self)
         self.style().polish(self)
@@ -177,6 +180,7 @@ class ScriptPanel(QScrollArea):
         self.setMinimumWidth(250)
         self.setMaximumWidth(320)
         self._cards: dict[str, DialogueScriptCard] = {}
+        self._pending_translation_texts: tuple[str, ...] | None = None
         self._active_region_id = ""
 
         content = QFrame()
@@ -327,15 +331,27 @@ class ScriptPanel(QScrollArea):
             self.translations_queued.emit(raw)
 
     def set_pending_translations(self, pending: list[dict]) -> None:
+        texts = tuple(str(entry.get("text", "")).strip() for entry in pending)
+        if texts == self._pending_translation_texts:
+            return
+        self._pending_translation_texts = texts
         count = len(pending)
         self.queue_status.setText(f"{count} traducciones pendientes")
         self.btn_clear_queue.setEnabled(bool(count))
-        self.queue_list.clear()
-        for index, entry in enumerate(pending, 1):
-            value = str(entry.get("text", "")).strip()
-            preview = value.replace("\n", " ⏎ ")
-            self.queue_list.addItem(f"{index}. {preview}")
-            self.queue_list.item(index - 1).setToolTip(value)
+        self.queue_list.setUpdatesEnabled(False)
+        try:
+            self.queue_list.clear()
+            previews = []
+            for index, value in enumerate(texts, 1):
+                preview = value[:240].replace("\n", " ⏎ ")
+                if len(value) > 240:
+                    preview += "…"
+                previews.append(f"{index}. {preview}")
+            self.queue_list.addItems(previews)
+            for index, value in enumerate(texts):
+                self.queue_list.item(index).setToolTip(value)
+        finally:
+            self.queue_list.setUpdatesEnabled(True)
         self.queue_list.setVisible(bool(count))
         if count:
             next_text = str(pending[0].get("text", "")).replace("\n", " ").strip()
@@ -346,31 +362,48 @@ class ScriptPanel(QScrollArea):
             self.queue_status.setToolTip("")
 
     def set_regions(self, regions: list[dict], page_index: int = 0) -> None:
-        """Populate the side-by-side list with all dialogue regions on the current page."""
-        # Clear existing cards
-        while self.cards_container.count():
-            item = self.cards_container.takeAt(0)
-            widget = item.widget()
-            if widget is not None:
-                widget.deleteLater()
-        self._cards.clear()
-
+        """Update changed cards, preserving other editors' focus, cursor and undo."""
+        previous = dict(self._cards)
+        cards = {}
         translated_count = 0
-        for index, region in enumerate(regions):
-            card = DialogueScriptCard(region, index)
-            card.selected.connect(self.region_selected.emit)
-            card.text_changed.connect(self.text_edited.emit)
-            card.tab_next_requested.connect(self._handle_tab_jump)
-            card.translate_requested.connect(self._handle_single_translate)
-            self.cards_container.addWidget(card)
-            self._cards[card.region_id] = card
-            if str(region.get("translation") or region.get("applied_text") or "").strip():
-                translated_count += 1
+        updates_enabled = self.widget().updatesEnabled()
+        self.widget().setUpdatesEnabled(False)
+        try:
+            for index, region in enumerate(regions):
+                rid = str(region.get("id", f"region-{index}"))
+                source_key = (str(region.get("text", "")).strip(), str(region.get("font_role") or "Diálogo"))
+                card = previous.pop(rid, None)
+                if card is not None and card._source_key != source_key:
+                    self.cards_container.removeWidget(card)
+                    card.hide()
+                    card.deleteLater()
+                    card = None
+                if card is None:
+                    card = DialogueScriptCard(region, index)
+                    card.selected.connect(self.region_selected.emit)
+                    card.text_changed.connect(self.text_edited.emit)
+                    card.tab_next_requested.connect(self._handle_tab_jump)
+                    card.translate_requested.connect(self._handle_single_translate)
+                else:
+                    card.set_text(str(region.get("translation") or region.get("applied_text") or source_key[0]).strip())
+                    card.badge.setText(f"#{index + 1:02d}")
+                if self.cards_container.indexOf(card) != index:
+                    self.cards_container.insertWidget(index, card)
+                cards[rid] = card
+                card.set_active(rid == self._active_region_id)
+                if str(region.get("translation") or region.get("applied_text") or "").strip():
+                    translated_count += 1
+            for card in previous.values():
+                self.cards_container.removeWidget(card)
+                card.hide()
+                card.deleteLater()
+            self._cards = cards
+            self._filter_cards(self.filter_input.text())
+        finally:
+            self.widget().setUpdatesEnabled(updates_enabled)
 
         total = len(regions)
         self.stats_label.setText(f"{total} diálogos · {translated_count} traducidos")
-        if self._active_region_id and self._active_region_id in self._cards:
-            self._cards[self._active_region_id].set_active(True)
 
     def select_region(self, region_id: str) -> None:
         """Highlight and scroll to the active region's card."""

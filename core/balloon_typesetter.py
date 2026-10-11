@@ -110,6 +110,13 @@ def text_layout_geometry(
             constrained = cv2.bitwise_and(constrained, _safe_rectangle(height, width, padding))
             if np.count_nonzero(constrained) >= max(24, width * height * .08):
                 return (x, y, width, height), constrained
+    # NumPy's negative slicing wraps around the crop and can produce a zero-
+    # width mask for a box moved across a page edge. A partial crop also changes
+    # the user's layout dimensions. Keep that box's full safe rectangle instead
+    # and let the canvas/export compositor clip the painted text to the page.
+    if (x < 0 or y < 0 or x + width > search_rgb.shape[1]
+            or y + height > search_rgb.shape[0]):
+        return (x, y, width, height), _safe_rectangle(height, width, padding)
     local = search_rgb[y:y + height, x:x + width]
     return (x, y, width, height), detect_balloon_interior(local, padding)
 
@@ -253,6 +260,8 @@ def line_intervals(
     """Measure full glyph bands around the detected interior's own centre."""
     binary = np.asarray(mask) > 0
     height, width = binary.shape
+    if min(height, width) == 0:
+        return []
     left_bound, top_bound, right_bound, bottom_bound = bounds or usable_mask_bounds(mask)
     centre_x = (left_bound + right_bound) / 2.0
     centre_y = (top_bound + bottom_bound) / 2.0
@@ -285,6 +294,8 @@ def line_intervals(
 def _central_row_limits(binary: np.ndarray, centre_x: float) -> tuple[np.ndarray, np.ndarray]:
     """Measure the safe central run once, then reuse it for every line band."""
     height, width = binary.shape
+    if min(height, width) == 0:
+        return np.full(height, width, dtype=int), np.zeros(height, dtype=int)
     middle = max(0, min(width - 1, int(round(centre_x - 0.5))))
     left_half = binary[:, :middle + 1][:, ::-1]
     right_half = binary[:, middle:]

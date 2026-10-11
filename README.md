@@ -212,7 +212,7 @@ que puedas compartir legalmente.
 La aplicación instalable se construye con:
 
 ```powershell
-.\build_windows.ps1 -Version 0.2.9
+.\build_windows.ps1 -Version 0.2.13
 ```
 
 La edición compacta CPU-first se construye con:
@@ -224,12 +224,12 @@ La edición compacta CPU-first se construye con:
 Para crear el instalador x64 con Inno Setup 6:
 
 ```powershell
-.\build_installer.ps1 -Version 0.2.9
+.\build_installer.ps1 -Version 0.2.13
 ```
 
-El instalador para GitHub se genera en `github-release/KuroPanelStudio-v0.2.9/`.
+El instalador para GitHub se genera en `github-release/KuroPanelStudio-v0.2.13/`.
 Usa `-LocalOnly` en ambos comandos para generar un instalador local registrado en
-`local-builds/KuroPanelStudio-v0.2.9/`.
+`local-builds/KuroPanelStudio-v0.2.13/`.
 En GitHub, una etiqueta `vX.Y.Z` inicia el flujo de Windows que compila,
 prueba y adjunta el instalador y las notas de cambios a la Release sin subirlos manualmente.
 Consulta [la guía de publicación](docs/actualizaciones.md).

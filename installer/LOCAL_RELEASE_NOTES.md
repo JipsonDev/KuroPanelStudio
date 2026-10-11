@@ -1,5 +1,23 @@
 # KuroPanel Studio @VERSION@
 
+## Pegado de guion y exportación de imágenes
+
+- Guión actualiza las tarjetas existentes y conserva el cursor, el foco y deshacer cuando el contenido no cambia. Evita reconstruir toda la lista con cada refresco.
+- La cola conserva su selección si no ha cambiado. Los párrafos largos tienen una vista previa corta y una ayuda emergente con el texto completo.
+- Pegar o editar una traducción muestra una vista previa inmediata en el lienzo. La composición final y los efectos se agrupan tras 180 ms sin nuevas ediciones.
+- Corregido el error `attempt to get argmax of an empty sequence` al guardar imágenes con cajas movidas fuera de un borde. Se conserva el tamaño de la caja y se recorta el dibujo al tamaño de la página.
+- Exportación verificada en PNG, JPG, WebP y PSD. Con 500 diálogos, el refresco del panel sin cambios bajó de unos 872 ms a 8 ms en la medición local.
+- Verificación de esta compilación: 475 pruebas y 11 subpruebas aprobadas juntas. El cierre nativo de Qt observado de forma intermitente en pruebas anteriores sigue sin una causa confirmada.
+
+## Limpieza de halos y conservación del dibujo
+
+- La máscara recupera motas grises y halos de compresión muy próximos a letras confirmadas, también sobre fondos planos coloreados y oscuros. Conserva las marcas alejadas, las líneas largas y el margen de selección.
+- El color de fondo se estima excluyendo el texto ya enmascarado, para evitar errores con diálogos densos.
+- La corrección de degradados después de LaMa exige más evidencia del contexto. Si una ilustración cruza el texto, conserva la reconstrucción neuronal cuando el fondo no es suficientemente uniforme.
+- En la subzona blanca real anotada, los residuos grises bajaron de 87 píxeles a 0 frente a la compilación anterior. Las siete zonas mantienen cero residuos oscuros según el criterio de contraste anterior; quedan irregularidades en un borde gris superpuesto y los resultados necesitan revisión visual.
+- La app ya usa LaMa especializado en manga; estas mejoras no descargan más modelos ni consumen créditos de API. La caché de máscaras se recalcula con versión 44.
+- Verificación: 452 pruebas y 11 subpruebas aprobadas; las siete pruebas de idioma aprobaron por separado. La ejecución conjunta presenta todavía un cierre nativo de Qt en una prueba de idioma, incluso con preferencias temporales. La causa no está resuelta.
+
 ## Detección, consumo OCR y restos de letras
 
 - Una segunda búsqueda local revisa los globos cerrados con tinta que no quedaron cubiertos por las cajas iniciales. Solo esas zonas pasan de nuevo por YOLO, a una escala más útil para letras pequeñas.
@@ -8,7 +26,7 @@
 - Dos recortes idénticos comparten una sola petición, incluso entre páginas o después de reiniciar. La relectura explícita sigue haciendo una petición nueva.
 - Las respuestas cortadas por el límite de salida se muestran como error, no se guardan como una lectura completa ni se repiten automáticamente.
 - La limpieza completa también pequeños restos grises, coloreados o claros sobre fondo oscuro cuando pertenecen a una letra ya casi cubierta por la máscara. Rechaza textura y componentes aislados.
-- Validación local: 448 pruebas y 11 subpruebas aprobadas, incluidos cinco recortes reales y siete globos anotados. Cero residuos oscuros en las zonas de texto medidas; el resultado puede necesitar retoques de huellas grises o dibujo superpuesto.
+- La validación incluye cinco recortes reales y siete globos anotados. Cero residuos oscuros en las zonas de texto medidas; el resultado puede necesitar retoques de dibujo superpuesto.
 
 ## OCR, limpieza y revisión visual
 

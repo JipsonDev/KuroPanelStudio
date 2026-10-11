@@ -1502,7 +1502,9 @@ class MainWindow(QMainWindow):
                         idx, str(reg.get("text", "")), str(new_text),
                         int(reg.get("number", idx + 1)),
                     )
-                self._schedule_text_render(immediate=True, indices=[idx])
+                if not reg.get("style", {}).get("sfx_enabled", False):
+                    self.canvas_shell.canvas.preview_text_value(idx, str(new_text), reg)
+                self._schedule_text_render(indices=[idx], delay_ms=180)
                 self._history_timer.start()
                 break
 
@@ -2473,7 +2475,9 @@ class MainWindow(QMainWindow):
         # release. Scheduling it again caused a visible double redraw.
         self._history_timer.start()
 
-    def _schedule_text_render(self, immediate: bool = False, indices: list[int] | None = None) -> None:
+    def _schedule_text_render(
+        self, immediate: bool = False, indices: list[int] | None = None, delay_ms: int = 8,
+    ) -> None:
         if indices is None:
             self._pending_text_render_all = True
             self._pending_text_render_indices.clear()
@@ -2483,7 +2487,7 @@ class MainWindow(QMainWindow):
             self._text_render_timer.stop()
             self._render_active_text()
         else:
-            self._text_render_timer.start(8)
+            self._text_render_timer.start(delay_ms)
 
     def _render_active_text(self) -> None:
         if not self.project.pages or self._restoring_state:

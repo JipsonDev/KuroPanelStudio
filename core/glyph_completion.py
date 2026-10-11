@@ -3,6 +3,68 @@ import cv2
 import numpy as np
 
 
+def complete_soft_text_halos(rgb, mask, selection):
+    """Complete faint fringes immediately beside confirmed ink on flat colour.
+
+    Compression can leave disconnected, nearly background-coloured dots after
+    ordinary glyph dilation. Admit only small low-contrast components within
+    six pixels of approved ink. Never grow a whole selection or follow a line
+    attached to unapproved high-contrast artwork.
+    """
+    if rgb.shape[:2] != mask.shape or mask.shape != selection.shape:
+        return mask
+    if not np.any(mask) or not np.any(selection):
+        return mask
+    # Work on the selected crop, not the whole page/context for every glyph.
+    sx, sy, sw, sh = cv2.boundingRect(selection)
+    image = rgb[sy:sy + sh, sx:sx + sw].astype(np.int16)
+    hard = mask[sy:sy + sh, sx:sx + sw] > 0
+    selected = selection[sy:sy + sh, sx:sx + sw] > 0
+    background_pixels = selected & ~hard
+    if np.count_nonzero(background_pixels) < max(96, np.count_nonzero(selected) * .15):
+        return mask
+    background = np.median(image[background_pixels], axis=0)
+    difference = np.max(np.abs(image - background), axis=2)
+    # A real flat-colour peak, rather than a broad gradient or screentone.
+    if np.mean(difference[background_pixels] <= 3) < .68:
+        return mask
+    safe = cv2.erode(
+        selected.astype(np.uint8), np.ones((5, 5), np.uint8),
+        borderType=cv2.BORDER_CONSTANT, borderValue=0,
+    ) > 0
+    near = cv2.dilate(
+        hard.astype(np.uint8),
+        cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (13, 13)),
+    ) > 0
+    art_guard = cv2.dilate(
+        ((difference > 48) & ~hard).astype(np.uint8),
+        cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5)),
+    ) > 0
+    soft = ((difference > 3) & (difference <= 48) & ~hard & selected).astype(np.uint8)
+    count, labels, stats, _ = cv2.connectedComponentsWithStats(soft, 8)
+    additions = np.zeros_like(soft)
+    max_area = max(96, min(320, int(sw * sh * .03)))
+    max_side = max(24, min(72, int(min(sw, sh) * .8)))
+    eligible = near & safe & ~art_guard
+    for label in range(1, count):
+        x, y, width, height, area = (int(value) for value in stats[label])
+        if area > max_area or max(width, height) > max_side:
+            continue
+        component = labels[y:y + height, x:x + width] == label
+        local_eligible = eligible[y:y + height, x:x + width]
+        # Reject whole components crossing a border, instead of trimming them
+        # into smaller, seemingly plausible fragments.
+        if np.count_nonzero(component & local_eligible) < area:
+            continue
+        additions[y:y + height, x:x + width][component] = 255
+    if not np.any(additions):
+        return mask
+    result = mask.copy()
+    np.maximum(result[sy:sy + sh, sx:sx + sw], additions,
+               out=result[sy:sy + sh, sx:sx + sw])
+    return result
+
+
 def complete_boundary_glyphs(rgb, mask, selection, locator=None):
     """Follow small ink components across box edges on uniform backgrounds.
 
