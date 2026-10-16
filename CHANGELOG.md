@@ -1,5 +1,14 @@
 # Historial de cambios
 
+## 0.2.15 — tamaño y distribución de marcas de agua
+
+- El tamaño y la alineación se calculan sobre el contenido visible del PNG; se puede conservar el borde transparente desactivando «Medir solo el logo visible».
+- Tamaño uniforme entre páginas del mismo ancho en un capítulo. Los cortes demasiado cortos quedan sin marca en lugar de recibir una miniatura.
+- Control de distancia aproximada entre centros para la cantidad automática, independiente del espacio libre mínimo entre logos.
+- Modo «Adaptar al espacio libre»: busca otro lado dentro de la misma zona cuando el texto bloquea la ubicación elegida, conservando la separación continua entre páginas.
+- Tamaño y alineación accesibles sin desplegar opciones avanzadas, resumen de dimensiones finales y total de marcas del capítulo, y textos nuevos en español e inglés.
+- Verificación local: 513 pruebas y 11 subpruebas aprobadas; incluye 17 casos nuevos de geometría, reparto, interfaz y coincidencia entre lienzo y exportación.
+
 ## 0.2.14 — composición al exportar
 
 - La exportación conserva las medidas, líneas, centrado y posición finales del lienzo. Corrige el texto más pequeño causado por interpretar puntos tipográficos como píxeles.

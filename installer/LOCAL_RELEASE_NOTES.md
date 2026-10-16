@@ -1,5 +1,15 @@
 # KuroPanel Studio @VERSION@
 
+## Tamaño y distribución de marcas de agua
+
+- «Medir solo el logo visible» ignora el borde transparente del PNG para que el ancho y la alineación correspondan al logo. Puedes desactivarlo para conservar ese borde.
+- En el reparto continuo, las páginas del mismo ancho mantienen el tamaño del logo. Si un corte es demasiado corto, se omite la marca sin reducirla a una miniatura.
+- «Distancia entre centros» permite ajustar la densidad automática del capítulo; el valor «Automática» conserva el cálculo según las dimensiones. La separación mínima sigue protegiendo el espacio libre entre logos.
+- «Adaptar al espacio libre» busca otro lado dentro de la misma zona si una caja de texto bloquea la posición. Se mantienen los modos de columna y alternado.
+- Tamaño y alineación visibles en el editor, dimensiones finales en píxeles y cantidad real calculada para el capítulo. Los controles numéricos esperan a confirmar la cifra antes de recalcular.
+- Para reemplazar posiciones manuales previas por el nuevo reparto, pulsa «Redistribuir todo el capítulo» y «Todo el capítulo» para aplicarlo.
+- Verificación: 513 pruebas y 11 subpruebas aprobadas. La comparación de vista previa y exportación incluye transparencias y rotaciones de 0°, 30° y 90°.
+
 ## Composición de texto al exportar
 
 - Corregido el texto más pequeño al guardar: la exportación conserva el tamaño, las líneas y el centrado que muestra el lienzo.

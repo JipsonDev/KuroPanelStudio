@@ -457,6 +457,24 @@ ES_TO_EN = {
     "Configuración OCR": "OCR settings",
     "Guardar cambios": "Save changes", "Cancelar": "Cancel",
     "Marca de agua": "Watermark",
+    "Medir solo el logo visible": "Measure visible logo only",
+    "Adaptar al espacio libre": "Adapt to free space",
+    "Márgenes y apariencia": "Margins and appearance",
+    "DISTANCIA ENTRE CENTROS": "DISTANCE BETWEEN CENTERS",
+    "Automática": "Automatic",
+    "Sin reparto calculado": "No layout calculated",
+    "Abre una página para ver el tamaño final.": "Open a page to see the final size.",
+    "Sin logo visible. Selecciona un PNG con contenido.": "No visible logo. Select a PNG with content.",
+    "El PNG no contiene un logo visible.": "The PNG contains no visible logo.",
+    "Ignora el borde transparente del PNG al calcular el tamaño y la alineación.":
+        "Ignore the transparent PNG border when calculating size and alignment.",
+    "Distancia aproximada entre centros de marcas. Cero calcula una distancia según el ancho del capítulo.":
+        "Approximate distance between watermark centers. Zero calculates a distance from chapter width.",
+    "Adaptar busca otro lado en la misma zona si una caja de texto bloquea la posición elegida.":
+        "Adapt tries another side in the same area if a text box blocks the chosen position.",
+    "Arriba izquierda": "Top left", "Arriba centro": "Top center", "Arriba derecha": "Top right",
+    "Centro izquierda": "Middle left", "Centro derecha": "Middle right",
+    "Abajo izquierda": "Bottom left", "Abajo centro": "Bottom center", "Abajo derecha": "Bottom right",
     "Seleccionar PNG…": "Select PNG…", "Sin archivo seleccionado": "No file selected",
     "Repartir por el capítulo completo": "Distribute across the entire chapter",
     "Cantidad automática según la altura del capítulo": "Automatic count based on chapter height",
@@ -811,6 +829,10 @@ ES_TO_EN.update({
 
 
 PATTERNS = (
+    (r"^Tamaño final: (\d+) × (\d+) px · página (\d+) × (\d+) px$",
+     r"Final size: \1 × \2 px · page \3 × \4 px"),
+    (r"^(\d+) marca\(s\) en el capítulo\. Las zonas sin espacio pueden quedar sin marca\.$",
+     r"\1 watermark(s) in chapter. Areas without room may remain unmarked."),
     (r"^(\d+) traducciones pendientes$", r"\1 pending translations"),
     (r"^Editando capa (\d+) · los cambios se ven en tiempo real$",
      r"Editing layer \1 · changes appear live"),

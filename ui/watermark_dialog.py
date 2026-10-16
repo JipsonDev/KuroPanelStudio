@@ -10,7 +10,7 @@ from PySide6.QtWidgets import (
     QVBoxLayout, QWidget,
 )
 
-from core.watermark_manager import DEFAULT_WATERMARK, normalized_watermark
+from core.watermark_manager import normalized_watermark, prepare_watermark
 from ui.widgets.controls import ModernButton, SectionTitle, CollapsibleSection
 
 
@@ -38,14 +38,14 @@ class WatermarkDialog(QDialog):
         self.setModal(False)
         self.setAttribute(Qt.WA_DeleteOnClose, False)
         self.setAcceptDrops(True)
-        self.resize(430, 720)
+        self.resize(460, 780)
         self._loading = False
         self._settings = normalized_watermark(settings)
 
         outer = QVBoxLayout(self); outer.setContentsMargins(0, 0, 0, 0)
         scroll = QScrollArea(); scroll.setWidgetResizable(True); scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         content = QFrame(); content.setObjectName("AIPanel"); scroll.setWidget(content); outer.addWidget(scroll, 1)
-        root = QVBoxLayout(content); root.setContentsMargins(14, 14, 14, 14); root.setSpacing(9)
+        root = QVBoxLayout(content); root.setContentsMargins(16, 16, 16, 16); root.setSpacing(12)
         root.addWidget(SectionTitle("Archivo PNG"))
         self.drop_zone = QLabel("Arrastra un PNG aquí\no pulsa para seleccionarlo")
         self.drop_zone.setObjectName("WatermarkDropZone")
@@ -57,23 +57,75 @@ class WatermarkDialog(QDialog):
         self.source_label = QLabel("Sin archivo seleccionado")
         self.source_label.setObjectName("Muted"); self.source_label.setWordWrap(True); root.addWidget(self.source_label)
 
+        root.addWidget(SectionTitle("Tamaño"))
+        self.size_mode = QComboBox()
+        self.size_mode.setProperty("kuro_i18n_choices", True)
+        self.size_mode.addItem("Porcentaje del ancho de página", "percent")
+        self.size_mode.addItem("Ancho exacto en píxeles", "pixels")
+        root.addWidget(self.size_mode)
+        self.scale_percent = self._spin(1, 100, " %")
+        self.width_px = self._spin(8, 20000, " px")
+        self.scale_label = QLabel("PORCENTAJE"); self.scale_label.setBuddy(self.scale_percent)
+        self.width_label = QLabel("ANCHO EXACTO"); self.width_label.setBuddy(self.width_px)
+        self.scale_percent.setAccessibleName("Porcentaje del ancho de página")
+        self.width_px.setAccessibleName("Ancho exacto en píxeles")
+        root.addWidget(self.scale_label); root.addWidget(self.scale_percent)
+        root.addWidget(self.width_label); root.addWidget(self.width_px)
+        self.trim_transparent = QCheckBox("Medir solo el logo visible")
+        self.trim_transparent.setToolTip("Ignora el borde transparente del PNG al calcular el tamaño y la alineación.")
+        root.addWidget(self.trim_transparent)
+        self.size_summary = QLabel("Abre una página para ver el tamaño final.")
+        self.size_summary.setObjectName("Muted"); self.size_summary.setWordWrap(True)
+        root.addWidget(self.size_summary)
+        self.size_mode.currentIndexChanged.connect(self._update_size_visibility)
+
+        root.addWidget(SectionTitle("Posición y alineación"))
+        anchor_grid = QGridLayout(); anchor_grid.setSpacing(6)
+        self.anchor_group = QButtonGroup(self); self.anchor_group.setExclusive(True)
+        self.anchor_buttons: dict[str, QPushButton] = {}
+        for index, (label, name) in enumerate(ANCHORS):
+            button = QPushButton(label); button.setCheckable(True); button.setMinimumHeight(34)
+            label_es = ("Arriba izquierda", "Arriba centro", "Arriba derecha",
+                        "Centro izquierda", "Centro", "Centro derecha",
+                        "Abajo izquierda", "Abajo centro", "Abajo derecha")[index]
+            button.setToolTip(label_es); button.setAccessibleName(label_es)
+            button.setFocusPolicy(Qt.StrongFocus)
+            self.anchor_group.addButton(button, index); self.anchor_buttons[name] = button
+            anchor_grid.addWidget(button, index // 3, index % 3)
+        self.anchor_group.idClicked.connect(lambda _index: self._emit())
+        root.addLayout(anchor_grid)
+
         root.addWidget(SectionTitle("Distribución"))
         self.repeat = QCheckBox("Repartir por el capítulo completo")
         self.auto_count = QCheckBox("Cantidad automática según la altura del capítulo")
+        self.interval_px = self._spin(0, 100000, " px")
+        self.interval_px.setSpecialValueText("Automática")
+        self.interval_px.setToolTip("Distancia aproximada entre centros de marcas. Cero calcula una distancia según el ancho del capítulo.")
         self.repeat_x = self._spin(0, 10000, " px")
         self.repeat_y = self._spin(0, 10000, " px")
         self.repeat_count = self._spin(1, 100, " marca(s)")
         root.addWidget(self.repeat)
         self.distribution = QComboBox()
+        self.distribution.setProperty("kuro_i18n_choices", True)
         self.distribution.addItem("Columna alineada", "column")
         self.distribution.addItem("Alternar izquierda y derecha", "alternating")
+        self.distribution.addItem("Adaptar al espacio libre", "adaptive")
+        self.distribution.setToolTip("Adaptar busca otro lado en la misma zona si una caja de texto bloquea la posición elegida.")
         root.addWidget(self.distribution)
         self.minimum_gap = self._spin(0, 10000, " px")
         root.addWidget(QLabel("SEPARACIÓN MÍNIMA ENTRE MARCAS")); root.addWidget(self.minimum_gap)
         root.addWidget(self.auto_count)
-        root.addWidget(QLabel("CANTIDAD TOTAL EN EL CAPÍTULO")); root.addWidget(self.repeat_count)
+        self.interval_label = QLabel("DISTANCIA ENTRE CENTROS"); self.interval_label.setBuddy(self.interval_px)
+        self.count_label = QLabel("CANTIDAD TOTAL EN EL CAPÍTULO"); self.count_label.setBuddy(self.repeat_count)
+        self.interval_px.setAccessibleName("DISTANCIA ENTRE CENTROS")
+        self.repeat_count.setAccessibleName("CANTIDAD TOTAL EN EL CAPÍTULO")
+        root.addWidget(self.interval_label); root.addWidget(self.interval_px)
+        root.addWidget(self.count_label); root.addWidget(self.repeat_count)
         repeat_hint = QLabel("Las páginas forman una tira continua: la separación se mantiene entre archivos. La cantidad es para todo el capítulo, no para cada página.")
         repeat_hint.setObjectName("Muted"); repeat_hint.setWordWrap(True); root.addWidget(repeat_hint)
+        self.plan_summary = QLabel("Sin reparto calculado")
+        self.plan_summary.setObjectName("FontAssignmentStatus")
+        self.plan_summary.setWordWrap(True); root.addWidget(self.plan_summary)
         self.avoid_text = QCheckBox("Evitar cajas de texto detectadas")
         root.addWidget(self.avoid_text)
         self.seam_safe = QCheckBox("Dejar espacio en las uniones de páginas")
@@ -92,33 +144,10 @@ class WatermarkDialog(QDialog):
         self.redistribute_chapter.setToolTip("Reemplaza las posiciones manuales por un reparto continuo del capítulo.")
         self.redistribute_chapter.clicked.connect(self.redistribute_chapter_requested.emit)
         root.addWidget(self.redistribute_chapter)
-        self.advanced = CollapsibleSection("Tamaño, posición y apariencia")
+        self.advanced = CollapsibleSection("Márgenes y apariencia")
         root.addWidget(self.advanced)
         main_root = root
         root = self.advanced.body_layout
-
-        root.addWidget(SectionTitle("Tamaño"))
-        self.size_mode = QComboBox()
-        self.size_mode.addItem("Porcentaje del ancho de página", "percent")
-        self.size_mode.addItem("Ancho exacto en píxeles", "pixels")
-        root.addWidget(self.size_mode)
-        self.scale_percent = self._spin(1, 100, " %")
-        self.width_px = self._spin(8, 20000, " px")
-        root.addWidget(QLabel("PORCENTAJE")); root.addWidget(self.scale_percent)
-        root.addWidget(QLabel("ANCHO EXACTO")); root.addWidget(self.width_px)
-        self.size_mode.currentIndexChanged.connect(self._update_size_visibility)
-
-        root.addWidget(SectionTitle("Posición y alineación"))
-        anchor_grid = QGridLayout(); anchor_grid.setSpacing(6)
-        self.anchor_group = QButtonGroup(self); self.anchor_group.setExclusive(True)
-        self.anchor_buttons: dict[str, QPushButton] = {}
-        for index, (label, name) in enumerate(ANCHORS):
-            button = QPushButton(label); button.setCheckable(True); button.setMinimumHeight(34)
-            button.setToolTip(name.replace("-", " ").title())
-            self.anchor_group.addButton(button, index); self.anchor_buttons[name] = button
-            anchor_grid.addWidget(button, index // 3, index % 3)
-        self.anchor_group.idClicked.connect(lambda _index: self._emit())
-        root.addLayout(anchor_grid)
         self.margin_x = self._spin(0, 10000, " px")
         self.margin_y = self._spin(0, 10000, " px")
         self.offset_x = self._spin(-20000, 20000, " px")
@@ -135,6 +164,7 @@ class WatermarkDialog(QDialog):
         self.opacity = self._spin(0, 100, " %")
         self.rotation = self._spin(-180, 180, "°")
         self.blend = QComboBox()
+        self.blend.setProperty("kuro_i18n_choices", True)
         for label, value in (("Normal", "normal"), ("Multiplicar", "multiply"), ("Pantalla", "screen"), ("Superponer", "overlay")):
             self.blend.addItem(label, value)
         root.addWidget(QLabel("OPACIDAD")); root.addWidget(self.opacity)
@@ -169,6 +199,7 @@ class WatermarkDialog(QDialog):
             self.offset_x, self.offset_y, self.keep_inside, self.opacity, self.rotation,
             self.blend, self.repeat, self.auto_count, self.repeat_count, self.avoid_text, self.seam_safe,
             self.distribution, self.minimum_gap,
+            self.interval_px, self.trim_transparent,
         ]
         self.repeat.toggled.connect(self._update_size_visibility)
         self.auto_count.toggled.connect(self._update_size_visibility)
@@ -179,7 +210,8 @@ class WatermarkDialog(QDialog):
 
     @staticmethod
     def _spin(low: int, high: int, suffix: str) -> QSpinBox:
-        field = QSpinBox(); field.setRange(low, high); field.setSuffix(suffix); field.setMinimumHeight(34)
+        field = QSpinBox(); field.setRange(low, high); field.setSuffix(suffix); field.setMinimumHeight(36)
+        field.setKeyboardTracking(False)
         return field
 
     def set_settings(self, settings: dict) -> None:
@@ -197,6 +229,8 @@ class WatermarkDialog(QDialog):
         self.seam_safe.setChecked(config["seam_safe"])
         self.distribution.setCurrentIndex(self.distribution.findData(config["distribution"]))
         self.minimum_gap.setValue(config["minimum_gap"])
+        self.interval_px.setValue(config["interval_px"])
+        self.trim_transparent.setChecked(config["trim_transparent"])
         self.preview_visible.setChecked(True)
         self.anchor_buttons[config["anchor"]].setChecked(True)
         self._update_source_preview(); self._update_size_visibility(); self._loading = False
@@ -211,6 +245,7 @@ class WatermarkDialog(QDialog):
             "keep_inside": self.keep_inside.isChecked(), "opacity": self.opacity.value(),
             "rotation": self.rotation.value(), "blend_mode": self.blend.currentData(),
             "distribution": self.distribution.currentData(), "minimum_gap": self.minimum_gap.value(),
+            "interval_px": self.interval_px.value(), "trim_transparent": self.trim_transparent.isChecked(),
             "repeat": self.repeat.isChecked(), "auto_count": self.auto_count.isChecked(),
             "repeat_spacing_x": self.repeat_x.value(),
             "repeat_spacing_y": self.repeat_y.value(), "repeat_count": self.repeat_count.value(),
@@ -225,10 +260,25 @@ class WatermarkDialog(QDialog):
             distribution += " en esta página · reparto continuo del capítulo"
         self.status.setText(f"Marca {current} · {enabled_count} de {total} página(s) configuradas{distribution}.")
 
+    def set_preview_info(self, page_size: tuple[int, int], settings: dict | None, total_count: int) -> None:
+        """Describe the same resolved logo that the canvas and exporter use."""
+        mark = prepare_watermark(page_size, settings) if settings else None
+        if mark is None:
+            self.size_summary.setText("Sin logo visible. Selecciona un PNG con contenido.")
+        else:
+            self.size_summary.setText(f"Tamaño final: {mark.width} × {mark.height} px · página {page_size[0]} × {page_size[1]} px")
+        self.plan_summary.setText(f"{total_count} marca(s) en el capítulo. Las zonas sin espacio pueden quedar sin marca.")
+
     def _update_size_visibility(self, *_args) -> None:
         percent = self.size_mode.currentData() == "percent"
         self.scale_percent.setEnabled(percent); self.width_px.setEnabled(not percent)
+        self.scale_percent.setVisible(percent); self.scale_label.setVisible(percent)
+        self.width_px.setVisible(not percent); self.width_label.setVisible(not percent)
+        automatic = self.auto_count.isChecked()
+        self.interval_px.setVisible(automatic); self.interval_label.setVisible(automatic)
+        self.repeat_count.setVisible(not automatic); self.count_label.setVisible(not automatic)
         self.auto_count.setEnabled(self.repeat.isChecked())
+        self.interval_px.setEnabled(self.repeat.isChecked() and self.auto_count.isChecked())
         self.repeat_count.setEnabled(self.repeat.isChecked() and not self.auto_count.isChecked())
         self.distribution.setEnabled(self.repeat.isChecked())
         self.minimum_gap.setEnabled(self.repeat.isChecked())
@@ -237,6 +287,7 @@ class WatermarkDialog(QDialog):
     def _emit(self, *_args) -> None:
         if not self._loading:
             self._settings = self.values(); self.settings_changed.emit(dict(self._settings))
+            self._update_source_preview()
 
     def _choose_png(self) -> None:
         filename, _ = QFileDialog.getOpenFileName(self, "Seleccionar marca de agua", "", "PNG con transparencia (*.png)")
@@ -258,7 +309,19 @@ class WatermarkDialog(QDialog):
         payload = self._settings.get("png_bytes", b"")
         image = QImage.fromData(payload, "PNG") if payload else QImage()
         if not image.isNull():
-            pixmap = QPixmap.fromImage(image).scaled(190, 100, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+            preview = prepare_watermark((190, 100), {
+                **self._settings, "size_mode": "pixels", "width_px": 190,
+                "rotation": 0, "opacity": 100, "margin_x": 0, "margin_y": 0,
+                "chapter_fit_height": 100, "keep_inside": True,
+            })
+            if preview is None:
+                self.drop_zone.setPixmap(QPixmap())
+                self.drop_zone.setText("El PNG no contiene un logo visible.")
+                self.source_label.setText(self._settings.get("source_name") or "Marca PNG")
+                return
+            pixels = preview.tobytes()
+            visible_image = QImage(pixels, preview.width, preview.height, preview.width * 4, QImage.Format_RGBA8888).copy()
+            pixmap = QPixmap.fromImage(visible_image)
             self.drop_zone.setPixmap(pixmap)
             self.source_label.setText(f"{self._settings.get('source_name') or 'Marca PNG'} · {image.width()} × {image.height()} px")
         else:

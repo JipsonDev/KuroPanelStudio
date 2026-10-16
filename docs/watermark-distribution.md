@@ -14,9 +14,13 @@ que un logo se corte, pero no reinician la separación ni la alternancia.
 
 1. Abre **Configuración → Marca de agua** y selecciona un PNG.
 2. Activa **Repartir por el capítulo completo**.
-3. Elige **Columna alineada** o **Alternar izquierda y derecha**.
+3. Elige **Columna alineada**, **Alternar izquierda y derecha** o
+   **Adaptar al espacio libre**. El último busca otro lado en la misma zona
+   cuando el texto bloquea la ubicación preferida.
 4. Ajusta la separación mínima, en píxeles de la página original, y la cantidad
-   automática o manual **para el capítulo completo**. La columna usa la alineación de los ajustes avanzados;
+   automática o manual **para el capítulo completo**. En automático, **Distancia
+   entre centros** controla la densidad; cero conserva el cálculo según dimensiones.
+   La columna usa la cuadrícula de alineación visible;
    el modo alternado empieza en el lado seleccionado, o a la derecha si se centra.
 5. Activa **Evitar cajas de texto detectadas** para proteger esas regiones.
    Se aplica también cuando hay una sola marca. Requiere cajas detectadas;
@@ -63,10 +67,10 @@ marcas en total y un hueco mínimo de 690 px.
 - Un clic para seleccionar una marca ya no guarda toda la página como posiciones
   manuales; solo se guardan al desplazar una marca o eliminarla.
 - Mover marcas manualmente y cambiar después la opacidad conserva sus posiciones.
-- El panel usa la paleta oscura neutra; distribución es visible, tamaño/posición/
-  apariencia están plegados y los botones de aplicación quedan fijos abajo.
+- El panel muestra tamaño, alineación y distribución. Márgenes y apariencia
+  quedan plegados; los botones de aplicación permanecen fijos abajo.
 
-Pasaron **367 pruebas y 8 subpruebas**, incluidas 26 regresiones del
+En la verificación inicial pasaron **367 pruebas y 8 subpruebas**, incluidas 26 regresiones del
 reparto entre páginas y las 13 comprobaciones anteriores de
 capacidad, regiones bloqueadas, alternancia, márgenes extremos, logos girados,
 preservación de movimientos manuales y coincidencia entre lienzo y exportación.
@@ -84,3 +88,59 @@ python scripts/preview_chapter_watermarks.py
 
 El script genera ejemplos sintéticos y una captura del diálogo Qt en
 `graphify-out/ui-preview/`, sin cargar documentos del usuario ni llamar a APIs.
+
+
+## Mejoras de 0.2.15 local
+
+## Tamaño y posición
+
+«Medir solo el logo visible» recorta únicamente píxeles completamente
+transparentes antes de medir el ancho. No modifica el PNG original. Se puede
+desactivar para conservar un margen transparente intencional. Un PNG sin
+contenido visible no genera marcas invisibles.
+
+El porcentaje se refiere al ancho de cada página; el modo píxeles conserva el
+ancho solicitado sujeto a los límites de la página. En reparto por capítulo,
+el ajuste de altura usa como referencia la página más alta habilitada del mismo
+ancho, evitando tamaños distintos al cortar una tira. Si una página es demasiado
+corta para ese logo, no se coloca una miniatura. La rotación sigue incluida en
+los límites de tamaño y colocación. Las páginas de anchos distintos pueden
+conservar tamaños distintos en el modo porcentaje.
+
+El tamaño final mostrado incluye la rotación y los límites de ajuste. La cuadrícula
+selecciona la alineación. Márgenes, desplazamientos y apariencia quedan en un
+grupo desplegable separado. Los cambios numéricos se confirman con Enter o al
+abandonar el campo, evitando recalcular el capítulo con cada dígito intermedio.
+
+## Densidad y obstáculos
+
+«Distancia entre centros» determina una cantidad aproximada en modo automático:
+un capítulo de 10.000 píxeles con distancia de 2.500 produce cuatro posiciones
+ideales. Cero utiliza el cálculo automático anterior. La distancia puede variar
+para conservar un logo entero, evitar texto o satisfacer el espacio mínimo.
+La cantidad manual sigue siendo para el capítulo completo.
+
+«Separación mínima» mide el espacio libre entre el final de un logo y el
+principio del siguiente, incluidos los cambios de página.
+
+En «Adaptar al espacio libre», cada marca conserva su zona vertical. Primero
+busca en el lado seleccionado y después prueba otras columnas dentro de esa
+misma zona. Si ninguna posición cabe, se omite; no se traslada a una zona vecina
+ni se apila con sus marcas. La protección utiliza cajas de texto detectadas:
+no reconoce caras, manos ni otros dibujos. El resultado necesita revisión visual.
+
+Las posiciones manuales prevalecen. Para sustituirlas se utiliza «Redistribuir
+todo el capítulo». La vista previa y la exportación consumen el mismo plan y
+la misma preparación del PNG.
+
+## Verificación de 0.2.15 local
+
+El 16 de octubre de 2026 pasó la suite completa: **513 pruebas y 11 subpruebas**.
+Los 17 casos nuevos incluyen PNG con margen transparente, PNG vacío, páginas
+cortas, densidad en capítulos con cortes desiguales, cambio de columna al evitar
+texto, información de la interfaz y traducciones nuevas al inglés.
+
+Tres comparaciones rasterizan el lienzo y componen la imagen final con opacidad
+del 65 % y rotaciones de 0°, 30° y 90°. La diferencia máxima admitida y observada
+en esas pruebas es un nivel por canal. Se usaron imágenes controladas; no se
+evaluó un capítulo concreto ni el PNG original del usuario.

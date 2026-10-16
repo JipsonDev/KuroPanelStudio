@@ -19,6 +19,7 @@ DEFAULT_WATERMARK = {
     "page_positions": {},
     "positions": None,
     "size_mode": "percent",
+    "trim_transparent": True,
     "scale_percent": 14,
     "width_px": 320,
     "opacity": 65,
@@ -32,6 +33,7 @@ DEFAULT_WATERMARK = {
     "repeat": False,
     "distribution": "column",
     "minimum_gap": 48,
+    "interval_px": 0,
     "auto_count": True,
     "repeat_count": 3,
     "repeat_spacing_x": 0,
@@ -87,9 +89,11 @@ def normalized_watermark(value: dict | None) -> dict:
     if result["blend_mode"] not in {"normal", "multiply", "screen", "overlay"}:
         result["blend_mode"] = "normal"
     result["distribution"] = str(result.get("distribution", "column"))
-    if result["distribution"] not in {"column", "alternating"}:
+    if result["distribution"] not in {"column", "alternating", "adaptive"}:
         result["distribution"] = "column"
     result["minimum_gap"] = max(0, min(10000, int(result.get("minimum_gap", 48))))
+    result["interval_px"] = max(0, min(100000, int(result.get("interval_px", 0))))
+    result["trim_transparent"] = bool(result.get("trim_transparent", True))
     result["repeat"] = bool(result.get("repeat", False))
     result["auto_count"] = bool(result.get("auto_count", True))
     result["repeat_count"] = max(1, min(100, int(result.get("repeat_count", 3))))
@@ -108,11 +112,11 @@ def normalized_watermark(value: dict | None) -> dict:
     return result
 
 
-def automatic_watermark_count(page_size: tuple[int, int], mark_size: tuple[int, int]) -> int:
+def automatic_watermark_count(page_size: tuple[int, int], mark_size: tuple[int, int], interval_px: int = 0) -> int:
     """Return a conservative count for regular pages and very long webtoons."""
     page_width, page_height = page_size
     _mark_width, mark_height = mark_size
-    target_interval = max(1600.0, page_width * 2.5, mark_height * 8.0)
+    target_interval = max(1, interval_px) if interval_px else max(1600.0, page_width * 2.5, mark_height * 8.0)
     return max(1, min(12, int(round(page_height / target_interval))))
 
 
@@ -155,6 +159,11 @@ def prepare_watermark(page_size: tuple[int, int], value: dict | None) -> Image.I
     source = load_watermark_image(config)
     if source is None or source.width <= 0 or source.height <= 0:
         return None
+    ink = source.getchannel("A").getbbox()
+    if ink is None:
+        return None
+    if config["trim_transparent"]:
+        source = source.crop(ink)
     page_width, _page_height = page_size
     target_width = (
         max(1, round(page_width * config["scale_percent"] / 100.0))
@@ -167,7 +176,10 @@ def prepare_watermark(page_size: tuple[int, int], value: dict | None) -> Image.I
     if config["keep_inside"]:
         # Rotation can make the requested width taller than a short page.
         available_width = max(1, page_width - 2 * min(config["margin_x"], (page_width - 1) // 2))
-        available_height = max(1, _page_height - 2 * min(config["margin_y"], (_page_height - 1) // 2))
+        # Resolved chapter marks share one size; short file cuts must not
+        # create miniature logos. The planner skips pages that cannot fit one.
+        fit_height = max(_page_height, int(config.get("chapter_fit_height", _page_height)))
+        available_height = max(1, fit_height - 2 * min(config["margin_y"], (fit_height - 1) // 2))
         source.thumbnail((available_width, available_height), Image.Resampling.LANCZOS)
     if config["opacity"] < 100:
         source.putalpha(source.getchannel("A").point(lambda alpha: alpha * config["opacity"] // 100))
@@ -202,10 +214,29 @@ def watermark_positions(
         if not config["keep_inside"]:
             lower += config["offset_y"]
             upper += config["offset_y"]
-        count = automatic_watermark_count(page_size, mark_size) if config["auto_count"] else config["repeat_count"]
+        count = automatic_watermark_count(page_size, mark_size, config["interval_px"]) if config["auto_count"] else config["repeat_count"]
         gap = config["minimum_gap"]
         count = min(count, 1 + (upper - lower) // max(1, mark_height + gap))
         regions = config["avoid_regions"] if config["avoid_text"] else []
+        if config["distribution"] == "adaptive":
+            columns = list(dict.fromkeys((x, left, right, (page_width - mark_width) // 2)))
+            pitch = page_height / max(1, count)
+            placed = []
+            floor = lower
+            for index in range(count):
+                ideal = (index + .5) * pitch - mark_height / 2
+                ideal += max(-pitch * .25, min(config["offset_y"], pitch * .25))
+                bounds = (max(lower, floor, round(ideal - pitch * .25)),
+                          min(upper, round(ideal + pitch * .25)))
+                if bounds[0] > bounds[1]:
+                    continue
+                for column in columns:
+                    point = balanced_positions([column], [ideal], bounds, mark_size, regions, gap)
+                    if point:
+                        placed.extend(point)
+                        floor = point[0][1] + mark_height + gap
+                        break
+            return placed
         # Reduce only when no complete placement exists, then redistribute the
         # remaining count over the full usable height instead of dropping a slot.
         for number in range(count, 0, -1):

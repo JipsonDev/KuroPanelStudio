@@ -45,7 +45,7 @@ from core.translation_manager import TranslationManager
 from core.typography_manager import DEFAULT_STYLE, EFFECT_STYLE_KEYS, TypographyManager
 from core.workers import ModelTask
 from core.workflow_status import page_workflow_status
-from core.watermark_manager import normalized_watermark, watermark_bytes
+from core.watermark_manager import normalized_watermark, watermark_bytes, prepare_watermark, watermark_positions
 from core.chapter_watermarks import chapter_watermark_settings
 from ui.ai_panel import AIOptionsPanel
 from ui.canvas_view import CanvasShell
@@ -2884,7 +2884,7 @@ class MainWindow(QMainWindow):
             "png_bytes", "size_mode", "scale_percent", "width_px", "anchor",
             "margin_x", "margin_y", "offset_x", "offset_y", "rotation",
             "repeat", "auto_count", "repeat_count", "avoid_text", "seam_safe", "keep_inside",
-            "distribution", "minimum_gap",
+            "distribution", "minimum_gap", "interval_px", "trim_transparent",
         }
         if self.project.pages and any(previous.get(key) != updated.get(key) for key in geometry_keys):
             updated["page_positions"].pop(self.project.active_page.name, None)
@@ -3031,12 +3031,26 @@ class MainWindow(QMainWindow):
         current_name = self.project.active_page.name
         enabled = current_name in self.watermark_settings.get("enabled_pages", [])
         visible = bool(force or enabled)
-        preview_settings = self._chapter_watermarks(preview=force).get(current_name)
+        plan = self._chapter_watermarks(preview=force)
+        preview_settings = plan.get(current_name)
         self.canvas_shell.canvas.set_watermark(preview_settings, visible, current_name)
         if self.watermark_dialog is not None:
             self.watermark_dialog.set_scope_status(
                 enabled, len(self.watermark_settings.get("enabled_pages", [])), len(self.project.pages),
                 len(self.canvas_shell.canvas._watermark_items),
+            )
+            total_count = 0
+            for page in self.project.pages:
+                settings = plan.get(page.name)
+                if settings is not None:
+                    if settings.get("positions") is not None:
+                        total_count += len(settings["positions"])
+                        continue
+                    mark = prepare_watermark((page.width, page.height), settings)
+                    if mark is not None:
+                        total_count += len(watermark_positions((page.width, page.height), mark.size, settings))
+            self.watermark_dialog.set_preview_info(
+                (self.project.active_page.width, self.project.active_page.height), preview_settings, total_count,
             )
 
     def _watermark_for_page(self, page) -> dict | None:

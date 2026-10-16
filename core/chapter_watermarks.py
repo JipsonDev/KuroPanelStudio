@@ -18,6 +18,11 @@ def chapter_watermark_settings(pages: list[dict], value: dict) -> dict[str, dict
     prepared = {}
     rows = []
     total = 0
+    reference_heights = {}
+    for page in pages:
+        if page["name"] in enabled:
+            width, height = int(page["width"]), int(page["height"])
+            reference_heights[width] = max(height, reference_heights.get(width, 0))
     for page in pages:
         width, height = int(page["width"]), int(page["height"])
         if width <= 0 or height <= 0:
@@ -32,13 +37,14 @@ def chapter_watermark_settings(pages: list[dict], value: dict) -> dict[str, dict
             settings["positions"] = manual
             output[page["name"]] = settings
             continue
-        size = (width, height)
+        settings["chapter_fit_height"] = reference_heights[width]
+        size = (width, reference_heights[width])
         if size not in prepared:
             prepared[size] = prepare_watermark(size, config)
         mark = prepared[size]
         settings.update(positions=[], chapter_resolved=True)
         output[page["name"]] = settings
-        if mark is not None:
+        if mark is not None and mark.height <= height and mark.width <= width:
             if manual:
                 # Older loading previews could save several marks clamped to
                 # the same thumbnail edge. Replan invalid/overlapping sets;
@@ -77,6 +83,9 @@ def chapter_watermark_settings(pages: list[dict], value: dict) -> dict[str, dict
     horizontal = config["anchor"].split("-")[-1]
     sides = ("left", "right") if horizontal == "left" else ("right", "left")
     modes = sides if config["distribution"] == "alternating" else (horizontal,)
+    adaptive = config["distribution"] == "adaptive"
+    if adaptive:
+        modes = tuple(dict.fromkeys((horizontal, "left", "right", "center")))
     intervals = {}
     for side in modes:
         available = []
@@ -113,7 +122,7 @@ def chapter_watermark_settings(pages: list[dict], value: dict) -> dict[str, dict
 
     if config["auto_count"]:
         width = max(page["width"] for page, _, _, _ in rows)
-        interval = max(1600, width * 2.5, max_height * 8, step)
+        interval = max(config["interval_px"], step) if config["interval_px"] else max(1600, width * 2.5, max_height * 8, step)
         requested = max(1, min(600, round(total / interval)))
     else:
         requested = config["repeat_count"]
@@ -132,12 +141,17 @@ def chapter_watermark_settings(pages: list[dict], value: dict) -> dict[str, dict
         # Offsets may adjust a slot, but never collapse all slots at an edge.
         ideal += max(-drift, min(config["offset_y"], drift))
         choices = []
-        for a, b, x, name, offset in intervals[modes[i % len(modes)]]:
-            low = max(a, floor, round(ideal - drift))
-            high = min(b, round(ideal + drift))
-            if low <= high:
-                y = max(low, min(round(ideal), high))
-                choices.append((abs(y - ideal), y, x, name, offset))
+        for side in (modes if adaptive else (modes[i % len(modes)],)):
+            for a, b, x, name, offset in intervals[side]:
+                low = max(a, floor, round(ideal - drift))
+                high = min(b, round(ideal + drift))
+                if low <= high:
+                    y = max(low, min(round(ideal), high))
+                    choices.append((abs(y - ideal), y, x, name, offset))
+            # Try another column only within this band, never move its mark
+            # to the next band's beginning when dialogue blocks its side.
+            if choices:
+                break
         if not choices:
             continue
         _, y, x, name, offset = min(choices)

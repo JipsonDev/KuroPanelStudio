@@ -1,14 +1,20 @@
 # KuroPanel Studio @VERSION@
 
-## Texto exportado como en el lienzo
+## Tamaño y distribución de marcas de agua
 
-- Corregido el texto más pequeño al guardar: la exportación conserva el tamaño, los saltos de línea, el centrado y la posición final del lienzo.
-- El documento tipográfico se dibuja con el mismo motor Qt de la interfaz. Conserva el espaciado, las fuentes de manga y sus caracteres de respaldo para letras acentuadas, también al exportar en segundo plano.
-- PNG, JPG, WebP y PSD comparten la composición guardada. PSD coloca correctamente el contenido y su máscara, y conserva texto que ocupa más espacio que la caja inicial del OCR.
-- Para proyectos anteriores, abre la página en el lienzo y vuelve a exportarla para incorporar sus medidas finales.
+- El tamaño y la alineación se calculan sobre el contenido visible del PNG, evitando que los márgenes transparentes hagan que el logo parezca pequeño o desplazado. Puedes desactivar «Medir solo el logo visible» para conservar esos márgenes.
+- El reparto continuo mantiene un tamaño uniforme entre páginas del mismo ancho. Los cortes demasiado cortos quedan sin marca en lugar de recibir una miniatura.
+- «Distancia entre centros» permite ajustar la densidad automática del capítulo. El valor «Automática» conserva el cálculo según dimensiones; la separación mínima sigue protegiendo el espacio libre entre logos.
+- El modo «Adaptar al espacio libre» busca otro lado dentro de la misma zona cuando una caja de texto bloquea la ubicación preferida. Se mantienen los modos de columna y alternado, sin reiniciar el reparto en cada página.
+- Tamaño y alineación accesibles sin desplegar opciones avanzadas, dimensiones finales en píxeles y total calculado para el capítulo. Los cambios numéricos se confirman antes de recalcular.
+- Controles y mensajes nuevos disponibles en español e inglés.
+
+## Aplicar el nuevo reparto
+
+Para sustituir posiciones manuales anteriores, pulsa **Redistribuir todo el capítulo** y después **Todo el capítulo**. La protección utiliza cajas de texto detectadas; no identifica caras, manos ni otros dibujos. Conviene revisar visualmente el resultado.
 
 ## Verificación e instalación
 
-Verificación local: **496 pruebas y 11 subpruebas aprobadas**, incluidas 21 comparaciones nuevas de composición, alineación, escala, acentos, contornos, subrayado y formatos de imagen. Se reprodujo el texto de las capturas en páginas controladas; no se dispuso del proyecto original. El cierre nativo intermitente de Qt documentado anteriormente no tiene una causa confirmada.
+Verificación local: **513 pruebas y 11 subpruebas aprobadas**, incluidas 17 nuevas comprobaciones de tamaño visible, páginas cortas, densidad, obstáculos, interfaz y traducción de controles. La comparación entre lienzo y exportación incluye opacidad del 65 % y rotaciones de 0°, 30° y 90°, con diferencias máximas de un nivel por canal en esas pruebas controladas.
 
-Descarga `KuroPanelStudio-Setup-@VERSION@-Windows-x64.exe`; su SHA-256 está en `SHA256SUMS.txt`. La edición pública mantiene el canal de GitHub Releases para **Buscar actualizaciones**. Si usas la edición local 0.2.14, instala esta edición pública una vez para recibir futuras versiones de GitHub.
+Descarga `KuroPanelStudio-Setup-@VERSION@-Windows-x64.exe`; su SHA-256 está en `SHA256SUMS.txt`. La edición pública mantiene el canal de GitHub Releases para **Buscar actualizaciones**. Si usas la edición local 0.2.15, instala esta edición pública una vez para recibir futuras versiones de GitHub.

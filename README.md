@@ -195,7 +195,8 @@ para conocer la organización de paneles, el modo de enfoque y las capturas de v
 La [limpieza por regiones de color](docs/bubble-mask-cleaning.md) explica la
 adaptación de `Bubble_Mask.atn`, la corrección de letras recortadas y sus pruebas.
 La [distribución de marcas de agua](docs/watermark-distribution.md) permite
-alternar lados, ajustar la separación mínima y respetar las cajas de texto.
+medir el logo visible, conservar su tamaño entre cortes de página, adaptar la
+ubicación al espacio libre y controlar la distancia y separación del capítulo.
 
 ```powershell
 pip install pytest
@@ -212,7 +213,7 @@ que puedas compartir legalmente.
 La aplicación instalable se construye con:
 
 ```powershell
-.\build_windows.ps1 -Version 0.2.14
+.\build_windows.ps1 -Version 0.2.15
 ```
 
 La edición compacta CPU-first se construye con:
@@ -224,12 +225,12 @@ La edición compacta CPU-first se construye con:
 Para crear el instalador x64 con Inno Setup 6:
 
 ```powershell
-.\build_installer.ps1 -Version 0.2.14
+.\build_installer.ps1 -Version 0.2.15
 ```
 
-El instalador para GitHub se genera en `github-release/KuroPanelStudio-v0.2.14/`.
+El instalador para GitHub se genera en `github-release/KuroPanelStudio-v0.2.15/`.
 Usa `-LocalOnly` en ambos comandos para generar un instalador local registrado en
-`local-builds/KuroPanelStudio-v0.2.14/`.
+`local-builds/KuroPanelStudio-v0.2.15/`.
 En GitHub, una etiqueta `vX.Y.Z` inicia el flujo de Windows que compila,
 prueba y adjunta el instalador y las notas de cambios a la Release sin subirlos manualmente.
 Consulta [la guía de publicación](docs/actualizaciones.md).

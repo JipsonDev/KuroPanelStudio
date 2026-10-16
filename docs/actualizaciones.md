@@ -23,8 +23,8 @@ fuente no instala actualizaciones.
 2. Crea y sube una etiqueta semántica nueva, por ejemplo:
 
    ```powershell
-   git tag v0.2.14
-   git push origin v0.2.14
+   git tag v0.2.15
+   git push origin v0.2.15
    ```
 
 3. El flujo `.github/workflows/windows-release.yml` ejecuta las pruebas en
@@ -41,8 +41,8 @@ Para compilar localmente, instala las dependencias de `requirements-release.txt`
 y PyInstaller en `.venv`, instala Inno Setup 6 y ejecuta:
 
 ```powershell
-.\build_windows.ps1 -Version 0.2.14
-.\build_installer.ps1 -Version 0.2.14
+.\build_windows.ps1 -Version 0.2.15
+.\build_installer.ps1 -Version 0.2.15
 ```
 
 `build_windows.ps1` incorpora la versión a la app y restaura los archivos

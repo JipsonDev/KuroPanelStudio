@@ -10,13 +10,13 @@ def build_info() -> dict:
     try:
         return json.loads(version_file.read_text(encoding="utf-8"))
     except (OSError, ValueError, KeyError, TypeError):
-        return {"version": "0.2.14", "update_channel": "github"}
+        return {"version": "0.2.15", "update_channel": "github"}
 
 
 def installed_version() -> str:
-    return str(build_info().get("version") or "0.2.14")
+    return str(build_info().get("version") or "0.2.15")
 
 
 _BUILD_INFO = build_info()
-APP_VERSION = str(_BUILD_INFO.get("version") or "0.2.14")
+APP_VERSION = str(_BUILD_INFO.get("version") or "0.2.15")
 APP_UPDATE_CHANNEL = "local" if _BUILD_INFO.get("update_channel") == "local" else "github"
