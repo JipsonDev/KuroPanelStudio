@@ -10,6 +10,63 @@ import cv2
 import numpy as np
 
 
+def protect_flat_balloon_border(
+    rgb: np.ndarray, mask: np.ndarray, selection: np.ndarray, colour,
+) -> np.ndarray:
+    """Clip a completed automatic mask to supported background interiors.
+
+    Close gaps in the contrasting *barriers*, rather than growing the light
+    background across disconnected impact strokes. Filling the resulting
+    interior's holes recovers lettering without a convex hull across its
+    crown. This also works when the balloon is cut by the image frame.
+    """
+    if colour is None or rgb.shape[:2] != mask.shape or mask.shape != selection.shape:
+        return mask
+    masked = int(np.count_nonzero(mask))
+    if not masked or not np.any(selection):
+        return mask
+    difference = np.max(np.abs(rgb.astype(np.int16) - np.asarray(colour, np.int16)), axis=2)
+    foreground = np.where(difference > 12, 255, 0).astype(np.uint8)
+    scale = min(mask.shape)
+    gap_size = max(5, min(41, int(round(scale * .045)) | 1))
+    barriers = cv2.morphologyEx(
+        foreground, cv2.MORPH_CLOSE,
+        cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (gap_size, gap_size)),
+    )
+    count, labels, stats, _ = cv2.connectedComponentsWithStats(cv2.bitwise_not(barriers), 8)
+    safe = np.zeros_like(mask)
+    minimum_area = max(128, int(np.count_nonzero(selection) * .10))
+    inset = max(2, min(6, int(round(scale * .008))))
+    inset_kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (inset * 2 + 1, inset * 2 + 1))
+    nearby_strokes = cv2.dilate(foreground, inset_kernel)
+    for label in range(1, count):
+        x, y, width, height, area = (int(value) for value in stats[label])
+        if area < minimum_area:
+            continue
+        component = np.where(labels[y:y + height, x:x + width] == label, 255, 0).astype(np.uint8)
+        contours, _ = cv2.findContours(component, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        filled = np.zeros_like(mask)
+        cv2.drawContours(filled[y:y + height, x:x + width], contours, -1, 255, cv2.FILLED)
+        # Reject thin islands and candidates unrelated to the approved text.
+        if area < np.count_nonzero(filled) * .45:
+            continue
+        if np.count_nonzero((filled > 0) & (mask > 0)) < max(8, masked * .04):
+            continue
+        ring = cv2.subtract(cv2.dilate(filled, np.ones((3, 3), np.uint8)), filled) > 0
+        # A plain crop frame is not a balloon outline. Require visible source
+        # strokes near the boundary, including across narrow gaps between rays;
+        # the artificially closed gaps alone are not proof.
+        if np.count_nonzero(ring) < 16 or np.mean(nearby_strokes[ring] > 0) < .55:
+            continue
+        interior = cv2.erode(filled, inset_kernel, borderType=cv2.BORDER_CONSTANT, borderValue=0)
+        np.maximum(safe, interior, out=safe)
+    # If contour evidence cannot explain most of the text, retain the existing
+    # path for gradients, open annotations and tightly cut glyph selections.
+    if np.count_nonzero((safe > 0) & (mask > 0)) < masked * .65:
+        return mask
+    return cv2.bitwise_and(mask, safe)
+
+
 def colour_connected_balloon_mask(rgb: np.ndarray, selection: np.ndarray):
     """Return (glyph mask, flat fill) or None when contour evidence is absent.
 
