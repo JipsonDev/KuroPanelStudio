@@ -43,6 +43,8 @@ class CleaningManager:
     # of boxes scale poorly on CPU.
     DETECTION_CONTEXT = 80
     INPAINT_CONTEXT = 64
+    LAMA_TILE_SIZE = 1024
+    LAMA_TILE_CONTEXT = 64
     MASK_PIPELINE_VERSION = 44
 
     def __init__(self, models_root: Path) -> None:
@@ -567,6 +569,10 @@ class CleaningManager:
 
     def _lama(self, rgb: np.ndarray, mask: np.ndarray) -> np.ndarray:
         height, width = rgb.shape[:2]
+        if not np.any(mask > 127):
+            return rgb.copy()
+        if max(height, width) > self.LAMA_TILE_SIZE:
+            return self._lama_tiled(rgb, mask)
         padded_height = (height + 7) // 8 * 8
         padded_width = (width + 7) // 8 * 8
         image = cv2.copyMakeBorder(
@@ -584,6 +590,43 @@ class CleaningManager:
         restored = np.clip(np.transpose(output, (1, 2, 0)) * 255, 0, 255).astype(np.uint8)
         return restored[:height, :width]
 
+    def _lama_tiled(self, rgb: np.ndarray, mask: np.ndarray) -> np.ndarray:
+        """Reconstruct large selections at native resolution with bounded context.
+
+        Each core owns its selected pixels exactly once. Surrounding image and
+        mask pixels remain available to LaMa as context, but only the core is
+        written back. Every inference reads the original image so tile order
+        cannot feed generated artwork into a neighbouring tile.
+        """
+        height, width = mask.shape
+        selected = np.where(mask > 127, 255, 0).astype(np.uint8)
+        x, y, span_x, span_y = cv2.boundingRect(selected)
+        result = rgb.copy()
+        context = self.LAMA_TILE_CONTEXT
+        core_size = self.LAMA_TILE_SIZE - 2 * context
+        for top in range(y, y + span_y, core_size):
+            bottom = min(y + span_y, top + core_size)
+            for left in range(x, x + span_x, core_size):
+                right = min(x + span_x, left + core_size)
+                core_mask = selected[top:bottom, left:right]
+                if not np.any(core_mask):
+                    continue
+                # Tighten sparse cores before adding context. Distant text
+                # must not force inference over the blank strip between it.
+                mx, my, mw, mh = cv2.boundingRect(core_mask)
+                x1, y1 = max(0, left + mx - context), max(0, top + my - context)
+                x2 = min(width, left + mx + mw + context)
+                y2 = min(height, top + my + mh + context)
+                restored = self._lama(rgb[y1:y2, x1:x2], selected[y1:y2, x1:x2])
+                cx1, cy1 = left + mx, top + my
+                cx2, cy2 = cx1 + mw, cy1 + mh
+                np.copyto(
+                    result[cy1:cy2, cx1:cx2],
+                    restored[cy1 - y1:cy2 - y1, cx1 - x1:cx2 - x1],
+                    where=(selected[cy1:cy2, cx1:cx2] > 0)[:, :, None],
+                )
+        return result
+
     def _lama_many(self, jobs: list[tuple[np.ndarray, np.ndarray]]) -> list[np.ndarray]:
         """Schedule independent crops efficiently for the active hardware.
 
@@ -597,6 +640,21 @@ class CleaningManager:
         # preserve that contract rather than bypassing their implementation.
         if len(jobs) == 1 or "_lama" in self.__dict__:
             return [self._lama(image, mask) for image, mask in jobs]
+
+        # Large selections must not bypass tiling through the GPU batch path,
+        # nor run several large tile sequences concurrently on the CPU.
+        oversized = [
+            index for index, (image, _) in enumerate(jobs)
+            if max(image.shape[:2]) > self.LAMA_TILE_SIZE
+        ]
+        if oversized:
+            results: list[np.ndarray | None] = [None] * len(jobs)
+            for index in oversized:
+                results[index] = self._lama(*jobs[index])
+            compact = [index for index, result in enumerate(results) if result is None]
+            for index, restored in zip(compact, self._lama_many([jobs[index] for index in compact])):
+                results[index] = restored
+            return [result for result in results if result is not None]
 
         session = self._get_lama_session()
         providers = session.get_providers() or []

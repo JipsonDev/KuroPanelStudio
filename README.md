@@ -34,6 +34,9 @@ traducción, limpieza y typpeo por región, página o capítulo.
 Comparación de varios globos antes y después del proceso. La máscara de texto y
 los parches de limpieza se conservan separados de la imagen original.
 
+Las selecciones grandes se limpian mediante recortes a resolución original,
+con un límite espacial por inferencia. [Detalles y verificación](docs/cleaning-native-tiles.md).
+
 ![Comparación antes y después de la limpieza LaMa](docs/images/lama-before-after.png)
 
 ### Typpeo y traducción
