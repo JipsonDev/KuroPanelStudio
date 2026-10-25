@@ -21,7 +21,7 @@ from core.glyph_completion import (
     complete_anchored_glyph_fragments, complete_boundary_glyphs,
     complete_soft_text_halos,
 )
-from core.bubble_mask import colour_connected_balloon_mask
+from core.bubble_mask import colour_connected_balloon_mask, protect_flat_balloon_border
 from core.performance_manager import (
     adaptive_gpu_batch, cuda_memory_mb, normalize_device_mode,
     preload_onnx_cuda, register_cuda_dll_directories,
@@ -45,7 +45,7 @@ class CleaningManager:
     INPAINT_CONTEXT = 64
     LAMA_TILE_SIZE = 1024
     LAMA_TILE_CONTEXT = 64
-    MASK_PIPELINE_VERSION = 44
+    MASK_PIPELINE_VERSION = 45
 
     def __init__(self, models_root: Path) -> None:
         self.paths = ModelPaths(models_root)
@@ -2976,6 +2976,11 @@ class CleaningManager:
                     context_rgb, final_mask, selection
                 )
             final_mask = complete_soft_text_halos(context_rgb, final_mask, selection)
+            # Recovery may add a disconnected impact stroke after an earlier
+            # contour check. Enforce the source silhouette after every growth
+            # step, so flat filling cannot erase the crown of a thought balloon.
+            if method == "solid_fill":
+                final_mask = protect_flat_balloon_border(context_rgb, final_mask, selection, fill_color)
             if not np.any(final_mask):
                 return index, None
             mx, my, width, height = cv2.boundingRect(final_mask)

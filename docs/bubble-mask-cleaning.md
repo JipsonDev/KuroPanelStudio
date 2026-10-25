@@ -1,5 +1,8 @@
 # Limpieza basada en regiones de color
 
+Para la protección final de rayos y puntas después de recuperar letras, consulta
+[Protección de globos radiales](spiky-balloon-protection.md).
+
 Se inspeccionó el archivo `Bubble_Mask.atn` facilitado por el usuario sin ejecutar
 acciones de Photoshop. Contiene una acción, `Make bubble mask`, con 19 pasos;
 el lector consumió sus 2535 bytes. Los parámetros extraídos pueden generarse
