@@ -1,5 +1,12 @@
 # Historial de cambios
 
+## Sin publicar — posiciones de marcas de agua
+
+- La exportación conserva las posiciones manuales al desactivar «Mantener dentro de la página», incluidas coordenadas negativas y marcas parcialmente fuera de los bordes.
+- Mover marcas de una página conserva la distribución y alternancia de las otras. Solo se omiten las marcas automáticas que entran en conflicto con el espacio reservado por una manual.
+- Los cambios de marcas de agua se detectan como cambios del documento y participan en deshacer, rehacer y autoguardado.
+- Regresiones de planificación, historial y exportación real de capítulos comparada píxel a píxel con el lienzo.
+
 ## 0.2.15 — tamaño y distribución de marcas de agua
 
 - El tamaño y la alineación se calculan sobre el contenido visible del PNG; se puede conservar el borde transparente desactivando «Medir solo el logo visible».

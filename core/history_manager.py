@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import copy
+import hashlib
 import json
 from dataclasses import dataclass, field
 
@@ -32,6 +33,11 @@ def _fingerprint(snapshot: dict) -> str:
             }
             for patch in result.get("patches", [])
         ]
+    watermark = dict(snapshot.get("watermark_settings") or {})
+    # Include watermark-only edits without serialising the PNG into every
+    # history fingerprint. Otherwise dragging a mark never dirtied the
+    # document, and undo/autosave could restore its previous position.
+    watermark["png_bytes"] = hashlib.sha256(watermark.get("png_bytes", b"")).hexdigest()
     comparable = {
         "active_index": snapshot.get("active_index", 0),
         "page_regions": snapshot.get("page_regions", {}),
@@ -39,6 +45,7 @@ def _fingerprint(snapshot: dict) -> str:
         "page_styles": snapshot.get("page_styles", {}),
         "style_presets": snapshot.get("style_presets", {}),
         "clean_results": clean,
+        "watermark_settings": watermark,
     }
     return json.dumps(comparable, ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=str)
 
