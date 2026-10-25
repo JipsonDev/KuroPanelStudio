@@ -1,18 +1,25 @@
 # Historial de cambios
 
-## Sin publicar — protección de globos radiales
+## 0.2.16 — limpieza y conservación de marcas de agua
+
+### Protección de globos radiales
 
 - Una comprobación final del interior evita que la recuperación automática de letras y halos vuelva a seleccionar rayos y puntas del globo.
 - Conservación de bordes discontinuos y de globos cortados por el marco de la imagen, sin modificar el pincel ni las máscaras revisadas manualmente.
 - Caché de máscaras versión 45 y regresiones con tres coronas sintéticas y dos selecciones de un ejemplo real conservado fuera del repositorio.
 - Verificación: 528 pruebas aprobadas, 6 omitidas y 11 subpruebas. En el ejemplo real, los píxeles del dibujo modificados pasan de 3691 a 0 en una selección amplia, eliminando todo el texto oscuro anotado.
 
-## Sin publicar — posiciones de marcas de agua
+### Posiciones de marcas de agua
 
 - La exportación conserva las posiciones manuales al desactivar «Mantener dentro de la página», incluidas coordenadas negativas y marcas parcialmente fuera de los bordes.
 - Mover marcas de una página conserva la distribución y alternancia de las otras. Solo se omiten las marcas automáticas que entran en conflicto con el espacio reservado por una manual.
 - Los cambios de marcas de agua se detectan como cambios del documento y participan en deshacer, rehacer y autoguardado.
 - Regresiones de planificación, historial y exportación real de capítulos comparada píxel a píxel con el lienzo.
+
+### Limpieza a resolución original
+
+- Los recortes grandes de LaMa se dividen en inferencias de hasta 1024 × 1024 con contexto, sin reducir la resolución.
+- Se omiten las máscaras vacías y las zonas sin selección; el procesamiento conserva los píxeles fuera de la máscara.
 
 ## 0.2.15 — tamaño y distribución de marcas de agua
 

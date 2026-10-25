@@ -1,20 +1,25 @@
 # KuroPanel Studio @VERSION@
 
-## Tamaño y distribución de marcas de agua
+## Limpieza de globos radiales
 
-- El tamaño y la alineación se calculan sobre el contenido visible del PNG, evitando que los márgenes transparentes hagan que el logo parezca pequeño o desplazado. Puedes desactivar «Medir solo el logo visible» para conservar esos márgenes.
-- El reparto continuo mantiene un tamaño uniforme entre páginas del mismo ancho. Los cortes demasiado cortos quedan sin marca en lugar de recibir una miniatura.
-- «Distancia entre centros» permite ajustar la densidad automática del capítulo. El valor «Automática» conserva el cálculo según dimensiones; la separación mínima sigue protegiendo el espacio libre entre logos.
-- El modo «Adaptar al espacio libre» busca otro lado dentro de la misma zona cuando una caja de texto bloquea la ubicación preferida. Se mantienen los modos de columna y alternado, sin reiniciar el reparto en cada página.
-- Tamaño y alineación accesibles sin desplegar opciones avanzadas, dimensiones finales en píxeles y total calculado para el capítulo. Los cambios numéricos se confirman antes de recalcular.
-- Controles y mensajes nuevos disponibles en español e inglés.
+- Una comprobación final del contorno impide que la recuperación de letras y halos vuelva a seleccionar rayos y puntas del borde en globos de fondo uniforme.
+- En el ejemplo de prueba, el daño fuera del texto pasó de 3691 píxeles a 0 con una selección amplia, manteniendo la eliminación de las letras oscuras anotadas.
+- La protección no cambia el pincel ni las máscaras revisadas manualmente. Los fondos con textura o degradados conservan la reconstrucción anterior.
+- Las máscaras automáticas antiguas se invalidan mediante la caché versión 45. Para reparar una limpieza anterior, vuelve a generar su máscara y ejecutar la limpieza desde el original.
 
-## Aplicar el nuevo reparto
+## Posiciones de marcas de agua
 
-Para sustituir posiciones manuales anteriores, pulsa **Redistribuir todo el capítulo** y después **Todo el capítulo**. La protección utiliza cajas de texto detectadas; no identifica caras, manos ni otros dibujos. Conviene revisar visualmente el resultado.
+- La exportación conserva las posiciones manuales al desactivar «Mantener dentro de la página», incluidas coordenadas negativas y marcas que cruzan un borde.
+- Mover marcas en una página mantiene el reparto y la alternancia de las demás. Solo se omite una marca automática si entra en conflicto con la separación de una manual.
+- Mover una marca o cambiar su PNG se reconoce como cambio del documento y participa en deshacer, rehacer y autoguardado.
+
+## Limpieza a resolución original
+
+- Las selecciones grandes se procesan en recortes de hasta 1024 × 1024 con contexto, sin reducir la resolución.
+- Se omiten máscaras vacías y zonas sin selección, y se conservan los píxeles fuera de la máscara.
 
 ## Verificación e instalación
 
-Verificación local: **513 pruebas y 11 subpruebas aprobadas**, incluidas 17 nuevas comprobaciones de tamaño visible, páginas cortas, densidad, obstáculos, interfaz y traducción de controles. La comparación entre lienzo y exportación incluye opacidad del 65 % y rotaciones de 0°, 30° y 90°, con diferencias máximas de un nivel por canal en esas pruebas controladas.
+Verificación local: **528 pruebas aprobadas, 6 omitidas y 11 subpruebas aprobadas**. Incluye pruebas de bordes radiales, recortes de LaMa, conservación de posiciones e historial de marcas de agua, y comparación entre lienzo y exportación. Dos pruebas opcionales utilizan una imagen local que no se publica; en GitHub esas pruebas se omiten.
 
-Descarga `KuroPanelStudio-Setup-@VERSION@-Windows-x64.exe`; su SHA-256 está en `SHA256SUMS.txt`. La edición pública mantiene el canal de GitHub Releases para **Buscar actualizaciones**. Si usas la edición local 0.2.15, instala esta edición pública una vez para recibir futuras versiones de GitHub.
+Descarga `KuroPanelStudio-Setup-@VERSION@-Windows-x64.exe`; su SHA-256 está en `SHA256SUMS.txt`. Incluye los modelos y el runtime ONNX para CPU, sin claves de API. La edición pública mantiene el canal de GitHub Releases para **Buscar actualizaciones**. Si usas una edición local, instala esta edición pública una vez para recibir futuras versiones de GitHub.

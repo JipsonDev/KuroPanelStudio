@@ -1,6 +1,6 @@
 param(
     [ValidatePattern('^\d+\.\d+\.\d+$')]
-    [string]$Version = "0.2.15",
+    [string]$Version = "0.2.16",
     [switch]$LocalOnly
 )
 
