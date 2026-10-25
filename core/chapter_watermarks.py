@@ -45,7 +45,7 @@ def chapter_watermark_settings(pages: list[dict], value: dict) -> dict[str, dict
         settings.update(positions=[], chapter_resolved=True)
         output[page["name"]] = settings
         if mark is not None and mark.height <= height and mark.width <= width:
-            if manual:
+            if manual and config["keep_inside"]:
                 # Older loading previews could save several marks clamped to
                 # the same thumbnail edge. Replan invalid/overlapping sets;
                 # clamping them again would permanently reproduce the pile-up.
@@ -66,20 +66,6 @@ def chapter_watermark_settings(pages: list[dict], value: dict) -> dict[str, dict
     gap = config["minimum_gap"]
     step = max_height + gap
     margin = min(config["margin_y"], max(0, (total - max_height) // 2))
-    obstacles = []
-    manual_count = 0
-    for page, offset, (mw, mh), manual in rows:
-        if manual is None:
-            continue
-        points = [(max(0, min(int(x), page["width"] - mw)),
-                   max(0, min(int(y), page["height"] - mh))) for x, y in manual]
-        output[page["name"]]["positions"] = points
-        manual_count += len(points)
-        for _, y in points:
-            # All auto marks stay at least gap pixels from manual marks,
-            # including those across a page boundary and in another column.
-            obstacles.append(dict(x=0, y=offset + y, width=1, height=mh))
-
     horizontal = config["anchor"].split("-")[-1]
     sides = ("left", "right") if horizontal == "left" else ("right", "left")
     modes = sides if config["distribution"] == "alternating" else (horizontal,)
@@ -89,9 +75,7 @@ def chapter_watermark_settings(pages: list[dict], value: dict) -> dict[str, dict
     intervals = {}
     for side in modes:
         available = []
-        for page, offset, size, manual in rows:
-            if manual is not None:
-                continue
+        for page, offset, size, _manual in rows:
             mw, mh = size
             width, height = page["width"], page["height"]
             x = (config["margin_x"] if side == "left" else width - mw - config["margin_x"]
@@ -103,21 +87,7 @@ def chapter_watermark_settings(pages: list[dict], value: dict) -> dict[str, dict
             regions = output[page["name"]]["avoid_regions"] if config["avoid_text"] else []
             regions = normalized_watermark({"avoid_regions": regions})["avoid_regions"]
             for start, end in free_intervals(x, (low, high), size, regions):
-                spans = [(start + offset, end + offset)]
-                for obstacle in obstacles:
-                    block_start = obstacle["y"] - max_height - gap + 1
-                    block_end = obstacle["y"] + obstacle["height"] + gap - 1
-                    remaining = []
-                    for a, b in spans:
-                        if b < block_start or a > block_end:
-                            remaining.append((a, b))
-                        else:
-                            if a < block_start:
-                                remaining.append((a, block_start - 1))
-                            if b > block_end:
-                                remaining.append((block_end + 1, b))
-                    spans = remaining
-                available.extend((a, b, x, page["name"], offset) for a, b in spans if a <= b)
+                available.append((start + offset, end + offset, x, page["name"], offset))
         intervals[side] = available
 
     if config["auto_count"]:
@@ -126,7 +96,7 @@ def chapter_watermark_settings(pages: list[dict], value: dict) -> dict[str, dict
         requested = max(1, min(600, round(total / interval)))
     else:
         requested = config["repeat_count"]
-    count = min(max(0, requested - manual_count), 1 + max(0, total - max_height) // step)
+    count = min(requested, 1 + max(0, total - max_height) // step)
     # Keep each requested mark in its own chapter band. Previously a global
     # feasibility pass packed every displaced mark into the first available
     # region, often the top of the next page. An obstructed band now loses its
@@ -157,4 +127,33 @@ def chapter_watermark_settings(pages: list[dict], value: dict) -> dict[str, dict
         _, y, x, name, offset = min(choices)
         output[name]["positions"].append((x, y - offset))
         floor = y + step
+
+    # Resolve the automatic chapter slots first, independently of manual
+    # edits. Subtracting manual counts and replanning changed the pitch and
+    # alternating sides on every other page as soon as one mark was moved.
+    obstacles = []
+    for page, offset, (mw, mh), manual in rows:
+        if manual is None:
+            continue
+        points = [(int(x), int(y)) for x, y in manual]
+        output[page["name"]]["positions"] = points
+        for x, y in points:
+            # Unconstrained marks may be clipped by their own page. Reserve
+            # only the visible portion, never phantom space on the next one.
+            if x + mw <= 0 or x >= page["width"]:
+                continue
+            low, high = max(0, y), min(page["height"], y + mh)
+            if low < high:
+                obstacles.append((offset + low, offset + high))
+    if obstacles:
+        for page, offset, (_mw, mh), manual in rows:
+            if manual is not None:
+                continue
+            # Keep all remaining slots where they were. Only omit a mark
+            # whose gap conflicts with an explicitly positioned neighbour.
+            output[page["name"]]["positions"] = [
+                (x, y) for x, y in output[page["name"]]["positions"]
+                if all(offset + y + mh + gap <= low or offset + y >= high + gap
+                       for low, high in obstacles)
+            ]
     return output

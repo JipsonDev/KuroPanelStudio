@@ -36,10 +36,22 @@ normal. Si esa zona está bloqueada, se omite la marca sin trasladarla a otra p�
 Una página completamente bloqueada puede quedar sin marcas. El estado muestra
 la cantidad visible; los ajustes manuales pueden reducirla también.
 
-Las posiciones manuales válidas se conservan hasta redistribuirlas; pueden
-incumplir la separación entre sí. Si una página contiene posiciones duplicadas,
-superpuestas o fuera de sus límites, se reconstruye su reparto automáticamente
-al visualizar o exportar; no se modifica el archivo original del proyecto. El reparto automático reserva espacio alrededor de ellas.
+Las posiciones manuales se conservan hasta redistribuirlas; pueden incumplir la
+separación entre sí. Con **Mantener dentro de la página** desactivado, también
+se respetan las coordenadas negativas y las marcas que cruzan un borde: la
+exportación recorta la parte exterior, sin recolocar el resto de la página.
+Con esa opción activada se mantiene la recuperación de posiciones antiguas
+duplicadas, superpuestas o fuera de los límites.
+
+Editar una página no vuelve a calcular la separación ni la alternancia de las
+otras. Si una marca manual entra en conflicto con una automática de otra página,
+se omite únicamente la automática que incumple la separación; las demás conservan
+su posición. Una marca totalmente fuera de su página no reserva espacio invisible
+en otra. Eliminar todas las marcas de una página también conserva las de las demás.
+
+Los cambios de marcas de agua se registran en el historial del documento, de modo
+que activar el autoguardado y utilizar deshacer/rehacer incluye sus posiciones y
+el PNG seleccionado.
 Las páginas desactivadas siguen aportando su altura, pero no reciben marcas.
 Sin repetición se mantiene la colocación individual anterior.
 
@@ -132,6 +144,23 @@ no reconoce caras, manos ni otros dibujos. El resultado necesita revisión visua
 Las posiciones manuales prevalecen. Para sustituirlas se utiliza «Redistribuir
 todo el capítulo». La vista previa y la exportación consumen el mismo plan y
 la misma preparación del PNG.
+
+## Regresiones de conservación de posiciones
+
+`tests/test_watermark_position_persistence.py` cubre coordenadas negativas,
+marcas que cruzan los bordes, conservación de las otras páginas, conflictos
+entre páginas y cambios del PNG y de posiciones en deshacer/rehacer. Una prueba
+mueve una marca en el lienzo y ejecuta la exportación real de tres páginas;
+compara el PNG exportado píxel a píxel con el lienzo.
+
+```powershell
+python -m pytest tests/test_watermark_position_persistence.py -q
+```
+
+La verificación de esta corrección pasó con **523 pruebas, 6 omitidas y 11
+subpruebas**. También se verificó la exportación con el runtime empaquetado y
+la conservación de las 11 posiciones manuales de un autoguardado local de tres
+páginas. Ese archivo y sus imágenes no forman parte del repositorio.
 
 ## Verificación de 0.2.15 local
 
