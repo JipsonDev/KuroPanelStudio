@@ -1,4 +1,4 @@
-"""Non-destructive cleanup using the bundled OCR-mask and LaMa ONNX models."""
+"""Non-destructive cleanup using OCR masks and MI-GAN or LaMa ONNX models."""
 from __future__ import annotations
 
 import os
@@ -30,12 +30,12 @@ from core.psd_manager import load_source_image, state_signature
 
 
 class CleaningManager:
-    """Detect text with ``ocr.onnx`` and reconstruct it with ``lama.onnx``.
+    """Detect text with ``ocr.onnx`` and reconstruct with MI-GAN or LaMa.
 
     A region is only a search boundary. It is never used as the inpainting
     mask. Flat white balloons use the same colour-range + contract/grow
     workflow as the supplied Photoshop scripts; transparent, gradient and
-    illustrated regions continue through the OCR-mask model and LaMa.
+    illustrated regions use the OCR-mask model and the selected inpainter.
     """
 
     # The mask network only needs enough neighbourhood to avoid convolution
@@ -51,6 +51,10 @@ class CleaningManager:
         self.paths = ModelPaths(models_root)
         self._ocr_session: ort.InferenceSession | None = None
         self._lama_session: ort.InferenceSession | None = None
+        self._migan_session: ort.InferenceSession | None = None
+        # Preserve the direct Python API; the application selects MI-GAN via
+        # its persisted clean/model setting and the process proxy.
+        self.inpaint_model = "lama"
         self._session_lock = threading.RLock()
         self.provider_name = "CPUExecutionProvider"
         self.runtime_label = "CPU · ONNX Runtime"
@@ -124,12 +128,26 @@ class CleaningManager:
             self.device_mode = normalized
             self.unload_models()
 
+    def set_inpaint_model(self, model: str) -> None:
+        name = str(model).lower().split(" · ", 1)[0]
+        if name in {"mi-gan", "migan"}:
+            name = "migan"
+        if name not in {"migan", "lama"}:
+            raise ValueError(f"Modelo de limpieza desconocido: {model}")
+        with self._session_lock:
+            if name != self.inpaint_model:
+                self.inpaint_model = name
+                self.unload_models()
+
     def unload_models(self) -> bool:
         """Release ONNX sessions without discarding reusable mask plans."""
         with self._session_lock:
-            had_sessions = self._ocr_session is not None or self._lama_session is not None
+            had_sessions = any(session is not None for session in (
+                self._ocr_session, self._lama_session, self._migan_session,
+            ))
             self._ocr_session = None
             self._lama_session = None
+            self._migan_session = None
             self._warmed = False
             # Memory-pressure and idle-release requests should also release a
             # decoded 60k-pixel page. Mask plans remain compact and reusable.
@@ -219,7 +237,7 @@ class CleaningManager:
         cuda_ready = "CUDAExecutionProvider" in available and self._cuda_runtime_ready()
         dml_ready = "DmlExecutionProvider" in available
         if self.device_mode == "gpu" and not (cuda_ready or dml_ready):
-            raise RuntimeError("El modo GPU está activo, pero ni CUDA ni DirectML están disponibles para LaMa.")
+            raise RuntimeError("El modo GPU está activo, pero ni CUDA ni DirectML están disponibles para la limpieza.")
         if self.device_mode != "cpu":
             if cuda_ready:
                 options.enable_mem_pattern = False
@@ -247,6 +265,8 @@ class CleaningManager:
             if active and active[0] == "DmlExecutionProvider"
             else "CPU optimizada · núcleos físicos"
         )
+        model_name = "MI-GAN" if self.inpaint_model == "migan" else "LaMa"
+        self.runtime_label = f"{model_name} · {self.runtime_label}"
         self.last_used = monotonic()
         return session
 
@@ -264,6 +284,13 @@ class CleaningManager:
                     self._lama_session = self._create_session(self.paths.validate("lama"))
         return self._lama_session
 
+    def _get_migan_session(self) -> ort.InferenceSession:
+        if self._migan_session is None:
+            with self._session_lock:
+                if self._migan_session is None:
+                    self._migan_session = self._create_session(self.paths.validate("migan"))
+        return self._migan_session
+
     def warm_up(
         self,
         progress: Callable[[int], None] | None = None,
@@ -280,7 +307,10 @@ class CleaningManager:
         progress(32)
         if cancelled():
             return self.runtime_label
-        self._get_lama_session()
+        if self.inpaint_model == "migan":
+            self._get_migan_session()
+        else:
+            self._get_lama_session()
         progress(68)
         if cancelled():
             return self.runtime_label
@@ -291,14 +321,14 @@ class CleaningManager:
         progress(84)
         if cancelled():
             return self.runtime_label
-        self._lama(sample, sample_mask)
+        self._inpaint(sample, sample_mask)
         self._warmed = True
         self.last_used = monotonic()
         progress(100)
         return self.runtime_label
 
     def clean_mask(self, rgb: np.ndarray, mask: np.ndarray) -> np.ndarray:
-        """Run LaMa with an exact user-painted mask over an already composed crop."""
+        """Reconstruct an exact user-painted mask over an already composed crop."""
         source = np.ascontiguousarray(rgb, dtype=np.uint8)
         exact_mask = np.where(mask > 8, 255, 0).astype(np.uint8)
         if source.ndim != 3 or source.shape[2] != 3 or source.shape[:2] != exact_mask.shape:
@@ -311,7 +341,7 @@ class CleaningManager:
                 "La máscara fue descartada porque contiene un salto demasiado grande. "
                 "Vuelve a pintar sin desplazar el lienzo durante el trazo."
             )
-        restored = self._lama(source, exact_mask)
+        restored = self._inpaint(source, exact_mask)
         cleaned = self._composite_lama(source, restored, exact_mask)
         # A manually painted mask is already the user's final selection. One
         # LaMa pass is enough; OCR residue retries belong to automatic masks
@@ -567,6 +597,47 @@ class CleaningManager:
         )
         return cv2.bitwise_and(guard, selection)
 
+    def _inpaint(self, rgb: np.ndarray, mask: np.ndarray) -> np.ndarray:
+        if self.inpaint_model == "migan":
+            return self._migan(rgb, mask)
+        return self._lama(rgb, mask)
+
+    def _inpaint_many(self, jobs: list[tuple[np.ndarray, np.ndarray]]) -> list[np.ndarray]:
+        if self.inpaint_model == "migan":
+            # The exported pipeline crops around one mask per invocation. Its
+            # dynamic batch axis is not a supported multi-image batch contract.
+            # Serial bounded crops also keep CPU/RAM available for the editor.
+            return [self._migan(image, mask) for image, mask in jobs]
+        return self._lama_many(jobs)
+
+    def _migan(self, rgb: np.ndarray, mask: np.ndarray) -> np.ndarray:
+        selected = np.where(mask > 127, 255, 0).astype(np.uint8)
+        if not np.any(selected):
+            return rgb.copy()
+        if max(rgb.shape[:2]) > 512:
+            return self._inpaint_tiled(rgb, selected, 512, 64, self._migan)
+        height, width = selected.shape
+        # The pipeline's blur uses reflection padding. Protect thin edge crops.
+        bottom, right = max(0, 16 - height), max(0, 16 - width)
+        image = cv2.copyMakeBorder(rgb, 0, bottom, 0, right, cv2.BORDER_REFLECT)
+        hole = cv2.copyMakeBorder(selected, 0, bottom, 0, right, cv2.BORDER_REFLECT)
+        # MI-GAN's pipeline feathers its own hole border. Give it a small
+        # working margin, then composite strictly through the reviewed mask so
+        # feathering cannot leave dark glyph fringes or alter surrounding art.
+        hole = cv2.dilate(hole, np.ones((9, 9), np.uint8))
+        known = np.where(hole > 0, 0, 255).astype(np.uint8)
+        output = self._get_migan_session().run(None, {
+            "image": np.transpose(image, (2, 0, 1))[None].copy(),
+            "mask": known[None, None],
+        })[0]
+        if output.shape != (1, 3, *image.shape[:2]) or output.dtype != np.uint8:
+            raise RuntimeError("La salida de MI-GAN no coincide con la imagen.")
+        restored = np.transpose(output[0], (1, 2, 0))[:height, :width]
+        result = rgb.copy()
+        np.copyto(result, restored, where=(selected > 0)[:, :, None])
+        self.last_used = monotonic()
+        return result
+
     def _lama(self, rgb: np.ndarray, mask: np.ndarray) -> np.ndarray:
         height, width = rgb.shape[:2]
         if not np.any(mask > 127):
@@ -591,6 +662,14 @@ class CleaningManager:
         return restored[:height, :width]
 
     def _lama_tiled(self, rgb: np.ndarray, mask: np.ndarray) -> np.ndarray:
+        return self._inpaint_tiled(
+            rgb, mask, self.LAMA_TILE_SIZE, self.LAMA_TILE_CONTEXT, self._lama,
+        )
+
+    def _inpaint_tiled(
+        self, rgb: np.ndarray, mask: np.ndarray, tile_size: int, context: int,
+        restore: Callable[[np.ndarray, np.ndarray], np.ndarray],
+    ) -> np.ndarray:
         """Reconstruct large selections at native resolution with bounded context.
 
         Each core owns its selected pixels exactly once. Surrounding image and
@@ -602,8 +681,7 @@ class CleaningManager:
         selected = np.where(mask > 127, 255, 0).astype(np.uint8)
         x, y, span_x, span_y = cv2.boundingRect(selected)
         result = rgb.copy()
-        context = self.LAMA_TILE_CONTEXT
-        core_size = self.LAMA_TILE_SIZE - 2 * context
+        core_size = tile_size - 2 * context
         for top in range(y, y + span_y, core_size):
             bottom = min(y + span_y, top + core_size)
             for left in range(x, x + span_x, core_size):
@@ -617,7 +695,7 @@ class CleaningManager:
                 x1, y1 = max(0, left + mx - context), max(0, top + my - context)
                 x2 = min(width, left + mx + mw + context)
                 y2 = min(height, top + my + mh + context)
-                restored = self._lama(rgb[y1:y2, x1:x2], selected[y1:y2, x1:x2])
+                restored = restore(rgb[y1:y2, x1:x2], selected[y1:y2, x1:x2])
                 cx1, cy1 = left + mx, top + my
                 cx2, cy2 = cx1 + mw, cy1 + mh
                 np.copyto(
@@ -898,7 +976,7 @@ class CleaningManager:
             y2 = min(image_height, y + height + context)
             local_image = np.ascontiguousarray(current[y1:y2, x1:x2])
             local_mask = np.ascontiguousarray(residual[y1:y2, x1:x2])
-            restored = self._lama(local_image, local_mask)
+            restored = self._inpaint(local_image, local_mask)
             refined = self._composite_lama(local_image, restored, local_mask)
             if np.array_equal(refined[local_mask > 0], local_image[local_mask > 0]):
                 break
@@ -947,7 +1025,7 @@ class CleaningManager:
 
             if not retry_jobs:
                 break
-            restored_jobs = self._lama_many(retry_jobs)
+            restored_jobs = self._inpaint_many(retry_jobs)
             for metadata, (local_image, local_mask), restored in zip(
                 retry_metadata, retry_jobs, restored_jobs,
             ):
@@ -977,7 +1055,7 @@ class CleaningManager:
         y2 = min(image_height, y + height + context)
         local_image = np.ascontiguousarray(rgb[y1:y2, x1:x2])
         local_mask = np.ascontiguousarray(mask[y1:y2, x1:x2])
-        restored = self._lama(local_image, local_mask)
+        restored = self._inpaint(local_image, local_mask)
         cleaned = self._composite_lama(local_image, restored, local_mask)
         local_selection = np.full(local_mask.shape, 255, dtype=np.uint8)
         cleaned, passes = self._refine_lama_residuals(
@@ -2635,7 +2713,7 @@ class CleaningManager:
             inpaint_jobs.append((bx1, by1, local_bounds, local_image, local_mask))
             progress(45 + int(cluster_number * 8 / max(1, len(clusters))))
 
-        restored_jobs = self._lama_many([
+        restored_jobs = self._inpaint_many([
             (local_image, local_mask)
             for _, _, _, local_image, local_mask in inpaint_jobs
         ])
@@ -3091,7 +3169,7 @@ class CleaningManager:
         cancelled: Callable[[], bool],
         source_states: dict[str, dict] | None = None,
     ) -> dict:
-        """Execute LaMa using a reviewed/edited mask plan."""
+        """Execute the selected inpainter using a reviewed/edited mask plan."""
         page = self._load_source_page(image_path, source_states)
         page_height, page_width = page.shape[:2]
         mask_entries: list[dict] = []
@@ -3162,7 +3240,7 @@ class CleaningManager:
             ))
             progress(int(number * 10 / max(1, len(clusters))))
 
-        restored_jobs = self._lama_many([(image, mask) for _, _, _, image, mask in jobs])
+        restored_jobs = self._inpaint_many([(image, mask) for _, _, _, image, mask in jobs])
         initial_cleaned = [
             self._composite_lama(job[3], restored, job[4])
             for job, restored in zip(jobs, restored_jobs)
@@ -3237,7 +3315,7 @@ class CleaningManager:
                 }
                 for entry in plan.get("entries", [])
             ],
-            "provider": self.provider_name, "runtime": runtime,
+            "provider": self.provider_name, "runtime": runtime, "model": self.inpaint_model,
             "masked_pixels": sum(
                 int(np.count_nonzero(entry["mask"])) for entry in mask_entries
             ),

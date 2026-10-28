@@ -21,7 +21,7 @@ DEFAULT_SETTINGS = {
     "global_keys": {
         "Gemini": "", "OpenAI": "", "DeepSeek": "", "DeepL": "", "Alibaba Cloud": "",
     },
-    "clean": {"platform": "Local (AI)", "model": "LaMa · lama.onnx", "debug_mask": False, "local_aggressiveness": 90},
+    "clean": {"platform": "Local (AI)", "model": "MI-GAN · migan_pipeline_v2.onnx", "debug_mask": False, "local_aggressiveness": 90},
     "general": {
         "export_json_current_only": False, "autosave_minutes": 2,
         "backup_limit": 10, "psd_auto_sync": True, "ui_language": "es",

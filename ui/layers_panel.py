@@ -397,7 +397,7 @@ class LayersPanel(QFrame):
 
         layout.addWidget(SectionTitle("Imagen"))
         self.original_layer = ImageLayerItem("original", "Imagen original", "Base · resolución original", "images")
-        self.clean_layer = ImageLayerItem("clean", "Imagen limpia", "Parches LaMa · no destructivo", "sparkles")
+        self.clean_layer = ImageLayerItem("clean", "Imagen limpia", "Parches de limpieza · no destructivo", "sparkles")
         for image_layer in (self.original_layer, self.clean_layer):
             image_layer.visibility_changed.connect(self.image_visibility_changed)
             image_layer.opacity_changed.connect(self.image_opacity_changed)

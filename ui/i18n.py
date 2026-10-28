@@ -16,6 +16,15 @@ from PySide6.QtWidgets import (
 
 
 ES_TO_EN = {
+    "●  El modelo se cargará al primer uso": "●  The model will load on first use",
+    "Primero revisa la máscara roja. Puedes borrar falsos positivos antes de aplicar la limpieza.":
+        "Review the red mask first. You can erase false positives before cleaning.",
+    "Pincel de máscara (M). Dibuja, revisa en rojo y luego aplica la limpieza":
+        "Mask brush (M). Draw, review in red, then apply cleaning",
+    "Parches de limpieza · no destructivo": "Cleaning patches · non-destructive",
+    "Pinta sobre las zonas rojas que la limpieza no debe modificar.":
+        "Paint over red areas that cleaning must not change.",
+    "Ejecuta la detección antes de limpiar.": "Run detection before cleaning.",
     "⚠ El texto no cabe en el globo": "⚠ Text does not fit inside the balloon",
     # Window, navigation and empty state.
     "Espacio de edición de manhuas": "Manhua editing workspace",

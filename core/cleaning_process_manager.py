@@ -28,6 +28,7 @@ def _cleaning_process_main(connection, cancel_event, models_root: str) -> None:
             request_id = int(request["id"])
             command = str(request["command"])
             args = tuple(request.get("args", ()))
+            engine.set_inpaint_model(str(request.get("inpaint_model", "migan")))
             engine.set_aggressiveness(int(request.get("aggressiveness", 90)))
             engine.set_device_mode(str(request.get("device_mode", "auto")))
             engine.set_resource_profile(str(request.get("resource_profile", "balanced")))
@@ -79,6 +80,7 @@ class CleaningProcessManager:
     def __init__(self, models_root: Path) -> None:
         self.models_root = Path(models_root).resolve()
         self.aggressiveness = 90
+        self.inpaint_model = "migan"
         self.provider_name = "Modelo no cargado"
         self.runtime_label = "Proceso aislado sin iniciar"
         self._context = mp.get_context("spawn")
@@ -91,6 +93,13 @@ class CleaningProcessManager:
         self.device_mode = "auto"
         self.resource_profile = "balanced"
         self.last_used = monotonic()
+
+    def set_inpaint_model(self, model: str) -> None:
+        name = str(model).lower().split(" · ", 1)[0]
+        name = "migan" if name == "mi-gan" else name
+        if name not in {"migan", "lama"}:
+            raise ValueError(f"Modelo de limpieza desconocido: {model}")
+        self.inpaint_model = name
 
     def set_aggressiveness(self, value: int) -> None:
         self.aggressiveness = max(1, min(100, int(value)))
@@ -112,7 +121,7 @@ class CleaningProcessManager:
             process = self._context.Process(
                 target=_cleaning_process_main,
                 args=(child, cancel_event, str(self.models_root)),
-                name="Manhua-LaMa-Worker",
+                name="KuroPanel-Cleaning-Worker",
                 daemon=True,
             )
             process.start()
@@ -144,7 +153,7 @@ class CleaningProcessManager:
             connection = self._connection
             cancel_event = self._cancel_event
             if process is None or connection is None or cancel_event is None:
-                raise RuntimeError("No se pudo iniciar el proceso aislado de LaMa.")
+                raise RuntimeError("No se pudo iniciar el proceso aislado de limpieza.")
             cancel_event.clear()
             self._request_id += 1
             request_id = self._request_id
@@ -154,6 +163,7 @@ class CleaningProcessManager:
                     "command": command,
                     "args": args,
                     "aggressiveness": self.aggressiveness,
+                    "inpaint_model": self.inpaint_model,
                     "device_mode": self.device_mode,
                     "resource_profile": self.resource_profile,
                 })
@@ -181,12 +191,12 @@ class CleaningProcessManager:
                     if not process.is_alive():
                         self._dispose_handles()
                         raise RuntimeError(
-                            "El proceso de LaMa se cerró inesperadamente. La próxima operación lo reiniciará."
+                            "El proceso de limpieza se cerró inesperadamente. La próxima operación lo reiniciará."
                         )
             except (EOFError, BrokenPipeError, OSError) as error:
                 self._dispose_handles()
                 raise RuntimeError(
-                    "Se perdió la comunicación con LaMa. La próxima operación reiniciará el modelo."
+                    "Se perdió la comunicación con el motor de limpieza. La próxima operación reiniciará el modelo."
                 ) from error
             finally:
                 try:

@@ -1,5 +1,13 @@
 # Historial de cambios
 
+## 0.2.17 — limpieza MI-GAN
+
+- MI-GAN ONNX como opción predeterminada para configuraciones nuevas; selección persistente de MI-GAN o LaMa en Motor de limpieza.
+- El motor seleccionado se aplica a la limpieza automática, por capítulo y al pincel, dentro del proceso aislado.
+- Pesos MI-GAN incluidos en ambos instaladores, licencia MIT y procedencia con revisión y SHA-256 documentados.
+- Recortes de hasta 512 × 512, omisión de zonas vacías y composición exacta por máscara; se mantienen el relleno sólido protegido, los contornos radiales y las posiciones de marcas de agua.
+- Verificación local: 539 pruebas aprobadas, 6 omitidas y 11 subpruebas aprobadas, incluida inferencia MI-GAN real en el proceso de limpieza.
+
 ## 0.2.16 — limpieza y conservación de marcas de agua
 
 ### Protección de globos radiales
