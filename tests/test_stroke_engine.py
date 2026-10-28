@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import unittest
+from pathlib import Path
 
 import numpy as np
 
@@ -119,7 +120,7 @@ class StrokeEngineTests(unittest.TestCase):
         self.assertTrue(np.all(entry_mask == 255))
 
     def test_lama_brush_composites_only_inside_user_mask(self) -> None:
-        manager = CleaningManager.__new__(CleaningManager)
+        manager = CleaningManager(Path("Models"))
         source = np.full((48, 64, 3), (80, 120, 160), dtype=np.uint8)
         mask = np.zeros((48, 64), dtype=np.uint8)
         mask[14:34, 22:42] = 255

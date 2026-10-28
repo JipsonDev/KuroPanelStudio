@@ -26,6 +26,8 @@ for candidate in sorted(cuda_runtime_files, key=lambda path: path.name.casefold(
 datas = [
     (str(root / "assets"), "assets"),
     (str(root / "Models" / "lama.onnx"), "Models"),
+    (str(root / "Models" / "migan_pipeline_v2.onnx"), "Models"),
+    (str(root / "Models" / "MI-GAN-LICENSE.txt"), "Models"),
     (str(root / "Models" / "ocr.onnx"), "Models"),
     (str(root / "Models" / "yolo12s_animetext.onnx"), "Models"),
     (str(root / "Models" / "yolo12s_1class.yaml"), "Models"),

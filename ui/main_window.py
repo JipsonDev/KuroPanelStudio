@@ -128,6 +128,7 @@ class MainWindow(QMainWindow):
         )
         self._migrate_legacy_credentials()
         self.cleaner = CleaningProcessManager(self.models_root)
+        self.cleaner.set_inpaint_model(self.settings.data["clean"]["model"])
         self.cleaner.set_resource_policy(self.resource_policy)
         self.cleaner.set_aggressiveness(self.settings.data["clean"].get("local_aggressiveness", 90))
         self.cleaner.set_device_mode(str(performance_settings.get("device_mode", "auto")))
@@ -343,7 +344,7 @@ class MainWindow(QMainWindow):
         if self._warmup_task is not None or self._models_ready:
             return
         self.ai_panel.set_status(
-            "clean", "Calentando YOLO y LaMa sin bloquear la interfaz…", self.ai_panel.STATUS_WARNING
+            "clean", "Calentando YOLO y el motor de limpieza…", self.ai_panel.STATUS_WARNING
         )
 
         def warm_up(progress, cancelled):
@@ -386,9 +387,9 @@ class MainWindow(QMainWindow):
         elif value < 57:
             stage = "Cargando detector OCR de máscaras…"
         elif value < 79:
-            stage = "Cargando red LaMa en proceso aislado…"
+            stage = "Cargando motor de limpieza en proceso aislado…"
         else:
-            stage = "Calentando LaMa en GPU…"
+            stage = "Preparando motor de limpieza…"
         self.ai_panel.set_status("clean", stage, self.ai_panel.STATUS_WARNING)
 
     def _models_warmed(self, runtimes) -> None:
@@ -404,7 +405,7 @@ class MainWindow(QMainWindow):
     def _models_warmup_failed(self, _message: str) -> None:
         self._warmup_task = None
         self._models_ready = False
-        self.ai_panel.set_status("clean", "LaMa se cargará al utilizarlo", self.ai_panel.STATUS_WARNING)
+        self.ai_panel.set_status("clean", "El modelo se cargará al utilizarlo", self.ai_panel.STATUS_WARNING)
 
     def _load_styles(self) -> None:
         stylesheet = Path(__file__).parent.parent / "assets" / "styles" / "dark_theme.qss"
@@ -882,7 +883,7 @@ class MainWindow(QMainWindow):
         elif mode == "mask":
             self._toast("Pincel de máscara · M", "Pinta la máscara, revísala en rojo y pulsa Aplicar limpieza.")
         elif mode == "mask_erase":
-            self._toast("Editor de máscara", "Pinta sobre las zonas rojas que LaMa no debe modificar.")
+            self._toast("Editor de máscara", "Pinta sobre las zonas rojas que la limpieza no debe modificar.")
 
     def _toggle_brush_mode(self, mode: str) -> None:
         self._set_brush_mode(None if self.canvas_shell.canvas.brush_mode == mode else mode)
@@ -1156,6 +1157,10 @@ class MainWindow(QMainWindow):
 
     def _save_provider_selection(self, section: str, platform: str, model: str) -> None:
         self.settings.update_provider(section, platform, model)
+        if section == "clean":
+            self.cleaner.set_inpaint_model(model)
+            self._models_ready = False
+            self.ai_panel.set_status("clean", f"{model.split(' · ', 1)[0]} se cargará al utilizarlo", self.ai_panel.STATUS_NEUTRAL)
         if section in {"ocr", "translate"}:
             self._update_provider_statuses()
 
@@ -3227,7 +3232,7 @@ class MainWindow(QMainWindow):
             return
         page_id = self._active_task_page_key
         self.ai_panel.set_ocr_usage(self.ocr.usage_stats())
-        metric_name = "LaMa" if title == "Limpieza" else ("LaMa del capítulo" if title == "Limpieza de capítulo" else title)
+        metric_name = "Limpieza" if title == "Limpieza" else ("Limpieza del capítulo" if title == "Limpieza de capítulo" else title)
         metric = self.performance.finish(self._active_operation_key, metric_name)
         self._active_operation_key = ""
         self._active_operation_name = ""
@@ -3273,8 +3278,8 @@ class MainWindow(QMainWindow):
         self.ai_panel.set_ocr_usage(self.ocr.usage_stats())
         operation_name = self._active_operation_name
         page_id = self._active_task_page_key
-        metric_name = "LaMa" if operation_name == "Limpieza" else (
-            "LaMa del capítulo" if operation_name == "Limpieza de capítulo" else operation_name or "Error"
+        metric_name = "Limpieza" if operation_name == "Limpieza" else (
+            "Limpieza del capítulo" if operation_name == "Limpieza de capítulo" else operation_name or "Error"
         )
         metric = self.performance.finish(self._active_operation_key, metric_name)
         self._active_operation_key = ""
@@ -4378,7 +4383,7 @@ class MainWindow(QMainWindow):
 
     def clean_text(self) -> None:
         if not self.project.pages or not self.regions:
-            self._toast("No hay regiones", "Ejecuta la detección antes de usar LaMa.")
+            self._toast("No hay regiones", "Ejecuta la detección antes de limpiar.")
             return
         if self._retouch_layer_state(self._active_key())["automatic"].get("locked", False):
             self._toast("Limpieza bloqueada", "Desbloquea la capa Limpieza automática.")
@@ -4563,7 +4568,7 @@ class MainWindow(QMainWindow):
         residual_note = f" · {residual_passes} repaso(s) de residuos" if residual_passes else ""
         self.ai_panel.set_status(
             "clean",
-            f"LaMa listo · {result.get('runtime', result.get('provider', 'ONNX Runtime'))}{residual_note}",
+            f"Limpieza lista · {result.get('runtime', result.get('provider', 'ONNX Runtime'))}{residual_note}",
             self.ai_panel.STATUS_OK,
         )
         if self.project.pages:

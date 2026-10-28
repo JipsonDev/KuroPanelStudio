@@ -29,10 +29,16 @@ traducción, limpieza y typpeo por región, página o capítulo.
 
 ![Cajas de detección sobre globos](docs/images/ocr-boxes.png)
 
-### Limpieza LaMa no destructiva
+### Limpieza MI-GAN y LaMa no destructiva
 
 Comparación de varios globos antes y después del proceso. La máscara de texto y
 los parches de limpieza se conservan separados de la imagen original.
+
+MI-GAN es el motor predeterminado para instalaciones nuevas. Puedes elegir
+MI-GAN o LaMa en **Limpiar página → Motor de limpieza → Modelo local**.
+Las preferencias guardadas se conservan al actualizar. Los globos de color
+uniforme siguen usando el relleno protegido de sus letras, sin ejecutar una
+red de reconstrucción. [Integración y rendimiento de MI-GAN](docs/migan-cleaning.md).
 
 Las selecciones grandes se limpian mediante recortes a resolución original,
 con un límite espacial por inferencia. [Detalles y verificación](docs/cleaning-native-tiles.md).
@@ -55,7 +61,7 @@ páginas en publicaciones públicas, confirma que tienes los derechos necesarios
 - Detección local de texto con YOLO para páginas largas.
 - OCR por caja, página o capítulo mediante proveedores configurables.
 - Traducción con glosarios y contexto por proyecto.
-- Limpieza con máscara OCR y LaMa ONNX, con respaldo CPU o aceleración CUDA.
+- Limpieza con máscara OCR y MI-GAN o LaMa ONNX, con respaldo CPU o aceleración CUDA.
 - Previsualización de máscara y corrección manual de falsos positivos.
 - Pinceles de pintura, máscara y restauración del original.
 - Capas no destructivas con visibilidad, opacidad y bloqueo independientes.

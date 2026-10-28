@@ -433,7 +433,7 @@ class DocumentWorkflowTests(unittest.TestCase):
             np.testing.assert_array_equal(batched, individual)
 
     def test_cleaning_residual_retries_share_one_lama_batch(self) -> None:
-        manager = CleaningManager.__new__(CleaningManager)
+        manager = CleaningManager(Path("Models"))
         calls: list[int] = []
 
         def fake_many(jobs):
@@ -1870,7 +1870,7 @@ class DocumentWorkflowTests(unittest.TestCase):
         self.assertEqual(np.count_nonzero(residual), 0)
 
     def test_iterative_refiner_retries_locally_and_preserves_outside(self) -> None:
-        manager = CleaningManager.__new__(CleaningManager)
+        manager = CleaningManager(Path("Models"))
         cleaned = np.full((240, 420, 3), 255, dtype=np.uint8)
         text_mask = np.zeros((240, 420), dtype=np.uint8)
         cv2.rectangle(text_mask, (130, 90), (290, 145), 255, -1)

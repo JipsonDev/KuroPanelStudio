@@ -15,6 +15,8 @@ class ModelPaths:
     def ocr_mask(self) -> Path: return self.root / "ocr.onnx"
     @property
     def lama(self) -> Path: return self.root / "lama.onnx"
+    @property
+    def migan(self) -> Path: return self.root / "migan_pipeline_v2.onnx"
 
     def validate(self, name: str) -> Path:
         path = getattr(self, name)
