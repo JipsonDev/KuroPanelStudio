@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
+import re
 
 from PIL import Image
 
@@ -46,7 +47,11 @@ class ProjectManager:
     def scan_folder(cls, folder: Path, progress=None, cancelled=None) -> list[Page]:
         """Read page metadata without decoding pixels; safe for a worker thread."""
         extensions = {".png", ".jpg", ".jpeg", ".webp", ".bmp", ".psd", ".psb"}
-        paths = [path for path in sorted(folder.iterdir()) if path.suffix.lower() in extensions]
+        def reading_order(path):
+            return [int(part) if part.isdigit() else part.casefold()
+                    for part in re.split(r"(\d+)", path.name)]
+        paths = sorted((path for path in folder.iterdir() if path.suffix.lower() in extensions),
+                       key=reading_order)
         pages: list[Page] = []
         total = max(1, len(paths))
         for index, path in enumerate(paths, start=1):

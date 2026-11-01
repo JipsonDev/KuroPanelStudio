@@ -447,6 +447,12 @@ class MainWindow(QMainWindow):
         self.layers = LayersPanel(0)
         self.images_panel = ImagesPanel(self.project.pages, self.images)
         self.canvas_shell = CanvasShell()
+        self.canvas_shell.strip_mode_requested.connect(self._toggle_continuous_strip)
+        self.canvas_shell.export_strip_requested.connect(self.save_strip)
+        self.canvas_shell.strip_view.edit_page_requested.connect(self._edit_strip_page)
+        self.canvas_shell.strip_view.visible_page_changed.connect(self._strip_page_visible)
+        self.canvas_shell.strip_view.watermark_positions_changed.connect(self._strip_watermark_positions_changed)
+        self.canvas_shell.strip_view.load_failed.connect(lambda message: self._toast("Error de tira", message))
         self.canvas_shell.canvas.set_resource_policy(self.resource_policy)
         self.inspector = InspectorPanel()
         self.inspector.setMinimumWidth(0)
@@ -458,6 +464,7 @@ class MainWindow(QMainWindow):
         self.inspector_scroll.setMinimumWidth(270)
         self.inspector_scroll.setMaximumWidth(370)
         self.inspector_scroll.setWidget(self.inspector)
+        self.canvas_shell.strip_mode_changed.connect(self._strip_editing_controls)
         workspace = EditorWorkspace(
             self.images_panel, self.layers, self.canvas_shell,
             self.tool_panel, self.inspector_scroll,
@@ -681,6 +688,9 @@ class MainWindow(QMainWindow):
         self.addAction(delete_region)
 
     def _delete_active_region_action(self) -> None:
+        if self.canvas_shell.strip_button.isChecked():
+            self.canvas_shell.strip_view.delete_selected_watermarks()
+            return
         focus = QApplication.focusWidget()
         if focus is not None and isinstance(focus, (QLineEdit, QTextEdit, QPlainTextEdit)):
             return
@@ -743,6 +753,8 @@ class MainWindow(QMainWindow):
             self.sidebar.set_current(destination)
 
     def _handle_action(self, action: str) -> None:
+        if self.canvas_shell.strip_button.isChecked() and action not in {"watermark", "toggle_focus"}:
+            self._edit_strip_page(self.canvas_shell.strip_view.visible_page())
         if action == "toggle_focus":
             self.workspace.set_focus_mode(not self.workspace.focus_mode)
         elif action in {"ocr", "run_ocr_api"}:
@@ -886,6 +898,8 @@ class MainWindow(QMainWindow):
             self._toast("Editor de máscara", "Pinta sobre las zonas rojas que la limpieza no debe modificar.")
 
     def _toggle_brush_mode(self, mode: str) -> None:
+        if self.canvas_shell.strip_button.isChecked():
+            self._edit_strip_page(self.canvas_shell.strip_view.visible_page())
         self._set_brush_mode(None if self.canvas_shell.canvas.brush_mode == mode else mode)
 
     def _brush_size_changed(self, size: int) -> None:
@@ -2857,6 +2871,13 @@ class MainWindow(QMainWindow):
         self.ui_translator.refresh(self)
         self._toast("Configuración guardada", "Credenciales cifradas y flujo de IA actualizado.")
 
+    def _watermark_edit_page(self):
+        shell = getattr(self, "canvas_shell", None)
+        button = getattr(shell, "strip_button", None)
+        if button is not None and button.isChecked() and shell.strip_view.source is not None:
+            return self.project.pages[shell.strip_view.visible_page()]
+        return self.project.active_page
+
     def open_watermark_editor(self) -> None:
         if self.watermark_dialog is None:
             dialog = WatermarkDialog(self.watermark_settings, self)
@@ -2892,7 +2913,7 @@ class MainWindow(QMainWindow):
             "distribution", "minimum_gap", "interval_px", "trim_transparent",
         }
         if self.project.pages and any(previous.get(key) != updated.get(key) for key in geometry_keys):
-            updated["page_positions"].pop(self.project.active_page.name, None)
+            updated["page_positions"].pop(MainWindow._watermark_edit_page(self).name, None)
         updated["active"] = bool(watermark_bytes(updated))
         self.watermark_settings = updated
         self._refresh_watermark_preview(force=True)
@@ -2903,7 +2924,7 @@ class MainWindow(QMainWindow):
     def _redistribute_watermark_current(self) -> None:
         if not self.project.pages or not self._watermark_ready():
             return
-        self.watermark_settings["page_positions"].pop(self.project.active_page.name, None)
+        self.watermark_settings["page_positions"].pop(MainWindow._watermark_edit_page(self).name, None)
         self.watermark_settings["positions"] = None
         if self.watermark_dialog is not None:
             self.watermark_dialog.set_settings(self.watermark_settings)
@@ -2924,8 +2945,8 @@ class MainWindow(QMainWindow):
         settings = copy.deepcopy(self.watermark_settings)
         if preview and not settings.get("enabled_pages"):
             settings["enabled_pages"] = [page.name for page in self.project.pages]
-        elif preview and self.project.active_page.name not in settings["enabled_pages"]:
-            settings["enabled_pages"].append(self.project.active_page.name)
+        elif preview and MainWindow._watermark_edit_page(self).name not in settings["enabled_pages"]:
+            settings["enabled_pages"].append(MainWindow._watermark_edit_page(self).name)
         return chapter_watermark_settings([
             dict(name=page.name, width=page.width, height=page.height,
                  regions=self.page_regions.get(page_key(page), []))
@@ -2938,6 +2959,14 @@ class MainWindow(QMainWindow):
         page_name = self.project.active_page.name
         self.watermark_settings.setdefault("page_positions", {})[page_name] = [list(position) for position in positions]
         self._history_timer.start()
+
+    def _strip_watermark_positions_changed(self, page_name: str, positions: list) -> None:
+        if self._restoring_state:
+            return
+        self.watermark_settings.setdefault("page_positions", {})[page_name] = [list(p) for p in positions]
+        self._history_timer.start()
+        # Finish the item's release event before rebuilding its scene items.
+        QTimer.singleShot(0, lambda: self._refresh_watermark_preview(force=self._watermark_previewing))
 
     def _watermark_ready(self) -> bool:
         if watermark_bytes(self.watermark_settings):
@@ -2967,7 +2996,7 @@ class MainWindow(QMainWindow):
         if not self.project.pages or not self._watermark_ready():
             return
         enabled = list(self.watermark_settings["enabled_pages"])
-        page_name = self.project.active_page.name
+        page_name = MainWindow._watermark_edit_page(self).name
         if page_name not in enabled:
             enabled.append(page_name)
         self.watermark_settings["enabled_pages"] = enabled
@@ -2994,7 +3023,7 @@ class MainWindow(QMainWindow):
     def _remove_watermark_current(self) -> None:
         if not self.project.pages:
             return
-        page_name = self.project.active_page.name
+        page_name = MainWindow._watermark_edit_page(self).name
         self._watermark_removed_explicitly = True
         self.watermark_settings["enabled_pages"] = [
             name for name in self.watermark_settings["enabled_pages"] if name != page_name
@@ -3033,16 +3062,21 @@ class MainWindow(QMainWindow):
         if not self.project.pages:
             self.canvas_shell.canvas.clear_watermark()
             return
-        current_name = self.project.active_page.name
+        preview_page = MainWindow._watermark_edit_page(self)
+        current_name = preview_page.name
         enabled = current_name in self.watermark_settings.get("enabled_pages", [])
         visible = bool(force or enabled)
         plan = self._chapter_watermarks(preview=force)
+        if hasattr(self.canvas_shell, "strip_button") and self.canvas_shell.strip_button.isChecked():
+            self.canvas_shell.strip_view.set_watermarks(plan)
         preview_settings = plan.get(current_name)
         self.canvas_shell.canvas.set_watermark(preview_settings, visible, current_name)
         if self.watermark_dialog is not None:
             self.watermark_dialog.set_scope_status(
                 enabled, len(self.watermark_settings.get("enabled_pages", [])), len(self.project.pages),
-                len(self.canvas_shell.canvas._watermark_items),
+                (len(self.canvas_shell.strip_view._watermarks.get(current_name, []))
+                 if hasattr(self.canvas_shell, "strip_button") and self.canvas_shell.strip_button.isChecked()
+                 else len(self.canvas_shell.canvas._watermark_items)),
             )
             total_count = 0
             for page in self.project.pages:
@@ -3055,7 +3089,7 @@ class MainWindow(QMainWindow):
                     if mark is not None:
                         total_count += len(watermark_positions((page.width, page.height), mark.size, settings))
             self.watermark_dialog.set_preview_info(
-                (self.project.active_page.width, self.project.active_page.height), preview_settings, total_count,
+                (preview_page.width, preview_page.height), preview_settings, total_count,
             )
 
     def _watermark_for_page(self, page) -> dict | None:
@@ -3170,6 +3204,11 @@ class MainWindow(QMainWindow):
 
     def _restore_snapshot(self, snapshot: dict) -> None:
         self._history_timer.stop()
+        strip_view = self.canvas_shell.strip_view
+        strip_state = (
+            (strip_view.transform().m11(), strip_view.mapToScene(strip_view.viewport().rect().center()))
+            if self.canvas_shell.strip_button.isChecked() else None
+        )
         view_state = self.canvas_shell.canvas.view_state()
         self._restoring_state = True
         try:
@@ -3196,6 +3235,10 @@ class MainWindow(QMainWindow):
                 self._sync_script_panel()
         finally:
             self._restoring_state = False
+        if strip_state is not None:
+            self._toggle_continuous_strip(True)
+            strip_view.set_zoom(round(strip_state[0] * 100))
+            strip_view.centerOn(strip_state[1])
         self._update_history_actions()
 
     def undo(self) -> None:
@@ -3323,6 +3366,8 @@ class MainWindow(QMainWindow):
         # produced a pending plan yet.
         self.cancel_clean_mask_preview(silent=True)
         self._displayed_page_path = None
+        self.canvas_shell.set_strip_mode(False)
+        self.canvas_shell.strip_view.dispose()
         self.canvas_shell.canvas.clear_page()
         self.canvas_shell.page_label.setText("—  /  —")
         self.inspector.update_page(0, 0)
@@ -3336,6 +3381,13 @@ class MainWindow(QMainWindow):
         if not self.project.pages:
             self._set_empty_canvas()
             return
+        if self.canvas_shell.strip_button.isChecked():
+            source = self.canvas_shell.strip_view.source
+            if source is not None and tuple(self.project.pages) == source.pages and not self._restoring_state:
+                self.canvas_shell.strip_view.jump_to_page(index)
+                return
+            self.canvas_shell.set_strip_mode(False)
+            self.canvas_shell.strip_view.dispose()
         if self._page_metric_key:
             self.performance.cancel(self._page_metric_key)
         self._page_metric_key = f"page:{index}:{perf_counter()}"
@@ -3597,14 +3649,21 @@ class MainWindow(QMainWindow):
 
     def previous_page(self) -> None:
         if self.project.pages:
-            self.images_panel.list.setCurrentRow(max(0, self.project.active_index - 1))
+            if self.canvas_shell.strip_button.isChecked():
+                self.canvas_shell.strip_view.jump_to_page(self.canvas_shell.strip_view.visible_page() - 1)
+            else:
+                self.images_panel.list.setCurrentRow(max(0, self.project.active_index - 1))
 
     def next_page(self) -> None:
         if self.project.pages:
-            self.images_panel.list.setCurrentRow(min(len(self.project.pages) - 1, self.project.active_index + 1))
+            if self.canvas_shell.strip_button.isChecked():
+                self.canvas_shell.strip_view.jump_to_page(self.canvas_shell.strip_view.visible_page() + 1)
+            else:
+                self.images_panel.list.setCurrentRow(min(len(self.project.pages) - 1, self.project.active_index + 1))
 
     def _adjust_zoom(self, delta: int) -> None:
-        self.canvas_shell.canvas.set_zoom(self.canvas_shell.canvas._zoom + delta)
+        view = self.canvas_shell.active_view()
+        view.set_zoom(round(view.transform().m11() * 100) + delta)
 
     def dragEnterEvent(self, event) -> None:
         if event.mimeData().hasUrls():
@@ -4713,6 +4772,96 @@ class MainWindow(QMainWindow):
         self._record_history()
         self._toast("Texto aplicado", f"Se actualizó la capa {index + 1}.")
 
+    def _strip_editing_controls(self, enabled: bool) -> None:
+        # Page-local controls become available again by double-clicking that
+        # page. A hidden page must never receive edits made from the overview.
+        self.tool_panel.setEnabled(not enabled)
+        self.inspector_scroll.setEnabled(not enabled)
+        self.layers.setEnabled(not enabled)
+
+    def _strip_source(self, include_watermarks: bool = False):
+        from core.chapter_strip import ChapterStrip
+        pages = list(self.project.pages)
+        styles = copy.deepcopy(self.page_styles)
+        for settings in styles.values():
+            settings.pop("watermark", None)
+        if include_watermarks:
+            plan = self._chapter_watermarks()
+            for page in pages:
+                mark = plan.get(page.name)
+                if mark is not None:
+                    styles.setdefault(page_key(page), {})["watermark"] = mark
+        # A single very long file can exceed the normal page cache budget.
+        # Permit that one page, never memory proportional to the whole chapter.
+        largest_page = max(page.width * page.height * 3 for page in pages)
+        return ChapterStrip(pages, copy.deepcopy(self.page_regions), dict(self.clean_results), styles,
+                            cache_bytes=max(32 * 1024 * 1024, largest_page))
+
+    def _toggle_continuous_strip(self, enabled: bool) -> None:
+        shell = self.canvas_shell
+        if enabled and (not self.project.pages or self.current_task is not None):
+            shell.set_strip_mode(False)
+            self._toast("Tira continua", "Abre un capítulo y espera a que termine el proceso en curso.")
+            return
+        if enabled:
+            if self._history_timer.isActive():
+                self._history_timer.stop()
+                self._commit_debounced_state()
+            self.cancel_clean_mask_preview(silent=True)
+            self._remember_displayed_page_view()
+            self._page_load_token += 1
+            self._page_request_timer.stop()
+            self._pending_page_load = None
+            if self._image_task is not None:
+                self._image_task.cancel()
+            if self._prefetch_task is not None:
+                self._prefetch_task.cancel()
+            self.prefetch_pool.clear()
+            self.images.clear()
+            self._displayed_page_path = None
+            shell.set_strip_mode(True)
+            shell.canvas.clear_page()
+            shell.strip_view.set_source(self._strip_source())
+            shell.strip_view.jump_to_page(self.project.active_index)
+            shell.strip_view.set_watermarks(self._chapter_watermarks(preview=self._watermark_previewing))
+            self._toast("Tira continua", "Arrastra las marcas aquí. Doble clic en una página para editarla; Exportar tira guarda un solo PNG.")
+        else:
+            index = shell.strip_view.visible_page() if shell.strip_view.source is not None else self.project.active_index
+            shell.set_strip_mode(False)
+            shell.strip_view.dispose()
+            if self.project.pages:
+                self._set_page(index)
+
+    def _strip_page_visible(self, index: int) -> None:
+        if self.canvas_shell.strip_button.isChecked() and self.project.pages:
+            self.canvas_shell.page_label.setText(f"{index + 1}  /  {len(self.project.pages)} · Tira")
+
+    def _edit_strip_page(self, index: int) -> None:
+        self.canvas_shell.set_strip_mode(False)
+        self.canvas_shell.strip_view.dispose()
+        self.images_panel.list.setCurrentRow(index)
+        self._set_page(index)
+
+    def save_strip(self) -> None:
+        if not self.project.pages:
+            self._toast("Sin capítulo", "Abre un capítulo antes de exportar.")
+            return
+        if self.current_task is not None:
+            self._toast("Proceso en curso", "Espera a que termine el proceso antes de exportar la tira.")
+            return
+        page = self.project.active_page
+        default = (page.path.parent if page.path else Path.cwd()) / "capitulo-tira.png"
+        filename, _ = QFileDialog.getSaveFileName(self, "Exportar capítulo como tira", str(default), "PNG (*.png)")
+        if not filename:
+            return
+        source = self._strip_source(include_watermarks=True)
+        destination = Path(filename).with_suffix(".png")
+        def export(progress, cancelled):
+            from core.chapter_strip import export_strip_png
+            return str(export_strip_png(destination, source, progress, cancelled))
+        self._start_task(export, "Exportación de tira",
+                         f"Tira guardada a {source.width} × {source.height} px.")
+
     def save_current(self) -> None:
         if not self.project.pages:
             self._toast("Sin imagen", "Abre un capítulo antes de guardar.")
@@ -4957,6 +5106,14 @@ class MainWindow(QMainWindow):
             self._toast("No se pudo recuperar", str(error))
 
     def closeEvent(self, event) -> None:
+        # A closed window may remain alive while a worker finishes. Its timers
+        # must not enqueue new page/model work after the process is disposed.
+        for timer in self.findChildren(QTimer):
+            timer.stop()
+        self._page_load_token += 1
+        if self._image_task is not None:
+            self._image_task.cancel()
+        self.canvas_shell.strip_view.dispose()
         self._remember_displayed_page_view()
         if self._update_check_task is not None:
             self._update_check_task.cancel()

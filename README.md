@@ -53,6 +53,13 @@ con un límite espacial por inferencia. [Detalles y verificación](docs/cleaning
 
 ![Capas de imagen original, limpieza, pintura y restauración](docs/images/retouch-layers.png)
 
+### Tira continua
+
+**Tira continua** permite recorrer el capítulo y mover sus marcas de agua sin
+unir las imágenes en memoria. Doble clic abre una página para editarla.
+**Exportar tira** guarda todo en un PNG a resolución original, página a página.
+[Uso, límites y pruebas de rendimiento](docs/continuous-strip.md).
+
 Las imágenes mostradas son material de prueba. Antes de reutilizar capturas o
 páginas en publicaciones públicas, confirma que tienes los derechos necesarios.
 
