@@ -11,6 +11,7 @@ from PySide6.QtWidgets import (
 )
 
 from core.watermark_manager import normalized_watermark, prepare_watermark
+from core.watermark_presets import balanced_watermark
 from ui.widgets.controls import ModernButton, SectionTitle, CollapsibleSection
 
 
@@ -56,6 +57,12 @@ class WatermarkDialog(QDialog):
         choose.clicked.connect(self._choose_png); root.addWidget(choose)
         self.source_label = QLabel("Sin archivo seleccionado")
         self.source_label.setObjectName("Muted"); self.source_label.setWordWrap(True); root.addWidget(self.source_label)
+        self.recommended_button = ModernButton("Usar ajuste equilibrado", icon_name="refresh")
+        self.recommended_button.setToolTip(
+            "22 % de ancho · 55 % de opacidad · alternar lados · unos 7.000 px entre centros · "
+            "máximo 24 por capítulo. Reemplaza las posiciones manuales de todo el capítulo.")
+        self.recommended_button.clicked.connect(self._use_balanced_preset)
+        root.addWidget(self.recommended_button)
 
         root.addWidget(SectionTitle("Tamaño"))
         self.size_mode = QComboBox()
@@ -98,6 +105,11 @@ class WatermarkDialog(QDialog):
         root.addWidget(SectionTitle("Distribución"))
         self.repeat = QCheckBox("Repartir por el capítulo completo")
         self.auto_count = QCheckBox("Cantidad automática según la altura del capítulo")
+        self.auto_count_limit = self._spin(1, 600, " marca(s)")
+        self.limit_label = QLabel("LÍMITE AUTOMÁTICO POR CAPÍTULO")
+        self.limit_label.setBuddy(self.auto_count_limit)
+        self.auto_count_limit.setAccessibleName("LÍMITE AUTOMÁTICO POR CAPÍTULO")
+        self.auto_count_limit.setToolTip("Reduce la cantidad en capítulos largos. No limita las posiciones manuales ni la cantidad fija.")
         self.interval_px = self._spin(0, 100000, " px")
         self.interval_px.setSpecialValueText("Automática")
         self.interval_px.setToolTip("Distancia aproximada entre centros de marcas. Cero calcula una distancia según el ancho del capítulo.")
@@ -120,6 +132,7 @@ class WatermarkDialog(QDialog):
         self.interval_px.setAccessibleName("DISTANCIA ENTRE CENTROS")
         self.repeat_count.setAccessibleName("CANTIDAD TOTAL EN EL CAPÍTULO")
         root.addWidget(self.interval_label); root.addWidget(self.interval_px)
+        root.addWidget(self.limit_label); root.addWidget(self.auto_count_limit)
         root.addWidget(self.count_label); root.addWidget(self.repeat_count)
         repeat_hint = QLabel("Las páginas forman una tira continua: la separación se mantiene entre archivos. La cantidad es para todo el capítulo, no para cada página.")
         repeat_hint.setObjectName("Muted"); repeat_hint.setWordWrap(True); root.addWidget(repeat_hint)
@@ -199,7 +212,7 @@ class WatermarkDialog(QDialog):
             self.offset_x, self.offset_y, self.keep_inside, self.opacity, self.rotation,
             self.blend, self.repeat, self.auto_count, self.repeat_count, self.avoid_text, self.seam_safe,
             self.distribution, self.minimum_gap,
-            self.interval_px, self.trim_transparent,
+            self.interval_px, self.trim_transparent, self.auto_count_limit,
         ]
         self.repeat.toggled.connect(self._update_size_visibility)
         self.auto_count.toggled.connect(self._update_size_visibility)
@@ -226,6 +239,7 @@ class WatermarkDialog(QDialog):
         self.repeat.setChecked(config["repeat"]); self.repeat_x.setValue(config["repeat_spacing_x"])
         self.repeat_y.setValue(config["repeat_spacing_y"]); self.repeat_count.setValue(config["repeat_count"])
         self.auto_count.setChecked(config["auto_count"]); self.avoid_text.setChecked(config["avoid_text"])
+        self.auto_count_limit.setValue(config["auto_count_limit"])
         self.seam_safe.setChecked(config["seam_safe"])
         self.distribution.setCurrentIndex(self.distribution.findData(config["distribution"]))
         self.minimum_gap.setValue(config["minimum_gap"])
@@ -247,6 +261,7 @@ class WatermarkDialog(QDialog):
             "distribution": self.distribution.currentData(), "minimum_gap": self.minimum_gap.value(),
             "interval_px": self.interval_px.value(), "trim_transparent": self.trim_transparent.isChecked(),
             "repeat": self.repeat.isChecked(), "auto_count": self.auto_count.isChecked(),
+            "auto_count_limit": self.auto_count_limit.value(),
             "repeat_spacing_x": self.repeat_x.value(),
             "repeat_spacing_y": self.repeat_y.value(), "repeat_count": self.repeat_count.value(),
             "avoid_text": self.avoid_text.isChecked(), "seam_safe": self.seam_safe.isChecked(),
@@ -281,9 +296,11 @@ class WatermarkDialog(QDialog):
         self.width_px.setVisible(not percent); self.width_label.setVisible(not percent)
         automatic = self.auto_count.isChecked()
         self.interval_px.setVisible(automatic); self.interval_label.setVisible(automatic)
+        self.auto_count_limit.setVisible(automatic); self.limit_label.setVisible(automatic)
         self.repeat_count.setVisible(not automatic); self.count_label.setVisible(not automatic)
         self.auto_count.setEnabled(self.repeat.isChecked())
         self.interval_px.setEnabled(self.repeat.isChecked() and self.auto_count.isChecked())
+        self.auto_count_limit.setEnabled(self.repeat.isChecked() and automatic)
         self.repeat_count.setEnabled(self.repeat.isChecked() and not self.auto_count.isChecked())
         self.distribution.setEnabled(self.repeat.isChecked())
         self.minimum_gap.setEnabled(self.repeat.isChecked())
@@ -298,6 +315,11 @@ class WatermarkDialog(QDialog):
         filename, _ = QFileDialog.getOpenFileName(self, "Seleccionar marca de agua", "", "PNG con transparencia (*.png)")
         if filename:
             self._load_png(Path(filename))
+
+    def _use_balanced_preset(self) -> None:
+        self.set_settings(balanced_watermark(self.values()))
+        self._emit()
+        self.redistribute_chapter_requested.emit()
 
     def _load_png(self, path: Path) -> None:
         try:

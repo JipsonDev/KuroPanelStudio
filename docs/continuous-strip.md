@@ -14,6 +14,14 @@ El editor indica cuántas posiciones manuales están guardadas. Estas se
 respetan incluso si cambias la separación automática. Para recuperar un
 reparto uniforme usa **Redistribuir todo el capítulo** en el editor de marcas.
 
+**Usar ajuste equilibrado** conserva tu PNG y aplica el nuevo valor
+predeterminado: ancho del 22 % de página, opacidad del 55 %, lados alternados,
+unos 7.000 px entre centros y máximo de 24 marcas automáticas en todo el
+capítulo. La separación mínima es de 2.500 px entre los bordes de las marcas;
+el límite puede aumentar la distancia en capítulos largos. El botón también
+reemplaza las posiciones manuales guardadas para rehacer el reparto completo.
+Las configuraciones guardadas en proyectos se respetan hasta aplicar el ajuste.
+
 El doble clic abre la página elegida para OCR, limpieza y edición de texto.
 Las páginas siguen separadas en el proyecto: el modo de vista no fusiona las
 cajas ni habilita selecciones de OCR que crucen dos archivos.
@@ -38,6 +46,11 @@ Los proyectos existentes conservan el orden guardado.
   usa 32 MiB o el tamaño RGB de la página más grande, lo que sea mayor. La
   decodificación temporal todavía necesita la memoria de una página fuente;
   archivos individuales muy grandes pueden superar el presupuesto habitual.
+- La vista considera la densidad de pantalla y conserva los píxeles originales
+  a aumentos habituales de lectura. Al alejar usa recortes con detalle adicional
+  y reducción Lanczos. Si el área visible excede el presupuesto, baja el detalle
+  para cubrirla completa antes de cargar el margen de desplazamiento. Al acercar
+  recupera el original; la resolución de exportación no depende del zoom.
 - Las marcas con la misma apariencia comparten un pixmap; no se decodifica y
   almacena un PNG independiente por cada página o repetición.
 - La decodificación/composición usa un trabajador. El hilo de interfaz solo

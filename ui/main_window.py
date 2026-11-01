@@ -2910,7 +2910,7 @@ class MainWindow(QMainWindow):
             "png_bytes", "size_mode", "scale_percent", "width_px", "anchor",
             "margin_x", "margin_y", "offset_x", "offset_y", "rotation",
             "repeat", "auto_count", "repeat_count", "avoid_text", "seam_safe", "keep_inside",
-            "distribution", "minimum_gap", "interval_px", "trim_transparent",
+            "distribution", "minimum_gap", "interval_px", "trim_transparent", "auto_count_limit",
         }
         if self.project.pages and any(previous.get(key) != updated.get(key) for key in geometry_keys):
             updated["page_positions"].pop(MainWindow._watermark_edit_page(self).name, None)

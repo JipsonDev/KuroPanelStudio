@@ -5,6 +5,8 @@ import json
 from copy import deepcopy
 from pathlib import Path
 
+from core.watermark_presets import BALANCED_WATERMARK
+
 
 DEFAULT_SETTINGS = {
     "translate": {
@@ -32,7 +34,7 @@ DEFAULT_SETTINGS = {
         "gpu_idle_minutes": 5, "image_cache_mb": 384,
     },
     "profiles": {"active_type": "", "active_project": ""},
-    "watermark": {},
+    "watermark": dict(BALANCED_WATERMARK),
 }
 
 

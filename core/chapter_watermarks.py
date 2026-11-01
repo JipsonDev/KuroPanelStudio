@@ -93,7 +93,7 @@ def chapter_watermark_settings(pages: list[dict], value: dict) -> dict[str, dict
     if config["auto_count"]:
         width = max(page["width"] for page, _, _, _ in rows)
         interval = max(config["interval_px"], step) if config["interval_px"] else max(1600, width * 2.5, max_height * 8, step)
-        requested = max(1, min(600, round(total / interval)))
+        requested = max(1, min(config["auto_count_limit"], round(total / interval)))
     else:
         requested = config["repeat_count"]
     usable = max(0, total - 2 * margin - max_height)

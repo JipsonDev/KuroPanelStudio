@@ -170,17 +170,35 @@ class StripView(QGraphicsView):
         if self.source is None:
             return []
         rect = self.mapToScene(self.viewport().rect()).boundingRect()
-        scale = min(1., max(.125, math.ceil(self.transform().m11() * 8) / 8))
+        # Keep two source samples per physical display pixel. The old path
+        # reduced to logical zoom, ignoring display density, then Qt filtered
+        # the already reduced tile again. Reading zooms now retain native
+        # pixels; distant views use a small set of oversampled detail levels.
+        physical_zoom = self.transform().m11() * self.devicePixelRatioF()
+        target = min(1., max(.25, physical_zoom * 2))
+        scale = 1. if target > .5 else .5 if target > .25 else .25
         top = max(0, int(rect.top() - rect.height() * .5))
         bottom = min(self.source.height, math.ceil(rect.bottom() + rect.height() * .5))
         left = max(0, int(rect.left() - 128))
         right = min(self.source.width, math.ceil(rect.right() + 128))
-        keys = [(x, y, scale)
+        positions = [(x, y)
                 for y in range(top // self.TILE_HEIGHT * self.TILE_HEIGHT, bottom, self.TILE_HEIGHT)
                 for x in range(left // self.TILE_WIDTH * self.TILE_WIDTH, right, self.TILE_WIDTH)]
-        keys.sort(key=lambda key: abs(key[1] + self.TILE_HEIGHT / 2 - rect.center().y())
-                  + abs(key[0] + self.TILE_WIDTH / 2 - rect.center().x()))
-        # Keep closest visible tiles if an extreme viewport exceeds the budget.
+        def visible(position):
+            x, y = position
+            return QRectF(x, y, min(self.TILE_WIDTH, self.source.width - x),
+                          min(self.TILE_HEIGHT, self.source.height - y)).intersects(rect)
+
+        # Prefer lower detail across the entire visible area to sharp tiles
+        # surrounded by blank corners on large/high-density displays.
+        visible_count = sum(visible(position) for position in positions)
+        while scale > .125 and visible_count * self.TILE_WIDTH * self.TILE_HEIGHT * scale ** 2 * 4 > self.pixel_budget:
+            scale /= 2
+        positions.sort(key=lambda position: (
+            not visible(position),
+            abs(position[1] + self.TILE_HEIGHT / 2 - rect.center().y())
+            + abs(position[0] + self.TILE_WIDTH / 2 - rect.center().x())))
+        keys = [(x, y, scale) for x, y in positions]
         cost = max(1, int(self.TILE_WIDTH * self.TILE_HEIGHT * scale * scale * 4))
         return keys[:max(1, self.pixel_budget // cost)]
 
@@ -214,7 +232,7 @@ class StripView(QGraphicsView):
                 if scale < 1:
                     from PIL import Image
                     crop = crop.resize((max(1, round(crop.width * scale)), max(1, round(crop.height * scale))),
-                                       Image.Resampling.BILINEAR)
+                                       Image.Resampling.LANCZOS)
                 raw = crop.tobytes()
                 image = QImage(raw, crop.width, crop.height, crop.width * 3, QImage.Format_RGB888).copy()
                 results.append(((x, y, scale), image))

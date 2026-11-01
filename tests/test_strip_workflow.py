@@ -81,6 +81,16 @@ def test_main_window_strip_export_and_watermark_delete_do_not_edit_hidden_page(t
         assert window.project.active_index == 1
         assert window.tool_panel.isEnabled()
         assert not window.canvas_shell.strip_button.isChecked()
+        window.watermark_settings["page_positions"] = {"0.png": [[20, 20]], "1.png": [[20, 40]]}
+        window.open_watermark_editor()
+        window.watermark_dialog.recommended_button.click()
+        assert window.watermark_settings["page_positions"] == {}
+        assert window.watermark_settings["auto_count_limit"] == 24
+        assert window.watermark_settings["enabled_pages"] == ["0.png", "1.png"]
+        window.watermark_dialog.close()
         window.close()
+        from core.settings_manager import SettingsManager
+        saved = SettingsManager(window.settings.path).data["watermark"]
+        assert saved["auto_count_limit"] == 24 and saved["interval_px"] == 7000
         assert not window._memory_pressure_timer.isActive()
         assert not window._model_idle_timer.isActive()

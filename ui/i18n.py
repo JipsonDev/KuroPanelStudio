@@ -16,6 +16,12 @@ from PySide6.QtWidgets import (
 
 
 ES_TO_EN = {
+    "Usar ajuste equilibrado": "Use balanced preset",
+    "LÍMITE AUTOMÁTICO POR CAPÍTULO": "AUTOMATIC LIMIT PER CHAPTER",
+    "22 % de ancho · 55 % de opacidad · alternar lados · unos 7.000 px entre centros · máximo 24 por capítulo. Reemplaza las posiciones manuales de todo el capítulo.":
+        "22% width · 55% opacity · alternating sides · about 7,000 px between centers · up to 24 per chapter. Replaces manual positions throughout the chapter.",
+    "Reduce la cantidad en capítulos largos. No limita las posiciones manuales ni la cantidad fija.":
+        "Reduces the count in long chapters. Does not limit manual positions or the fixed count.",
     "Tira continua": "Continuous strip",
     "Exportar tira": "Export strip",
     "Ver el capítulo completo sin unir los archivos · doble clic para editar una página":
