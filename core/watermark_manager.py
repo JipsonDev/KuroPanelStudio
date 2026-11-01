@@ -35,6 +35,8 @@ DEFAULT_WATERMARK = {
     "minimum_gap": 48,
     "interval_px": 0,
     "auto_count": True,
+    # Legacy project geometry stays unchanged until a preset is chosen.
+    "auto_count_limit": 600,
     "repeat_count": 3,
     "repeat_spacing_x": 0,
     "repeat_spacing_y": 900,
@@ -96,6 +98,7 @@ def normalized_watermark(value: dict | None) -> dict:
     result["trim_transparent"] = bool(result.get("trim_transparent", True))
     result["repeat"] = bool(result.get("repeat", False))
     result["auto_count"] = bool(result.get("auto_count", True))
+    result["auto_count_limit"] = max(1, min(600, int(result.get("auto_count_limit", 600))))
     result["repeat_count"] = max(1, min(100, int(result.get("repeat_count", 3))))
     result["keep_inside"] = bool(result.get("keep_inside", True))
     result["visible_preview"] = bool(result.get("visible_preview", True))
@@ -215,6 +218,8 @@ def watermark_positions(
             lower += config["offset_y"]
             upper += config["offset_y"]
         count = automatic_watermark_count(page_size, mark_size, config["interval_px"]) if config["auto_count"] else config["repeat_count"]
+        if config["auto_count"]:
+            count = min(count, config["auto_count_limit"])
         gap = config["minimum_gap"]
         count = min(count, 1 + (upper - lower) // max(1, mark_height + gap))
         regions = config["avoid_regions"] if config["avoid_text"] else []

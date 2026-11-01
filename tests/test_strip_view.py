@@ -2,10 +2,12 @@
 import os
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 import time
+import numpy as np
+import pytest
 
 from PIL import Image
 from PySide6.QtWidgets import QApplication
-from PySide6.QtCore import QPointF
+from PySide6.QtCore import QPointF, QRectF
 
 from core.chapter_strip import ChapterStrip
 from core.project_manager import Page
@@ -120,5 +122,51 @@ def test_zoom_preview_tiles_cover_exact_original_bounds_with_odd_dimensions(tmp_
     rect = item.mapRectToScene(item.boundingRect())
     assert abs(rect.width() - 317) < .001
     assert abs(rect.height() - 1403) < .001
+    view.dispose()
+    view.close()
+
+
+@pytest.mark.parametrize("zoom,dpr", [(50, 1.), (35, 2.)])
+def test_reading_zoom_retains_original_fine_strokes_in_tile_pixels(tmp_path, monkeypatch, zoom, dpr):
+    app = QApplication.instance() or QApplication([])
+    # One-pixel strokes are independently known source detail. Resizing the
+    # crop before display destroys these pixels even after increasing zoom.
+    pixels = np.full((513, 641, 3), 255, np.uint8)
+    pixels[20:400, 80::3] = 0
+    path = tmp_path / "fine-strokes.png"
+    Image.fromarray(pixels).save(path)
+    view = StripView()
+    monkeypatch.setattr(view, "devicePixelRatioF", lambda: dpr)
+    view.resize(800, 650)
+    view.show()
+    view.set_source(ChapterStrip([Page(path.name, path, 641, 513)]))
+    view.set_zoom(zoom)
+    app_wait(app, lambda: bool(view._tiles))
+    tile = next(iter(view._tiles.values())).pixmap().toImage()
+    assert (tile.width(), tile.height()) == (641, 513)
+    for x in (80, 81, 83, 84):
+        assert tile.pixelColor(x, 100).red() == int(pixels[100, x, 0])
+    view.dispose()
+    view.close()
+
+
+def test_wide_hidpi_view_fits_all_visible_tiles_inside_memory_budget(tmp_path, monkeypatch):
+    app = QApplication.instance() or QApplication([])
+    view = StripView()
+    monkeypatch.setattr(view, "devicePixelRatioF", lambda: 2.)
+    view.resize(1600, 1000)
+    view.show()
+    app.processEvents()
+    # Geometry only: calculating the detail level must not decode this page.
+    view.set_source(ChapterStrip([Page("wide", tmp_path / "not-loaded.png", 10000, 40000)]))
+    view.set_zoom(10)
+    rect = view.mapToScene(view.viewport().rect()).boundingRect()
+    needed = {(x, y) for x in range(0, 10000, view.TILE_WIDTH)
+              for y in range(0, 40000, view.TILE_HEIGHT)
+              if QRectF(x, y, min(10000 - x, view.TILE_WIDTH), view.TILE_HEIGHT).intersects(rect)}
+    wanted = view._wanted()
+    assert needed.issubset({(x, y) for x, y, _ in wanted})
+    assert sum(view.TILE_WIDTH * view.TILE_HEIGHT * scale ** 2 * 4
+               for _, _, scale in wanted) <= view.pixel_budget
     view.dispose()
     view.close()

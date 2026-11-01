@@ -1,19 +1,14 @@
 # KuroPanel Studio @VERSION@
 
-## Tira continua y marcas de agua
+## Tira más nítida y marcas equilibradas
 
-- **Tira continua** recorre todas las páginas del capítulo sin crear una imagen gigante. Carga solo las teselas cercanas, con cachés limitadas y trabajos fuera del hilo de interfaz.
-- Arrastra o borra las marcas en la tira. Las posiciones quedan asociadas a cada página y se conservan al guardar, exportar y deshacer.
-- Doble clic abre una página para OCR, limpieza o edición de texto. Las páginas permanecen separadas en el proyecto; las selecciones OCR no cruzan archivos.
-- **Exportar tira** guarda un solo PNG a resolución original, con textos, retoques y marcas. Escribe página a página y conserva el destino anterior si se cancela.
-- El reparto denso ya no descarta la marca intermedia cuando la cantidad solicitada sí cabe con la separación mínima.
-- Los archivos nuevos se importan en orden natural: 1, 2, 10. Los proyectos guardados conservan su orden.
-- Se mantienen MI-GAN y LaMa, la protección de globos y las correcciones de exportación de marcas.
+- La vista continua conserva más detalle al reducir y usa los píxeles originales a aumentos habituales de lectura. También tiene en cuenta la densidad de pantalla.
+- La carga da prioridad a todas las teselas visibles, con un presupuesto de 48 MiB y ajuste del detalle para ventanas grandes. La exportación sigue a resolución original.
+- Nuevo ajuste predeterminado: marca de ancho **22 %**, opacidad **55 %**, lados alternados, unos **7.000 px** entre centros y **máximo 24** automáticas en todo el capítulo.
+- **Usar ajuste equilibrado** conserva tu PNG y reemplaza las posiciones manuales para rehacer el reparto completo. Los proyectos guardados mantienen su diseño hasta aplicar el ajuste.
+- El límite automático se puede modificar y no limita una cantidad fija o posiciones manuales.
+- Se mantienen MI-GAN, LaMa, la protección de globos y la exportación de la tira por bandas.
 
-## Rendimiento y distribución
+Verificación local: **558 pruebas aprobadas, 6 omitidas y 11 subpruebas aprobadas**. Incluye trazos finos, densidad de pantalla, cobertura visible dentro del presupuesto de memoria y persistencia del ajuste y del límite de marcas.
 
-Verificación local: **552 pruebas aprobadas, 6 omitidas y 11 subpruebas aprobadas**. Incluye posiciones manuales, exportación real de la tira, cancelación, teselas y cambio de capítulos.
-
-En una prueba sintética local, pasar de 30 a 300 páginas mantuvo tres páginas decodificadas para el mismo recorte (14,58 MB de caché). Exportar 120 páginas a 900 × 216 000 tardó 4,29 s sin asignar el raster completo de 583,2 MB. Los tiempos varían según contenido y equipo. Un PNG muy alto puede superar límites de otros visores; la vista virtual sigue usando los originales.
-
-Descarga `KuroPanelStudio-Setup-@VERSION@-Windows-x64.exe`; verifica `SHA256SUMS.txt`. Incluye modelos y runtime ONNX para CPU, sin claves de API. El canal público recibe actualizaciones desde GitHub Releases.
+Descarga `KuroPanelStudio-Setup-@VERSION@-Windows-x64.exe`; verifica `SHA256SUMS.txt`. Incluye modelos y runtime ONNX para CPU, sin claves de API.

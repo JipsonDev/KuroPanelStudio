@@ -1,5 +1,13 @@
 # Historial de cambios
 
+## 0.2.19 — nitidez de la tira y marcas equilibradas
+
+- La tira evita reducir dos veces los trazos finos: niveles de detalle con sobremuestreo y densidad física de pantalla, píxeles nativos a aumentos de lectura y Lanczos al alejar.
+- Las teselas visibles tienen prioridad sobre el margen; el nivel de detalle se adapta al presupuesto de 48 MiB para evitar zonas vacías en ventanas grandes.
+- Ajuste predeterminado equilibrado para marcas nuevas: ancho 22 %, opacidad 55 %, lados alternados, intervalo aproximado 7.000 px y máximo 24 por capítulo.
+- Nuevo límite automático por capítulo y botón para aplicar el ajuste a un PNG existente y redistribuir las posiciones manuales. Los proyectos antiguos conservan su diseño hasta elegirlo.
+- Verificación local: 558 pruebas aprobadas, 6 omitidas y 11 subpruebas aprobadas.
+
 ## 0.2.18 — tira continua y reparto de marcas
 
 - Vista continua del capítulo con carga de teselas por visibilidad, presupuesto de pixmaps y descarte de resultados antiguos. Doble clic abre la página para editarla.
