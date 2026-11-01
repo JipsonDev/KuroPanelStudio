@@ -3639,6 +3639,9 @@ class CanvasView(QGraphicsView):
 
 class CanvasShell(QFrame):
     panel_toggle_requested = Signal()
+    strip_mode_requested = Signal(bool)
+    strip_mode_changed = Signal(bool)
+    export_strip_requested = Signal()
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -3649,7 +3652,9 @@ class CanvasShell(QFrame):
         toolbar = QHBoxLayout()
         toolbar.setSpacing(5)
         self.canvas = CanvasView()
-        for label, icon_name, tip, action in (("", "zoom-in", "Acercar", self.canvas.zoom_in), ("", "zoom-out", "Alejar", self.canvas.zoom_out), ("Ajustar", None, "Ajustar imagen", self.canvas.fit_image)):
+        from ui.strip_view import StripView
+        self.strip_view = StripView()
+        for label, icon_name, tip, action in (("", "zoom-in", "Acercar", lambda: self.active_view().zoom_in()), ("", "zoom-out", "Alejar", lambda: self.active_view().zoom_out()), ("Ajustar", None, "Ajustar imagen", lambda: self.active_view().fit_image())):
             button = ModernButton(label, icon_name=icon_name)
             button.setObjectName("CanvasTool")
             button.setToolTip(tip)
@@ -3660,7 +3665,7 @@ class CanvasShell(QFrame):
         self.zoom_label = ModernButton("100%")
         self.zoom_label.setObjectName("CanvasZoom")
         self.zoom_label.setToolTip("Restablecer zoom al 100%")
-        self.zoom_label.clicked.connect(lambda: self.canvas.set_zoom(100))
+        self.zoom_label.clicked.connect(lambda: self.active_view().set_zoom(100))
         self.zoom_label.setFixedWidth(68)
         toolbar.addWidget(self.zoom_label)
         self.compare_button = ModernButton("Comparar", icon_name="eye")
@@ -3670,6 +3675,17 @@ class CanvasShell(QFrame):
         self.compare_button.setAccessibleName("Comparar original y limpieza")
         self.compare_button.toggled.connect(self.canvas.set_comparison_mode)
         toolbar.addWidget(self.compare_button)
+        self.strip_button = ModernButton("Tira continua")
+        self.strip_button.setObjectName("CanvasTool")
+        self.strip_button.setCheckable(True)
+        self.strip_button.setToolTip("Ver el capítulo completo sin unir los archivos · doble clic para editar una página")
+        self.strip_button.toggled.connect(self.strip_mode_requested.emit)
+        toolbar.addWidget(self.strip_button)
+        self.export_strip_button = ModernButton("Exportar tira")
+        self.export_strip_button.setObjectName("CanvasTool")
+        self.export_strip_button.setToolTip("Guardar todo el capítulo en un solo PNG a resolución original")
+        self.export_strip_button.clicked.connect(self.export_strip_requested.emit)
+        toolbar.addWidget(self.export_strip_button)
         toolbar.addStretch()
         self.panel_button = ModernButton("", icon_name="layers")
         self.panel_button.setObjectName("CanvasTool")
@@ -3687,7 +3703,9 @@ class CanvasShell(QFrame):
         self.stage_layout.setContentsMargins(0, 0, 0, 0)
         self.stage_layout.addWidget(self.welcome)
         self.stage_layout.addWidget(self.canvas)
-        self.canvas.page_available.connect(lambda ready: self.stage_layout.setCurrentWidget(self.canvas if ready else self.welcome))
+        self.stage_layout.addWidget(self.strip_view)
+        self.canvas.page_available.connect(lambda ready: self.stage_layout.setCurrentWidget(
+            self.strip_view if self.strip_button.isChecked() else self.canvas if ready else self.welcome))
         layout.addWidget(stage, 1)
         navigation = QHBoxLayout()
         navigation.setSpacing(6)
@@ -3710,7 +3728,20 @@ class CanvasShell(QFrame):
         navigation.addWidget(self.next_button)
         navigation.addStretch()
         layout.addLayout(navigation)
-        self.canvas.zoom_changed.connect(lambda value: self.zoom_label.setText(f"{value}%"))
+        self.canvas.zoom_changed.connect(lambda value: self.zoom_label.setText(f"{value}%") if not self.strip_button.isChecked() else None)
+        self.strip_view.zoom_changed.connect(lambda value: self.zoom_label.setText(f"{value}%") if self.strip_button.isChecked() else None)
+
+    def active_view(self):
+        return self.strip_view if self.strip_button.isChecked() else self.canvas
+
+    def set_strip_mode(self, enabled: bool) -> None:
+        self.strip_button.blockSignals(True)
+        self.strip_button.setChecked(enabled)
+        self.strip_button.blockSignals(False)
+        self.compare_button.setEnabled(not enabled)
+        self.stage_layout.setCurrentWidget(self.strip_view if enabled else self.canvas)
+        self.zoom_label.setText(f"{round(self.active_view().transform().m11() * 100)}%")
+        self.strip_mode_changed.emit(enabled)
 
     def set_compact_controls(self, compact: bool) -> None:
         self.compare_button.setText("" if compact else "Comparar")

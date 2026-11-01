@@ -1,16 +1,19 @@
 # KuroPanel Studio @VERSION@
 
-## Limpieza MI-GAN
+## Tira continua y marcas de agua
 
-- Motor MI-GAN ONNX incluido para la limpieza automática, por capítulo y con pincel de máscara.
-- En **Limpiar página → Motor de limpieza → Modelo local** puedes elegir MI-GAN o LaMa. MI-GAN es la opción inicial de configuraciones nuevas; al actualizar se respeta la preferencia guardada.
-- La carga y la inferencia se ejecutan en el proceso aislado para mantener la interfaz disponible.
-- Los recortes MI-GAN se limitan a 512 × 512 con contexto, omiten zonas sin selección y solo escriben dentro de la máscara revisada.
-- Se conservan las correcciones de puntas y bordes de los globos, el relleno sólido protegido y las posiciones e historial de marcas de agua.
-- Ambos empaquetados incluyen los pesos MI-GAN y su licencia MIT. No se requieren servicios ni paquetes adicionales para usarlos.
+- **Tira continua** recorre todas las páginas del capítulo sin crear una imagen gigante. Carga solo las teselas cercanas, con cachés limitadas y trabajos fuera del hilo de interfaz.
+- Arrastra o borra las marcas en la tira. Las posiciones quedan asociadas a cada página y se conservan al guardar, exportar y deshacer.
+- Doble clic abre una página para OCR, limpieza o edición de texto. Las páginas permanecen separadas en el proyecto; las selecciones OCR no cruzan archivos.
+- **Exportar tira** guarda un solo PNG a resolución original, con textos, retoques y marcas. Escribe página a página y conserva el destino anterior si se cancela.
+- El reparto denso ya no descarta la marca intermedia cuando la cantidad solicitada sí cabe con la separación mínima.
+- Los archivos nuevos se importan en orden natural: 1, 2, 10. Los proyectos guardados conservan su orden.
+- Se mantienen MI-GAN y LaMa, la protección de globos y las correcciones de exportación de marcas.
 
-## Verificación e instalación
+## Rendimiento y distribución
 
-Verificación local: **539 pruebas aprobadas, 6 omitidas y 11 subpruebas aprobadas**, incluida una inferencia real MI-GAN en el proceso aislado. La velocidad depende del tamaño de los recortes; MI-GAN no es necesariamente más rápido para zonas pequeñas.
+Verificación local: **552 pruebas aprobadas, 6 omitidas y 11 subpruebas aprobadas**. Incluye posiciones manuales, exportación real de la tira, cancelación, teselas y cambio de capítulos.
 
-Descarga `KuroPanelStudio-Setup-@VERSION@-Windows-x64.exe`; su SHA-256 está en `SHA256SUMS.txt`. Incluye los modelos y el runtime ONNX para CPU, sin claves de API. La edición pública mantiene el canal de GitHub Releases para **Buscar actualizaciones**.
+En una prueba sintética local, pasar de 30 a 300 páginas mantuvo tres páginas decodificadas para el mismo recorte (14,58 MB de caché). Exportar 120 páginas a 900 × 216 000 tardó 4,29 s sin asignar el raster completo de 583,2 MB. Los tiempos varían según contenido y equipo. Un PNG muy alto puede superar límites de otros visores; la vista virtual sigue usando los originales.
+
+Descarga `KuroPanelStudio-Setup-@VERSION@-Windows-x64.exe`; verifica `SHA256SUMS.txt`. Incluye modelos y runtime ONNX para CPU, sin claves de API. El canal público recibe actualizaciones desde GitHub Releases.

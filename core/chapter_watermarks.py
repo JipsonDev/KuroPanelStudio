@@ -96,18 +96,23 @@ def chapter_watermark_settings(pages: list[dict], value: dict) -> dict[str, dict
         requested = max(1, min(600, round(total / interval)))
     else:
         requested = config["repeat_count"]
-    count = min(requested, 1 + max(0, total - max_height) // step)
+    usable = max(0, total - 2 * margin - max_height)
+    count = min(requested, 1 + usable // step)
     # Keep each requested mark in its own chapter band. Previously a global
     # feasibility pass packed every displaced mark into the first available
     # region, often the top of the next page. An obstructed band now loses its
     # mark instead of handing it to another band or restarting the distribution.
     if count == 0:
         return output
-    pitch = total / count
+    # At capacity, total/count can be smaller than the mandatory step. The
+    # greedy floor then rejects a middle slot although every logo fits. Spread
+    # the feasible count symmetrically within the chapter's actual end margins.
+    pitch = max(step, min(total / count, usable / (count - 1))) if count > 1 else total
+    first = (total - max_height - (count - 1) * pitch) / 2
     drift = pitch * .25
     floor = 0
     for i in range(count):
-        ideal = (i + .5) * pitch - max_height / 2
+        ideal = first + i * pitch
         # Offsets may adjust a slot, but never collapse all slots at an edge.
         ideal += max(-drift, min(config["offset_y"], drift))
         choices = []

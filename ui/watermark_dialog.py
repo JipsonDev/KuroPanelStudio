@@ -267,7 +267,12 @@ class WatermarkDialog(QDialog):
             self.size_summary.setText("Sin logo visible. Selecciona un PNG con contenido.")
         else:
             self.size_summary.setText(f"Tamaño final: {mark.width} × {mark.height} px · página {page_size[0]} × {page_size[1]} px")
-        self.plan_summary.setText(f"{total_count} marca(s) en el capítulo. Las zonas sin espacio pueden quedar sin marca.")
+        manual = sum(len(points) for points in (settings or {}).get("page_positions", {}).values())
+        summary = f"{total_count} marca(s) en el capítulo. Las zonas sin espacio pueden quedar sin marca."
+        if manual:
+            summary += (f" {manual} marca(s) con posición manual guardada. "
+                        "Usa «Redistribuir todo el capítulo» para rehacer el reparto completo.")
+        self.plan_summary.setText(summary)
 
     def _update_size_visibility(self, *_args) -> None:
         percent = self.size_mode.currentData() == "percent"

@@ -1,5 +1,15 @@
 # Historial de cambios
 
+## 0.2.18 — tira continua y reparto de marcas
+
+- Vista continua del capítulo con carga de teselas por visibilidad, presupuesto de pixmaps y descarte de resultados antiguos. Doble clic abre la página para editarla.
+- Marcas movibles y borrables directamente en la tira; se guardan por página, participan en el historial y coinciden con la exportación.
+- Exportar tira genera un único PNG a resolución original por bandas, sin un raster del capítulo completo y conservando el destino anterior si se cancela.
+- Corrección del reparto denso: respeta capacidad y márgenes sin descartar marcas que sí caben.
+- Importación con orden natural de nombres (1, 2, 10); se conserva el orden de proyectos guardados.
+- Investigación estática con REA y bytecode del ejecutable 38.0.0 suministrado por el usuario. Implementación propia y pruebas de rendimiento documentadas.
+- Verificación local: 552 pruebas aprobadas, 6 omitidas y 11 subpruebas aprobadas.
+
 ## 0.2.17 — limpieza MI-GAN
 
 - MI-GAN ONNX como opción predeterminada para configuraciones nuevas; selección persistente de MI-GAN o LaMa en Motor de limpieza.

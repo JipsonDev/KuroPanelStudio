@@ -16,6 +16,15 @@ from PySide6.QtWidgets import (
 
 
 ES_TO_EN = {
+    "Tira continua": "Continuous strip",
+    "Exportar tira": "Export strip",
+    "Ver el capítulo completo sin unir los archivos · doble clic para editar una página":
+        "View the full chapter without joining files · double-click to edit a page",
+    "Guardar todo el capítulo en un solo PNG a resolución original":
+        "Save the full chapter as one PNG at original resolution",
+    "Exportar capítulo como tira": "Export chapter as a strip",
+    "Arrastra las marcas aquí. Doble clic en una página para editarla; Exportar tira guarda un solo PNG.":
+        "Drag watermarks here. Double-click a page to edit it; Export strip saves one PNG.",
     "●  El modelo se cargará al primer uso": "●  The model will load on first use",
     "Primero revisa la máscara roja. Puedes borrar falsos positivos antes de aplicar la limpieza.":
         "Review the red mask first. You can erase false positives before cleaning.",
