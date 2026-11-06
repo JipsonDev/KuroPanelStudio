@@ -20,6 +20,7 @@ from core.app_version import APP_UPDATE_CHANNEL, APP_VERSION
 from core.balloon_classifier import BALLOON_KINDS, classify_balloon
 from core.credential_store import CredentialStore
 from core.detection_manager import DetectionManager
+from core.chapter_detection import detect_chapter
 from core.font_profile_manager import FontProfileManager
 from core.history_manager import HistoryManager
 from core.image_manager import ImageManager
@@ -519,10 +520,7 @@ class MainWindow(QMainWindow):
         self.images_panel.page_selected.connect(self._set_page)
         self.canvas_shell.previous_button.clicked.connect(self.previous_page)
         self.canvas_shell.next_button.clicked.connect(self.next_page)
-        self.inspector.previous_requested.connect(self.previous_page)
-        self.inspector.next_requested.connect(self.next_page)
-        self.inspector.zoom_requested.connect(self._adjust_zoom)
-        self.canvas_shell.canvas.zoom_changed.connect(self.inspector.update_zoom)
+        self.topbar.export_format_changed.connect(self.inspector.format_choice.setCurrentText)
         self.canvas_shell.canvas.performance_measured.connect(self._record_performance_metric)
         self.canvas_shell.canvas.regions_changed.connect(self._sync_regions)
         self.canvas_shell.canvas.region_edit_requested.connect(self._edit_region_text)
@@ -753,7 +751,9 @@ class MainWindow(QMainWindow):
             self.sidebar.set_current(destination)
 
     def _handle_action(self, action: str) -> None:
-        if self.canvas_shell.strip_button.isChecked() and action not in {"watermark", "toggle_focus"}:
+        if self.canvas_shell.strip_button.isChecked() and action not in {
+            "watermark", "toggle_focus", "save_strip", "save_all", "save_project",
+        }:
             self._edit_strip_page(self.canvas_shell.strip_view.visible_page())
         if action == "toggle_focus":
             self.workspace.set_focus_mode(not self.workspace.focus_mode)
@@ -767,6 +767,8 @@ class MainWindow(QMainWindow):
             self.run_ocr_api_all()
         elif action in {"detect", "run_yolo"}:
             self.run_detection()
+        elif action == "run_yolo_all":
+            self.run_detection_chapter()
         elif action in {"clean", "run_clean"}:
             self.clean_text()
         elif action == "run_clean_one":
@@ -860,6 +862,8 @@ class MainWindow(QMainWindow):
             self.save_current()
         elif action == "save_all":
             self.save_all()
+        elif action == "save_strip":
+            self.save_strip()
         elif action == "save_project":
             self.save_project()
         elif action == "open_project":
@@ -1487,7 +1491,7 @@ class MainWindow(QMainWindow):
 
     def _sync_script_panel(self) -> None:
         if hasattr(self, "script_panel"):
-            self.script_panel.set_regions(self.regions, self.current_page)
+            self.script_panel.set_regions(self.regions, self.project.active_index)
             key = self._active_key()
             source = str(self.page_styles.get(key or "", {}).get("text_transfer", {}).get("source", ""))
             if self.script_panel.queue_input.toPlainText() != source:
@@ -3840,6 +3844,53 @@ class MainWindow(QMainWindow):
             "Las regiones reales se dibujaron sobre el canvas.",
             self._show_regions,
             stage="Detectando texto con YOLO…",
+        )
+
+    def run_detection_chapter(self) -> None:
+        if self.current_task is not None:
+            self._toast("Proceso en curso", "Espera a que termine la operación actual.")
+            return
+        if not self.project.pages:
+            self._toast("Abre un capítulo", "Carga imágenes antes de detectar cajas en todo el capítulo.")
+            return
+        # Existing boxes may contain paid OCR, translations and manual edits.
+        # Batch detection fills pages without boxes; page detection remains
+        # available for an explicit rerun on a particular page.
+        pages = [p for p in self.project.pages if p.path and not self.page_regions.get(page_key(p))]
+        if not pages:
+            self._toast("Cajas ya disponibles", "Todas las páginas ya tienen cajas. Puedes volver a detectar en una página desde Página actual.")
+            return
+        chapter = tuple((page_key(p), p.width, p.height) for p in self.project.pages)
+        states = {page_key(p): copy.deepcopy(self._source_layer_states(page_key(p))) for p in pages}
+
+        def finish(results):
+            if chapter != tuple((page_key(p), p.width, p.height) for p in self.project.pages):
+                return
+            applied = 0
+            for key, regions in results.items():
+                # Do not overwrite boxes drawn or PSD visibility changed
+                # while the model was running in the background.
+                if self.page_regions.get(key) or states[key] != self._source_layer_states(key):
+                    continue
+                for region in regions:
+                    region.setdefault("id", f"region-{uuid.uuid4().hex}")
+                self._apply_dialogue_defaults(regions, key=key)
+                self._consume_pending_text(key, regions)
+                self.page_regions[key] = regions
+                self._refresh_page_text(key)
+                applied += 1
+            if self._active_key() in results:
+                self.regions = self.page_regions.get(self._active_key(), [])
+                self._render_page_layers(self._active_key())
+            if applied:
+                self._record_history()
+            self.ai_panel.detection_status.setText(f"YOLO completado · {applied} página(s) procesadas")
+
+        self._start_task(
+            lambda progress, cancelled: detect_chapter(self.detector, pages, states, progress, cancelled),
+            "Detección YOLO del capítulo",
+            f"YOLO terminó el lote de {len(pages)} página(s). Se conservaron las cajas existentes y los cambios posteriores.",
+            finish, stage="Detectando cajas del capítulo…",
         )
 
     def run_ocr_api(self) -> None:

@@ -22,7 +22,7 @@ class ActionCardHeader(QFrame):
 
 
 class ActionCard(QWidget):
-    """Large disclosure card with the icon and explanatory line from the editor reference."""
+    """Compact disclosure row for secondary settings."""
 
     def __init__(self, title: str, subtitle: str, icon_name: str) -> None:
         super().__init__()
@@ -33,13 +33,13 @@ class ActionCard(QWidget):
         self.summary.setObjectName("ActionCardHeader")
         self.summary.setCursor(Qt.PointingHandCursor)
         summary_layout = QHBoxLayout(self.summary)
-        summary_layout.setContentsMargins(12, 9, 12, 9)
-        summary_layout.setSpacing(11)
+        summary_layout.setContentsMargins(8, 8, 8, 8)
+        summary_layout.setSpacing(8)
         glyph = QLabel()
         glyph.setObjectName("ActionCardIcon")
         glyph.setAlignment(Qt.AlignCenter)
-        glyph.setFixedSize(28, 30)
-        glyph.setPixmap(icon(icon_name, "#E9F0FA", 22).pixmap(22, 22))
+        glyph.setFixedSize(18, 22)
+        glyph.setPixmap(icon(icon_name, "#A7A9AD", 16).pixmap(16, 16))
         summary_layout.addWidget(glyph)
         copy = QVBoxLayout()
         copy.setContentsMargins(0, 0, 0, 0)
@@ -49,12 +49,14 @@ class ActionCard(QWidget):
         self.header.setText(title)
         self.header.setToolButtonStyle(Qt.ToolButtonTextOnly)
         self.header.setCheckable(True)
+        self.header.setAccessibleDescription(subtitle)
         self.header.setCursor(Qt.PointingHandCursor)
         self.header.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
         self.header.setAccessibleName(title)
         copy.addWidget(self.header, 0, Qt.AlignLeft)
         caption = QLabel(subtitle)
         caption.setObjectName("ActionCardSubtitle")
+        caption.setWordWrap(True)
         copy.addWidget(caption)
         summary_layout.addLayout(copy, 1)
         self.chevron = QLabel()
@@ -64,7 +66,7 @@ class ActionCard(QWidget):
         self.body = QFrame()
         self.body.setObjectName("ActionCardBody")
         self.body_layout = QVBoxLayout(self.body)
-        self.body_layout.setContentsMargins(12, 10, 12, 12)
+        self.body_layout.setContentsMargins(8, 8, 8, 12)
         self.body_layout.setSpacing(9)
         self.body.hide()
         container.addWidget(self.body)
@@ -135,36 +137,8 @@ class AIOptionsPanel(QScrollArea):
         self._action_footers: dict[str, QFrame] = {}
         self.current_mode = "ocr"
 
-        self.chapter_card = QFrame()
-        self.chapter_card.setObjectName("ChapterReadyCard")
-        chapter_row = QHBoxLayout(self.chapter_card)
-        chapter_row.setContentsMargins(12, 11, 11, 11)
-        chapter_row.setSpacing(10)
-        self.chapter_icon = QLabel()
-        self.chapter_icon.setObjectName("ChapterReadyIcon")
-        self.chapter_icon.setAlignment(Qt.AlignCenter)
-        self.chapter_icon.setFixedSize(26, 26)
-        self.chapter_icon.setPixmap(icon("check", "#07111F", 16).pixmap(16, 16))
-        chapter_row.addWidget(self.chapter_icon)
-        chapter_copy = QVBoxLayout()
-        chapter_copy.setSpacing(1)
-        chapter_title = QLabel("Capítulo cargado")
-        chapter_title.setObjectName("ChapterReadyTitle")
-        chapter_copy.addWidget(chapter_title)
-        self.chapter_count = QLabel("")
-        self.chapter_count.setObjectName("Muted")
-        chapter_copy.addWidget(self.chapter_count)
-        chapter_row.addLayout(chapter_copy, 1)
-        self.chapter_dismiss = QToolButton()
-        self.chapter_dismiss.setObjectName("ChapterDismiss")
-        self.chapter_dismiss.setIcon(icon("x", "#8FA0B8", 15))
-        self.chapter_dismiss.setIconSize(QSize(15, 15))
-        self.chapter_dismiss.setToolTip("Ocultar aviso de capítulo")
-        self.chapter_dismiss.setCursor(Qt.PointingHandCursor)
-        self.chapter_dismiss.clicked.connect(self.chapter_card.hide)
-        chapter_row.addWidget(self.chapter_dismiss, 0, Qt.AlignTop)
-        root.insertWidget(0, self.chapter_card)
-        self.chapter_card.hide()
+        self.chapter_count = QLabel(self)
+        self.chapter_count.hide()
 
         self.mode_selector = QWidget()
         modes = QGridLayout(self.mode_selector)
@@ -220,7 +194,7 @@ class AIOptionsPanel(QScrollArea):
 
     def set_chapter_status(self, count: int) -> None:
         self.chapter_count.setText(f"{count} imagen{'es' if count != 1 else ''} disponible{'s' if count != 1 else ''}.")
-        self.chapter_card.setVisible(count > 0)
+        self.detect_scope.setToolTip(f"{count} páginas en el capítulo. El lote conserva las páginas con cajas.")
 
     # ------------------------------------------------------------------ #
     # Configuration in/out
@@ -325,24 +299,12 @@ class AIOptionsPanel(QScrollArea):
         heading_block = QWidget()
         block = QVBoxLayout(heading_block)
         block.setContentsMargins(0, 0, 0, 0)
-        block.setSpacing(5)
+        block.setSpacing(4)
         row = QHBoxLayout()
         row.setSpacing(8)
-        if icon_name:
-            glyph = QLabel()
-            glyph.setObjectName("WorkflowIcon")
-            glyph.setPixmap(icon(icon_name, "#E9F0FA", 17).pixmap(17, 17))
-            glyph.setAlignment(Qt.AlignCenter)
-            glyph.setFixedSize(26, 26)
-            row.addWidget(glyph)
         heading = QLabel(title)
         heading.setObjectName("WorkflowHeading")
         row.addWidget(heading)
-        if icon_name:
-            info = QLabel()
-            info.setPixmap(icon("info", "#94A3B8", 14).pixmap(14, 14))
-            info.setToolTip(description)
-            row.addWidget(info)
         row.addStretch()
         block.addLayout(row)
         hint = QLabel(description)
@@ -412,8 +374,7 @@ class AIOptionsPanel(QScrollArea):
     @staticmethod
     def _divider() -> QFrame:
         line = QFrame()
-        line.setFrameShape(QFrame.HLine)
-        line.setFrameShadow(QFrame.Plain)
+        line.setFixedHeight(1)
         line.setObjectName("Divider")
         return line
 
@@ -442,10 +403,31 @@ class AIOptionsPanel(QScrollArea):
     # ------------------------------------------------------------------ #
     def _ocr_page(self) -> QWidget:
         page, layout = self._page_layout()
-        self._heading(layout, "Leer texto (OCR)", "Detecta las cajas y reconoce solo el texto pendiente.", "scan")
+        self._heading(layout, "Detectar cajas · YOLO", "Detección local de texto, sin usar la API.")
+        self.detect_scope = self._combo(["Página actual", "Todo el capítulo"])
+        self.detect_scope.setProperty("kuro_i18n_choices", True)
+        self.detect_scope.setItemData(0, "page")
+        self.detect_scope.setItemData(1, "chapter")
+        self.detect_scope.setAccessibleName("Alcance de detección YOLO")
+        layout.addWidget(self.detect_scope)
+        self.detect_button = ModernButton("Detectar cajas de la página", icon_name="scan")
+        self.detect_button.setObjectName("DetectAction")
+        self.detect_button.clicked.connect(lambda: self.action_requested.emit(
+            "run_yolo_all" if self.detect_scope.currentIndex() == 1 else "run_yolo"))
+        self.detect_scope.currentIndexChanged.connect(lambda index: self.detect_button.setText(
+            "Detectar cajas del capítulo" if index == 1 else "Detectar cajas de la página"))
+        layout.addWidget(self.detect_button)
+        self.detection_status = QLabel("En lote se conservan las páginas que ya tienen cajas.")
+        self.detection_status.setObjectName("Muted")
+        self.detection_status.setWordWrap(True)
+        layout.addWidget(self.detection_status)
+        layout.addWidget(self._divider())
+        self._heading(layout, "Reconocer texto · OCR", "Lee las cajas detectadas y reutiliza el OCR guardado.")
         self.ocr_settings = ActionCard("Proveedor y modelo", "Configura el motor de OCR", "chip")
         config = self.ocr_settings.body_layout
         self.ocr_provider = self._combo(["Alibaba Cloud"])
+        config.addWidget(QLabel("Proveedor"))
+        config.addWidget(self.ocr_provider)
         config.addWidget(QLabel("Modelo"))
         self.ocr_model = self._combo([
             "qwen-vl-ocr",
@@ -477,21 +459,6 @@ class AIOptionsPanel(QScrollArea):
         layout.addWidget(self._status("ocr", "Configura las credenciales del proveedor", self.STATUS_WARNING))
         action_stack = QVBoxLayout()
         action_stack.setSpacing(9)
-        provider_row = QHBoxLayout()
-        provider_row.setSpacing(9)
-        provider_row.addWidget(self.ocr_provider, 1)
-        provider_options = ModernButton("", icon_name="settings")
-        provider_options.setAccessibleName("Configurar proveedor OCR")
-        provider_options.setToolTip("Abrir proveedor y modelo")
-        provider_options.setFixedSize(38, 38)
-        provider_options.clicked.connect(lambda: self.ocr_settings.set_expanded(True))
-        provider_row.addWidget(provider_options)
-        action_stack.addLayout(provider_row)
-        detect = ModernButton("Detectar cajas de texto", icon_name="scan")
-        detect.setObjectName("DetectAction")
-        detect.clicked.connect(lambda: self.action_requested.emit("run_yolo"))
-        detect.setMinimumHeight(38)
-        action_stack.addWidget(detect)
         self.ocr_scope = self._scope_action(action_stack, "ocr", "Leer texto", ("run_ocr_api_one", "run_ocr_api", "run_ocr_api_all"))
         layout.addLayout(action_stack)
         reread = ModernButton("Releer caja seleccionada")
@@ -508,18 +475,6 @@ class AIOptionsPanel(QScrollArea):
         config.addWidget(self.ocr_usage)
         layout.addWidget(self.ocr_settings)
         self._add_text_options(layout, mode="ocr", include_mask=False, include_manga=True)
-        self.detection_settings = ActionCard("Ajustes de detección", "Sensibilidad, idioma y filtros", "sliders")
-        detection_hint = QLabel("La detección usa el modelo local. Puedes detectar cajas antes de leer el texto.")
-        detection_hint.setObjectName("Muted")
-        detection_hint.setWordWrap(True)
-        self.detection_settings.body_layout.addWidget(detection_hint)
-        self.detection_settings.body_layout.addWidget(
-            ModernButton("Detectar cajas de texto", icon_name="scan")
-        )
-        self.detection_settings.body_layout.itemAt(1).widget().clicked.connect(
-            lambda: self.action_requested.emit("run_yolo")
-        )
-        layout.addWidget(self.detection_settings)
         layout.addStretch()
         return page
 
@@ -544,6 +499,8 @@ class AIOptionsPanel(QScrollArea):
         self.translate_provider = self._combo([
             "Alibaba Cloud", "Gemini", "OpenAI", "DeepSeek", "DeepL",
         ])
+        config.addWidget(QLabel("Proveedor"))
+        config.addWidget(self.translate_provider)
         self.translate_model = self._combo([
             "qwen-mt-flash", "qwen-mt-plus", "qwen-plus", "gemini-2.5-flash",
             "gpt-5-mini", "deepseek-chat", "deepseek-reasoner", "deepl",
@@ -557,15 +514,6 @@ class AIOptionsPanel(QScrollArea):
         config.addWidget(QLabel("Modelo"))
         config.addWidget(self.translate_model)
         layout.addWidget(self._status("translation", "Proveedor no autenticado", self.STATUS_WARNING))
-        provider_row = QHBoxLayout()
-        provider_row.setSpacing(9)
-        provider_row.addWidget(self.translate_provider, 1)
-        provider_options = ModernButton("", icon_name="settings")
-        provider_options.setAccessibleName("Configurar proveedor de traducción")
-        provider_options.setFixedSize(38, 38)
-        provider_options.clicked.connect(lambda: self.translation_settings.set_expanded(True))
-        provider_row.addWidget(provider_options)
-        layout.addLayout(provider_row)
         self.translation_context = QLabel("Sin proyecto de traducción asignado")
         self.translation_context.setObjectName("Muted")
         self.translation_context.setWordWrap(True)
@@ -604,18 +552,11 @@ class AIOptionsPanel(QScrollArea):
         self.clean_model = self._combo(["MI-GAN · migan_pipeline_v2.onnx", "LaMa · lama.onnx"])
         self.clean_provider.currentTextChanged.connect(lambda: self.provider_changed.emit("clean", *self.clean_configuration()))
         self.clean_model.currentTextChanged.connect(lambda: self.provider_changed.emit("clean", *self.clean_configuration()))
+        self.clean_provider.setParent(page)
+        self.clean_provider.hide()
         self.clean_settings.body_layout.addWidget(QLabel("Modelo local"))
         self.clean_settings.body_layout.addWidget(self.clean_model)
         layout.addWidget(self._status("clean", "El modelo se cargará al primer uso", self.STATUS_NEUTRAL))
-        provider_row = QHBoxLayout()
-        provider_row.setSpacing(9)
-        provider_row.addWidget(self.clean_provider, 1)
-        provider_options = ModernButton("", icon_name="settings")
-        provider_options.setAccessibleName("Configurar motor de limpieza")
-        provider_options.setFixedSize(38, 38)
-        provider_options.clicked.connect(lambda: self.clean_settings.set_expanded(True))
-        provider_row.addWidget(provider_options)
-        layout.addLayout(provider_row)
         self.clean_scope = self._scope_action(layout, "clean", "Preparar limpieza", ("run_clean_one", "run_clean", "run_clean_all"))
         self.mask_preview_hint = QLabel("Primero revisa la máscara roja. Puedes borrar falsos positivos antes de aplicar la limpieza.")
         self.mask_preview_hint.setObjectName("Muted")
@@ -812,18 +753,6 @@ class AIOptionsPanel(QScrollArea):
             layout = section.body_layout
         layout.addSpacing(2)
         layout.addWidget(SectionTitle("Ajustes del pincel" if mode == "clean" else "Flujo y lectura"))
-        if mode == "ocr":
-            for text, action, icon_name in (
-                ("Abrir imágenes", "open_folder", "folder"),
-                ("Detectar cajas (YOLO)", "run_yolo", "sparkles"),
-            ):
-                button = ModernButton(text, icon_name=icon_name)
-                button.setMinimumWidth(0)
-                button.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Fixed)
-                if action == "run_yolo":
-                    button.setToolTip("Autodetectar cajas de texto con YOLO")
-                button.clicked.connect(lambda _, value=action: self.action_requested.emit(value))
-                layout.addWidget(button)
         if include_mask:
             brush = ModernButton("Pincel máscara", icon_name="eraser")
             brush.setMinimumWidth(0)

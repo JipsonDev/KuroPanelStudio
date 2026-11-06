@@ -97,7 +97,7 @@ class SidebarButton(QToolButton):
     def set_active(self, active: bool) -> None:
         self.setChecked(active)
         self.setObjectName("SidebarActive" if active else "SidebarButton")
-        self.setIcon(icon(self.icon_name, "#07111F" if active else "#B8C7DD", 22))
+        self.setIcon(icon(self.icon_name, "#E7BC64" if active else "#B8BCC3", 22))
         self.style().unpolish(self)
         self.style().polish(self)
 
@@ -147,7 +147,7 @@ class Toggle(QWidget):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.Antialiasing)
         painter.setPen(Qt.NoPen)
-        track = QColor("#00CFE8") if self.checked else QColor("#667788")
+        track = QColor("#E7BC64") if self.checked else QColor("#667078")
         knob = QColor("#F5F7FA")
         if not self.isEnabled():
             track.setAlpha(110)

@@ -125,7 +125,7 @@ def test_sidebar_has_eight_real_destinations_and_active_gold_icon(app):
     sidebar = Sidebar()
     assert [button.tool_name for button in sidebar.buttons] == [
         "Editar", "Páginas", "Capas", "Procesar", "Guión", "Texto", "Efectos", "SFX"]
-    assert sidebar.width() == 88
+    assert sidebar.width() == 72
     assert next(button for button in sidebar.buttons if button.tool_name == "Páginas").isChecked()
     selected = []
     sidebar.tool_changed.connect(selected.append)
@@ -275,7 +275,7 @@ def test_header_actions_and_progress_banner_stay_functional(app):
     bar.action_requested.connect(actions.append)
     bar.open_button.menu().actions()[0].trigger()
     bar.save_button.click()
-    bar.export_button.click()
+    bar.export_actions["save_current"].trigger()
     bar.focus_button.click()
     assert actions == ["open_folder", "save_project", "save_current", "toggle_focus"]
     progress = TaskProgress()

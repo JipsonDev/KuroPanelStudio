@@ -17,8 +17,8 @@ class EditorWorkspace(QSplitter):
         # The sidebar already switches these views; a second tab row only
         # duplicates navigation and steals vertical space from the page list.
         self.assets.tabBar().hide()
-        self.assets.setMinimumWidth(240)
-        self.assets.setMaximumWidth(330)
+        self.assets.setMinimumWidth(220)
+        self.assets.setMaximumWidth(300)
         self.assets.addTab(pages, "Páginas")
         self.layers_scroll = QScrollArea()
         self.layers_scroll.setObjectName("LayersScroll")
@@ -28,10 +28,10 @@ class EditorWorkspace(QSplitter):
         self.assets.addTab(self.layers_scroll, "Capas")
         self.dock = QTabWidget()
         self.dock.setObjectName("WorkspaceDock")
-        self.dock.setMinimumWidth(300)
-        self.dock.setMaximumWidth(390)
+        self.dock.setMinimumWidth(290)
+        self.dock.setMaximumWidth(370)
         self.dock.addTab(tools, "Herramientas")
-        self.dock.addTab(inspector, "Inspector")
+        self.dock.addTab(inspector, "Caja seleccionada")
         self.tools = tools
         self.addWidget(self.assets)
         self.addWidget(canvas)
@@ -39,7 +39,7 @@ class EditorWorkspace(QSplitter):
         self.setStretchFactor(0, 0)
         self.setStretchFactor(1, 1)
         self.setStretchFactor(2, 0)
-        self.setSizes([300, 760, 355])
+        self.setSizes([260, 800, 330])
         self.compact = False
         self.focus_mode = False
         self.dock_collapsed = False
@@ -55,8 +55,7 @@ class EditorWorkspace(QSplitter):
 
     def _apply_initial_split(self):
         if not self.compact and self.width() > 1180:
-            self.setSizes([min(310, int(self.width() * .23)),
-                           max(350, self.width() - 680), 355])
+            self.setSizes([260, max(350, self.width() - 602), 330])
 
     def adapt_to_width(self, width):
         compact = width < 1180
@@ -76,7 +75,7 @@ class EditorWorkspace(QSplitter):
                 self.dock_collapsed_changed.emit(False)
             self.dock.removeTab(self.dock.indexOf(self.assets))
             self.insertWidget(0, self.assets)
-            self.assets.setMaximumWidth(330)
+            self.assets.setMaximumWidth(300)
             self.dock.setVisible(not self.focus_mode)
         if not compact:
             self.assets.setVisible(not self.focus_mode)

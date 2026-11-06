@@ -171,6 +171,10 @@ def test_main_window_reads_saved_english_language(tmp_path, monkeypatch):
         assert window.images_panel.filter.itemData(3) == "Pendiente traducción"
         assert window.ai_panel.ocr_scope.itemText(1) == "Current page"
         assert window.ai_panel.ocr_scope.itemData(1) == 1
+        assert window.ai_panel.detect_scope.itemText(1) == "Entire chapter"
+        assert window.ai_panel.detect_scope.itemData(1) == "chapter"
+        assert window.ai_panel.detect_button.text() == "Detect page boxes"
+        assert window.topbar.export_actions["save_strip"].text() == "Continuous strip as PNG…"
     finally:
         window.ui_translator.set_language("es")
         window.close()

@@ -41,16 +41,19 @@ def test_process_modes_are_visible_and_card_text_is_separated_from_icon(panel):
     assert caption.geometry().left() == card.header.geometry().left()
     panel.mode_buttons["translation"].click()
     assert panel.current_mode == "translation"
-    assert panel.translate_provider.isVisible()
+    assert not panel.translate_provider.isVisible()
     assert panel._primary_buttons["translation"].isVisible()
     assert not panel.translation_settings.is_expanded()
     assert panel.translation_settings.findChild(QLabel, "ActionCardSubtitle").isVisible()
     panel.mode_buttons["clean"].click()
     assert panel.current_mode == "clean"
-    assert panel.clean_provider.isVisible()
+    assert not panel.clean_provider.isVisible()
     assert panel._primary_buttons["clean"].isVisible()
     assert not panel.clean_settings.is_expanded()
     assert panel.retouch_section.findChild(QLabel, "ActionCardSubtitle").isVisible()
+    panel.mode_buttons["translation"].click()
+    panel.translation_settings.header.click()
+    assert panel.translate_provider.isVisible()
 
 
 def test_cleaning_shows_review_actions_only_when_mask_is_ready(panel):

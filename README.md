@@ -18,9 +18,9 @@ editores de manga/manhua ni con los proveedores de modelos o APIs compatibles.
 
 ### Interfaz principal
 
-![Interfaz principal de KuroPanel Studio](docs/images/workspace-redesign.png)
+![Interfaz simplificada de KuroPanel Studio con páginas sintéticas](docs/images/editor-0.2.20.png)
 
-[Diseño, distribución adaptable y controles de la interfaz](docs/interface-design.md).
+[Interfaz simplificada, ubicación de comandos y YOLO por capítulo](docs/interface-and-chapter-yolo.md).
 
 ### Detección y cajas OCR
 

@@ -1655,8 +1655,8 @@ class UIWorkflowTests(unittest.TestCase):
 
         ocr_page = panel.pages.widget(panel._mode_index["ocr"])
         labels = {button.text() for button in ocr_page.findChildren(QPushButton)}
-        self.assertIn("Abrir imágenes", labels)
-        self.assertIn("Detectar cajas (YOLO)", labels)
+        self.assertNotIn("Abrir imágenes", labels)
+        self.assertIn("Detectar cajas de la página", labels)
         self.assertNotIn("Pincel máscara", labels)
 
     def test_comparison_divider_clips_clean_result_to_the_right(self) -> None:
@@ -2327,7 +2327,7 @@ class UIWorkflowTests(unittest.TestCase):
             _pending_text_items = MainWindow._pending_text_items
             _assign_transferred_text = staticmethod(MainWindow._assign_transferred_text)
             layers = LayersStub()
-            current_page = 0
+            project = SimpleNamespace(active_index=0)
 
             @staticmethod
             def _active_key():
