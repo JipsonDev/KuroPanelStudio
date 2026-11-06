@@ -3,6 +3,17 @@
 Editor de escritorio para OCR, traducción, limpieza y typpeo de manhua, manhwa
 y manga. Está construido con Python, PySide6, OpenCV y ONNX Runtime.
 
+**Versión 0.2.20:** interfaz simplificada, detección YOLO para todo el capítulo,
+limpieza MI-GAN/LaMa y exportación a resolución original.
+
+[Descargar instalador para Windows x64](https://github.com/JipsonDev/KuroPanelStudio/releases/download/v0.2.20/KuroPanelStudio-Setup-0.2.20-Windows-x64.exe)
+· [Última versión](https://github.com/JipsonDev/KuroPanelStudio/releases/latest)
+· [Historial de cambios](CHANGELOG.md)
+
+El instalador incluye los modelos locales y funciona en CPU. No necesitas
+instalar Python para utilizarlo. OCR y traducción mediante API requieren las
+credenciales del proveedor que configures.
+
 > [!WARNING]
 > Este proyecto fue desarrollado en su mayoría con asistencia de inteligencia
 > artificial, bajo dirección y pruebas humanas. Es software experimental y
@@ -22,10 +33,37 @@ editores de manga/manhua ni con los proveedores de modelos o APIs compatibles.
 
 [Interfaz simplificada, ubicación de comandos y YOLO por capítulo](docs/interface-and-chapter-yolo.md).
 
+La cabecera reúne las acciones de archivo y exportación. El lienzo conserva
+zoom, comparación y navegación; **Caja seleccionada** concentra la edición de
+texto. Los ajustes secundarios permanecen plegados para dejar más espacio al
+capítulo.
+
+| Tarea | Dónde encontrarla |
+| --- | --- |
+| Abrir carpeta, proyecto editable o PSD/PSB | **Abrir**, en la cabecera |
+| Guardar el proyecto `.mseproj` | **Guardar** o `Ctrl+S` |
+| Detectar cajas, leer OCR, traducir y limpiar | **Procesar** |
+| Corregir el texto de una caja | **Editar → Caja seleccionada** |
+| Exportar página, capítulo o tira continua | **Exportar**, en la cabecera |
+| Elegir PNG, JPG, WEBP o PSD para páginas | **Exportar → Formato de página** |
+| Configurar el logo y su reparto | **Menú de aplicación → Marca de agua** |
+
 ### Detección y cajas OCR
 
 Las cajas numeradas mantienen el orden de lectura y permiten ejecutar OCR,
 traducción, limpieza y typpeo por región, página o capítulo.
+
+Para detectar un capítulo completo:
+
+1. Abre las imágenes y entra en **Procesar → OCR**.
+2. En **Detectar cajas · YOLO**, selecciona **Todo el capítulo**.
+3. Pulsa **Detectar cajas del capítulo** y revisa las regiones encontradas.
+
+YOLO funciona localmente y no necesita una clave API. El lote procesa una
+página a la vez, muestra progreso y permite cancelar. Conserva las páginas
+que ya tienen cajas para proteger OCR, traducciones y ediciones; para volver
+a detectar una página, elige **Página actual**. Cancelar o fallar no aplica
+resultados parciales, y **Deshacer** revierte el lote completo.
 
 ![Cajas de detección sobre globos](docs/images/ocr-boxes.png)
 
@@ -57,15 +95,30 @@ con un límite espacial por inferencia. [Detalles y verificación](docs/cleaning
 
 **Tira continua** permite recorrer el capítulo y mover sus marcas de agua sin
 unir las imágenes en memoria. Doble clic abre una página para editarla.
-**Exportar tira** guarda todo en un PNG a resolución original, página a página.
+La vista adapta el detalle al zoom y a la densidad de pantalla.
+**Exportar → Tira continua en PNG…** guarda todo a resolución original,
+página a página, incluyendo textos, retoques y marcas de agua.
 [Uso, límites y pruebas de rendimiento](docs/continuous-strip.md).
+
+### Marcas de agua
+
+El ajuste equilibrado para configuraciones nuevas usa **22 % del ancho de
+página**, **55 % de opacidad**, lados alternados, unos **7.000 px entre
+centros** y un máximo de **24 marcas automáticas en todo el capítulo**.
+En capítulos largos, el límite aumenta la distancia para evitar acumulación.
+
+Puedes arrastrar las marcas en el lienzo o en la tira; sus posiciones se
+guardan por página y se conservan al exportar. **Usar ajuste equilibrado**
+conserva el PNG y reemplaza las posiciones manuales para rehacer el reparto.
+Los proyectos existentes mantienen su configuración hasta elegir ese ajuste.
+[Distribución y tamaño del logo](docs/watermark-distribution.md).
 
 Las imágenes mostradas son material de prueba. Antes de reutilizar capturas o
 páginas en publicaciones públicas, confirma que tienes los derechos necesarios.
 
 ## Funciones principales
 
-- Detección local de texto con YOLO para páginas largas.
+- Detección local de texto con YOLO por página o capítulo, compatible con páginas largas.
 - OCR por caja, página o capítulo mediante proveedores configurables.
 - Traducción con glosarios y contexto por proyecto.
 - Limpieza con máscara OCR y MI-GAN o LaMa ONNX, con respaldo CPU o aceleración CUDA.
@@ -77,7 +130,9 @@ páginas en publicaciones públicas, confirma que tienes los derechos necesarios
 - Orden de lectura occidental o manga de derecha a izquierda.
 - Importación de PNG, JPEG, WebP, PSD y PSB.
 - Proyectos persistentes `.mseproj`, autoguardado y copias incrementales.
-- Exportación por página o capítulo a resolución original.
+- Vista de tira continua con carga de teselas y caché limitada.
+- Marcas de agua movibles y reparto continuo con límite por capítulo.
+- Exportación por página, capítulo o tira única en PNG a resolución original.
 - Comparación antes/después con divisor arrastrable.
 - Monitor de RAM, VRAM y tiempos de procesamiento.
 - Interfaz en español o inglés, seleccionable en **Configuración → Interfaz**.
@@ -130,7 +185,7 @@ normal de Git:
 
 ```powershell
 git lfs install
-git clone URL_DEL_REPOSITORIO
+git clone https://github.com/JipsonDev/KuroPanelStudio.git
 cd KuroPanelStudio
 git lfs pull
 
@@ -159,6 +214,7 @@ CPU o Automático desde Configuración.
 
 La carpeta `Models/` debe contener:
 
+- `migan_pipeline_v2.onnx`: motor MI-GAN de reconstrucción, predeterminado para instalaciones nuevas.
 - `lama.onnx`: reconstrucción de las zonas enmascaradas.
 - `ocr.onnx`: generación de la máscara local de texto para limpieza.
 - `yolo12s_animetext.onnx`: detector de regiones de texto.
@@ -170,13 +226,14 @@ Git LFS en `.gitattributes`.
 
 ## Flujo recomendado
 
-1. Abre una carpeta de imágenes, una imagen individual o un PSD/PSB.
-2. Ejecuta **Detectar cajas (YOLO)** y corrige manualmente las regiones.
-3. Configura el proveedor OCR y procesa una caja, la página o el capítulo.
-4. Revisa la máscara antes de aplicar LaMa y elimina falsos positivos.
-5. Traduce utilizando el glosario del proyecto.
-6. Aplica perfiles tipográficos y corrige cada caja.
-7. Compara original/resultado y exporta a resolución original.
+1. Abre una carpeta de imágenes, un proyecto editable o un PSD/PSB.
+2. En **Procesar → OCR**, detecta cajas con YOLO en la página o en todo el capítulo.
+3. Configura **Proveedor y modelo** de OCR y reconoce el texto pendiente.
+4. En **Procesar → Limpiar**, prepara la máscara, corrige falsos positivos y
+   aplica la limpieza con MI-GAN o LaMa. La limpieza por capítulo es automática.
+5. Traduce utilizando el glosario del proyecto y revisa el texto de cada caja.
+6. Aplica perfiles tipográficos y ajusta las marcas de agua si las necesitas.
+7. Guarda el proyecto, compara original/resultado y elige el alcance desde **Exportar**.
 
 ## Credenciales y privacidad
 
@@ -193,7 +250,7 @@ contenido confidencial.
 
 - Los archivos `.mseproj` guardan cajas, OCR, traducciones, estilos y parches.
 - La imagen original se conserva como base de solo lectura.
-- LaMa, pintura y restauración se almacenan como parches independientes.
+- La limpieza MI-GAN/LaMa, pintura y restauración se almacenan como parches independientes.
 - `Ctrl+S` guarda; `Ctrl+Z` deshace; `Ctrl+Y` o `Ctrl+Shift+Z` rehace.
 - La exportación no incluye cajas, numerales ni controles del lienzo.
 
@@ -206,8 +263,8 @@ Consulta las [correcciones de errores OCR y el progreso visible](docs/ocr-errors
 para configurar la región y distinguir problemas de modelo, clave o cuota.
 El [control de consumo OCR](docs/ocr-cost-control.md) explica la caché persistente,
 la relectura explícita y el contador de solicitudes y tokens.
-Consulta el [rediseño del editor y su estructura adaptable](docs/interface-design.md)
-para conocer la organización de paneles, el modo de enfoque y las capturas de verificación.
+Consulta la [interfaz simplificada y YOLO por capítulo](docs/interface-and-chapter-yolo.md)
+para conocer los comandos actuales, el comportamiento del lote y las capturas de verificación.
 La [limpieza por regiones de color](docs/bubble-mask-cleaning.md) explica la
 adaptación de `Bubble_Mask.atn`, la corrección de letras recortadas y sus pruebas.
 La [distribución de marcas de agua](docs/watermark-distribution.md) permite
@@ -229,7 +286,7 @@ que puedas compartir legalmente.
 La aplicación instalable se construye con:
 
 ```powershell
-.\build_windows.ps1 -Version 0.2.15
+.\build_windows.ps1 -Version 0.2.20
 ```
 
 La edición compacta CPU-first se construye con:
@@ -241,12 +298,12 @@ La edición compacta CPU-first se construye con:
 Para crear el instalador x64 con Inno Setup 6:
 
 ```powershell
-.\build_installer.ps1 -Version 0.2.15
+.\build_installer.ps1 -Version 0.2.20
 ```
 
-El instalador para GitHub se genera en `github-release/KuroPanelStudio-v0.2.15/`.
+El instalador para GitHub se genera en `github-release/KuroPanelStudio-v0.2.20/`.
 Usa `-LocalOnly` en ambos comandos para generar un instalador local registrado en
-`local-builds/KuroPanelStudio-v0.2.15/`.
+`local-builds/KuroPanelStudio-v0.2.20/`.
 En GitHub, una etiqueta `vX.Y.Z` inicia el flujo de Windows que compila,
 prueba y adjunta el instalador y las notas de cambios a la Release sin subirlos manualmente.
 Consulta [la guía de publicación](docs/actualizaciones.md).
