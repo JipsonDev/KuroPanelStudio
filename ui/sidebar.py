@@ -10,7 +10,7 @@ class Sidebar(QFrame):
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.setObjectName("Sidebar")
-        self.setFixedWidth(88)
+        self.setFixedWidth(72)
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
         self.scroll = QScrollArea()
@@ -24,8 +24,8 @@ class Sidebar(QFrame):
         content.setObjectName("SidebarContent")
         layout = QVBoxLayout(content)
         self.button_layout = layout
-        layout.setContentsMargins(3, 10, 3, 10)
-        layout.setSpacing(9)
+        layout.setContentsMargins(4, 8, 4, 8)
+        layout.setSpacing(4)
         self.scroll.setWidget(content)
         outer.addWidget(self.scroll)
         self.buttons: list[SidebarButton] = []
@@ -36,7 +36,7 @@ class Sidebar(QFrame):
                                 ("script", "Guión"), ("text", "Texto"),
                                 ("effects", "Efectos"), ("sparkles", "SFX")):
             button = SidebarButton(icon_name, name)
-            button.setFixedSize(72, 64)
+            button.setFixedSize(62, 58)
             button.selected.connect(self._select)
             layout.addWidget(button)
             self.buttons.append(button)

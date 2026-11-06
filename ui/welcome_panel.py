@@ -21,9 +21,8 @@ class WelcomePanel(QWidget):
         layout.setContentsMargins(26, 28, 26, 28)
         layout.setSpacing(16)
         for text, name in (
-            ("TU PRÓXIMA PÁGINA", "WelcomeEyebrow"),
-            ("Una historia empieza aquí", "WelcomeTitle"),
-            ("Abre un capítulo o arrastra tus imágenes para empezar a editar.", "WelcomeDescription"),
+            ("Abre un capítulo", "WelcomeTitle"),
+            ("Arrastra una carpeta de imágenes o abre un proyecto guardado.", "WelcomeDescription"),
         ):
             label = QLabel(text)
             label.setObjectName(name)
@@ -38,7 +37,11 @@ class WelcomePanel(QWidget):
         psd_button = ModernButton("Abrir PSD / PSB", icon_name="layers")
         psd_button.clicked.connect(lambda: self.action_requested.emit("open_psd"))
         layout.addWidget(psd_button)
-        steps = QLabel("01  Detectar y leer\n02  Limpiar y traducir\n03  Rotular y exportar")
+        project_button = ModernButton("Abrir proyecto editable", icon_name="folder")
+        project_button.clicked.connect(lambda: self.action_requested.emit("open_project"))
+        layout.addWidget(project_button)
+        steps = QLabel("Detecta las cajas en Procesar, revisa el texto y exporta desde la cabecera.")
+        steps.setWordWrap(True)
         steps.setObjectName("WelcomeSteps")
         self.steps = steps
         layout.addWidget(steps)
@@ -52,8 +55,8 @@ class WelcomePanel(QWidget):
     def resizeEvent(self, event):
         super().resizeEvent(event)
         compact = self.width() < 400
-        self.title.setText("Abre tu capítulo" if compact else "Una historia empieza aquí")
-        self.title.setWordWrap(not compact)
+        self.title.setText("Abre un capítulo")
+        self.title.setWordWrap(True)
         self.steps.setVisible(self.height() >= 380)
 
     def dragEnterEvent(self, event):

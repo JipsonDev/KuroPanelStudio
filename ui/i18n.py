@@ -16,6 +16,35 @@ from PySide6.QtWidgets import (
 
 
 ES_TO_EN = {
+    "Eliminar última": "Delete last",
+    "Eliminar todas": "Delete all",
+    "Caja seleccionada": "Selected box",
+    "Abrir proyecto editable": "Open editable project",
+    "Abrir proyecto editable…": "Open editable project…",
+    "Arrastra una carpeta de imágenes o abre un proyecto guardado.": "Drop an image folder or open a saved project.",
+    "Detecta las cajas en Procesar, revisa el texto y exporta desde la cabecera.": "Detect boxes in Process, review the text and export from the header.",
+    "Detectar cajas · YOLO": "Detect boxes · YOLO",
+    "Detección local de texto, sin usar la API.": "Local text detection, without API requests.",
+    "Alcance de detección YOLO": "YOLO detection scope",
+    "Detectar cajas de la página": "Detect page boxes",
+    "Detectar cajas del capítulo": "Detect chapter boxes",
+    "En lote se conservan las páginas que ya tienen cajas.": "Batch detection preserves pages that already have boxes.",
+    "Reconocer texto · OCR": "Recognize text · OCR",
+    "Lee las cajas detectadas y reutiliza el OCR guardado.": "Read detected boxes and reuse saved OCR.",
+    "Exportar página, capítulo o tira continua": "Export page, chapter or continuous strip",
+    "Página actual…": "Current page…",
+    "Capítulo en páginas…": "Chapter as pages…",
+    "Tira continua en PNG…": "Continuous strip as PNG…",
+    "Formato de página: PNG": "Page format: PNG",
+    "Formato de página: JPG": "Page format: JPG",
+    "Formato de página: WEBP": "Page format: WEBP",
+    "Formato de página: PSD": "Page format: PSD",
+    "Abre un capítulo": "Open a chapter",
+    "Cajas ya disponibles": "Boxes already available",
+    "Todas las páginas ya tienen cajas. Puedes volver a detectar en una página desde Página actual.": "All pages already have boxes. You can detect again using Current page.",
+    "Carga imágenes antes de detectar cajas en todo el capítulo.": "Load images before detecting boxes across the chapter.",
+    "Detectando cajas del capítulo…": "Detecting chapter boxes…",
+    "Detección YOLO del capítulo": "Chapter YOLO detection",
     "Usar ajuste equilibrado": "Use balanced preset",
     "LÍMITE AUTOMÁTICO POR CAPÍTULO": "AUTOMATIC LIMIT PER CHAPTER",
     "22 % de ancho · 55 % de opacidad · alternar lados · unos 7.000 px entre centros · máximo 24 por capítulo. Reemplaza las posiciones manuales de todo el capítulo.":
@@ -853,6 +882,8 @@ ES_TO_EN.update({
 
 
 PATTERNS = (
+    (r"^YOLO completado · (\d+) página\(s\) procesadas$", r"YOLO complete · \1 page(s) processed"),
+    (r"^(\d+) páginas en el capítulo\. El lote conserva las páginas con cajas\.$", r"\1 pages in the chapter. Batch detection preserves pages with boxes."),
     (r"^Tamaño final: (\d+) × (\d+) px · página (\d+) × (\d+) px$",
      r"Final size: \1 × \2 px · page \3 × \4 px"),
     (r"^(\d+) marca\(s\) en el capítulo\. Las zonas sin espacio pueden quedar sin marca\.$",

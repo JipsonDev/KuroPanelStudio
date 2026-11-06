@@ -1,5 +1,14 @@
 # Historial de cambios
 
+## 0.2.20 — interfaz simplificada y YOLO por capítulo
+
+- Cabecera compacta, superficies neutras y paneles planos; selección dorada discreta y más espacio para el lienzo.
+- Un solo acceso a detección YOLO en Procesar. El Inspector se concentra en la caja seleccionada; navegación y zoom permanecen en el lienzo y las acciones de archivo en la cabecera.
+- Exportar reúne página, capítulo, tira y formato. Abrir incluye proyectos editables. Proveedor y modelo se configuran en una sola sección por proceso.
+- YOLO para todo el capítulo, página a página, con progreso y cancelación. Conserva páginas con cajas y trabajo nuevo realizado durante la detección.
+- Cancelar o fallar no aplica resultados parciales; el lote se puede deshacer. Se corrige una referencia antigua a current_page que bloqueaba deshacer y sincronizar el guion.
+- Verificación local: 566 pruebas aprobadas, 6 omitidas y 11 subpruebas aprobadas; YOLO real en CPU detectó texto en tres páginas sintéticas. Revisión visual amplia/compacta e inglés/español.
+
 ## 0.2.19 — nitidez de la tira y marcas equilibradas
 
 - La tira evita reducir dos veces los trazos finos: niveles de detalle con sobremuestreo y densidad física de pantalla, píxeles nativos a aumentos de lectura y Lanczos al alejar.

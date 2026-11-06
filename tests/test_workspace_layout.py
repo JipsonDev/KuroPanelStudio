@@ -105,7 +105,7 @@ def test_application_menu_and_save_remain_accessible_on_small_screen(app):
     for action in bar.app_menu.actions():
         action.trigger()
     bar.save_button.click()
-    bar.export_button.click()
+    bar.export_actions["save_current"].trigger()
     bar.focus_button.click()
     assert received == ["switch_project", "settings", "watermark", "check_updates",
                         "save_project", "save_current", "toggle_focus"]
@@ -121,7 +121,7 @@ def test_canvas_empty_state_tracks_page_and_offers_real_actions(app):
     assert shell.stage_layout.currentWidget() is shell.welcome
     for button in shell.welcome.findChildren(QPushButton):
         button.click()
-    assert received == ["open_folder", "open_psd"]
+    assert received == ["open_folder", "open_psd", "open_project"]
     page = QPixmap(100, 200)
     page.fill(Qt.white)
     shell.canvas.set_pixmap(page)

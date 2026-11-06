@@ -1,7 +1,7 @@
 """Primary document actions and an always-accessible application menu."""
 from pathlib import Path
 from PySide6.QtCore import QSize, Qt, Signal
-from PySide6.QtGui import QPixmap
+from PySide6.QtGui import QActionGroup, QPixmap
 from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel, QMenu, QVBoxLayout, QWidget
 
 from ui.widgets.controls import ModernButton
@@ -10,20 +10,21 @@ from ui.widgets.icons import icon
 
 class TopBar(QFrame):
     action_requested = Signal(str)
+    export_format_changed = Signal(str)
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.setObjectName("TopBar")
-        self.setFixedHeight(70)
+        self.setFixedHeight(54)
         layout = QHBoxLayout(self)
         layout.setContentsMargins(12, 0, 16, 0)
         layout.setSpacing(12)
         logo = QLabel()
         logo.setObjectName("BrandLogo")
         logo.setAlignment(Qt.AlignCenter)
-        logo.setFixedSize(42, 42)
+        logo.setFixedSize(30, 30)
         logo_path = Path(__file__).resolve().parents[1] / "assets/sample/kuro-logo.png"
-        logo.setPixmap(QPixmap(str(logo_path)).scaled(40, 40, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+        logo.setPixmap(QPixmap(str(logo_path)).scaled(28, 28, Qt.KeepAspectRatio, Qt.SmoothTransformation)
                        if logo_path.exists() else icon("logo", "#FFC928", 28).pixmap(QSize(28, 28)))
         layout.addWidget(logo)
         brand_box = QFrame()
@@ -36,11 +37,12 @@ class TopBar(QFrame):
         self.subtitle = QLabel("Espacio de edición de manhuas")
         self.subtitle.setObjectName("BrandCaption")
         brand_layout.addWidget(self.subtitle)
+        self.subtitle.hide()
         layout.addWidget(brand_box)
         self.open_button = ModernButton("Abrir", "HeaderNav", icon_name="folder")
         self.open_button.setToolTip("Abrir capítulo (Ctrl+O) o archivo PSD/PSB")
         open_menu = QMenu(self.open_button)
-        for label, action in (("Abrir carpeta del capítulo…", "open_folder"), ("Abrir archivo PSD/PSB…", "open_psd")):
+        for label, action in (("Abrir carpeta del capítulo…", "open_folder"), ("Abrir proyecto editable…", "open_project"), ("Abrir archivo PSD/PSB…", "open_psd")):
             open_menu.addAction(label).triggered.connect(lambda _, value=action: self.action_requested.emit(value))
         self.open_button.setMenu(open_menu)
         layout.addWidget(self.open_button)
@@ -49,8 +51,27 @@ class TopBar(QFrame):
         self.save_button.clicked.connect(lambda: self.action_requested.emit("save_project"))
         layout.addWidget(self.save_button)
         self.export_button = ModernButton("Exportar", "HeaderNav", icon_name="download")
-        self.export_button.setToolTip("Exportar la página actual")
-        self.export_button.clicked.connect(lambda: self.action_requested.emit("save_current"))
+        self.export_button.setToolTip("Exportar página, capítulo o tira continua")
+        self.export_menu = QMenu(self.export_button)
+        self.export_actions = {}
+        for label, command in (("Página actual…", "save_current"), ("Capítulo en páginas…", "save_all"), ("Tira continua en PNG…", "save_strip")):
+            action = self.export_menu.addAction(label)
+            action.triggered.connect(lambda _, value=command: self.action_requested.emit(value))
+            self.export_actions[command] = action
+        self.export_menu.addSeparator()
+        formats = self.export_menu.addMenu("Formato de página: PNG")
+        self.export_formats = {}
+        group = QActionGroup(self)
+        group.setExclusive(True)
+        for name in ("PNG", "JPG", "WEBP", "PSD"):
+            action = formats.addAction(name)
+            action.setCheckable(True)
+            action.setChecked(name == "PNG")
+            group.addAction(action)
+            action.triggered.connect(lambda _, value=name: (
+                formats.setTitle(f"Formato de página: {value}"), self.export_format_changed.emit(value)))
+            self.export_formats[name] = action
+        self.export_button.setMenu(self.export_menu)
         layout.addWidget(self.export_button)
         layout.addStretch(1)
         self.history_buttons = {}
@@ -83,7 +104,7 @@ class TopBar(QFrame):
         self.focus_button.setChecked(enabled)
 
     def adapt_to_width(self, width: int) -> None:
-        self.subtitle.setVisible(width >= 900)
+        self.subtitle.hide()
         self.brand.setText("KuroPanel" if width < 900 else "KuroPanel Studio")
         self.focus_button.setText("")
         self.save_button.setText("" if width < 900 else "Guardar")

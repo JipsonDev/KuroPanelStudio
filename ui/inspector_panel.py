@@ -6,8 +6,6 @@ from PySide6.QtWidgets import (
     QFrame,
     QHBoxLayout,
     QLabel,
-    QProgressBar,
-    QTabWidget,
     QTextEdit,
     QVBoxLayout,
     QWidget,
@@ -30,9 +28,6 @@ class InspectorPanel(QFrame):
     """Context inspector: page editing and document output stay separated."""
 
     action_requested = Signal(str)
-    previous_requested = Signal()
-    next_requested = Signal()
-    zoom_requested = Signal(int)
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -53,64 +48,13 @@ class InspectorPanel(QFrame):
         page_header.addWidget(self.page_label)
         root.addLayout(page_header)
 
-        navigation = QHBoxLayout()
-        navigation.setSpacing(6)
-        previous = ModernButton("Anterior", icon_name="chevron-left")
-        previous.setToolTip("Página anterior")
-        previous.clicked.connect(self.previous_requested)
-        following = ModernButton("Siguiente", icon_name="chevron-right")
-        following.setToolTip("Página siguiente")
-        following.clicked.connect(self.next_requested)
-        navigation.addWidget(previous, 1)
-        navigation.addWidget(following, 1)
-        root.addLayout(navigation)
-
-        zoom = QHBoxLayout()
-        zoom.setSpacing(6)
-        zoom_title = QLabel("ZOOM")
-        zoom_title.setObjectName("Caption")
-        zoom.addWidget(zoom_title)
-        zoom.addStretch()
-        minus = ModernButton("−")
-        minus.setObjectName("CompactButton")
-        minus.setFixedWidth(34)
-        minus.clicked.connect(lambda: self.zoom_requested.emit(-10))
-        self.zoom_label = QLabel("100%")
-        self.zoom_label.setObjectName("ZoomValue")
-        self.zoom_label.setAlignment(Qt.AlignCenter)
-        self.zoom_label.setMinimumWidth(48)
-        plus = ModernButton("+")
-        plus.setObjectName("CompactButton")
-        plus.setFixedWidth(34)
-        plus.clicked.connect(lambda: self.zoom_requested.emit(10))
-        zoom.addWidget(minus)
-        zoom.addWidget(self.zoom_label)
-        zoom.addWidget(plus)
-        root.addLayout(zoom)
-
-        self.tabs = QTabWidget()
-        self.tabs.setObjectName("InspectorTabs")
-        self.tabs.addTab(self._build_layer_tab(), "Capa")
-        self.tabs.addTab(self._build_output_tab(), "Salida")
-        root.addWidget(self.tabs, 1)
-
-        progress_card = QFrame()
-        progress_card.setObjectName("InspectorProgress")
-        progress_layout = QVBoxLayout(progress_card)
-        progress_layout.setContentsMargins(9, 8, 9, 8)
-        progress_layout.setSpacing(5)
-        progress_header = QHBoxLayout()
-        progress_header.addWidget(SectionTitle("Procesamiento"))
-        progress_header.addStretch()
-        self.progress_label = QLabel("Listo")
-        self.progress_label.setObjectName("Muted")
-        progress_header.addWidget(self.progress_label)
-        progress_layout.addLayout(progress_header)
-        self.progress = QProgressBar()
-        self.progress.setValue(0)
-        self.progress.setTextVisible(True)
-        progress_layout.addWidget(self.progress)
-        root.addWidget(progress_card)
+        # Document navigation lives on the canvas; output belongs to the header.
+        root.addWidget(self._build_layer_tab(), 1)
+        self.format_choice = QComboBox(self)
+        self.format_choice.addItems(["PNG", "JPG", "WEBP", "PSD"])
+        self.format_choice.hide()
+        self._stage = "Listo"
+        self._progress = 0
 
     def _build_layer_tab(self) -> QWidget:
         page = QWidget()
@@ -183,7 +127,7 @@ class InspectorPanel(QFrame):
         layout.addWidget(SectionTitle("Gestión de cajas"))
         remove_actions = QHBoxLayout()
         remove_actions.setSpacing(6)
-        for label, command in (("Última", "delete_last"), ("Todas", "delete_all")):
+        for label, command in (("Eliminar última", "delete_last"), ("Eliminar todas", "delete_all")):
             button = ModernButton(label)
             button.clicked.connect(lambda _, value=command: self.action_requested.emit(value))
             remove_actions.addWidget(button)
@@ -195,60 +139,15 @@ class InspectorPanel(QFrame):
         layout.addStretch()
         return page
 
-    def _build_output_tab(self) -> QWidget:
-        page = QWidget()
-        page.setObjectName("InspectorTabPage")
-        layout = QVBoxLayout(page)
-        layout.setContentsMargins(9, 11, 9, 9)
-        layout.setSpacing(8)
-
-        layout.addWidget(SectionTitle("Exportación final"))
-        format_row = QHBoxLayout()
-        format_row.addWidget(QLabel("Formato"))
-        format_row.addStretch()
-        self.format_choice = QComboBox()
-        self.format_choice.addItems(["PNG", "JPG", "WEBP", "PSD"])
-        self.format_choice.setMinimumWidth(90)
-        format_row.addWidget(self.format_choice)
-        layout.addLayout(format_row)
-        export_hint = QLabel("Exporta sin cajas visibles y conserva la resolución original.")
-        export_hint.setObjectName("Muted")
-        export_hint.setWordWrap(True)
-        layout.addWidget(export_hint)
-        export_current = ModernButton("Exportar página", "Primary", icon_name="download")
-        export_current.clicked.connect(lambda: self.action_requested.emit("save_current"))
-        export_chapter = ModernButton("Exportar capítulo", icon_name="images")
-        export_chapter.clicked.connect(lambda: self.action_requested.emit("save_all"))
-        layout.addWidget(export_current)
-        layout.addWidget(export_chapter)
-
-        layout.addSpacing(8)
-        layout.addWidget(SectionTitle("Proyecto"))
-        save_project = ModernButton("Guardar proyecto", icon_name="save")
-        save_project.clicked.connect(lambda: self.action_requested.emit("save_project"))
-        open_project = ModernButton("Abrir proyecto", icon_name="folder")
-        open_project.clicked.connect(lambda: self.action_requested.emit("open_project"))
-        layout.addWidget(save_project)
-        layout.addWidget(open_project)
-        layout.addStretch()
-        return page
-
     def set_progress(self, value: int, active: bool = True) -> None:
-        self.progress.setValue(value)
-        if value <= 0 and active:
-            self.progress_label.setText("Listo")
-        else:
-            self.progress_label.setText(f"{'Procesando…' if active else 'Completado'} {value}%")
+        self._progress = max(0, min(100, int(value)))
 
     def set_stage(self, text: str, value: int = 0) -> None:
-        self.progress.setValue(max(0, min(100, int(value))))
-        self.progress_label.setText(str(text))
+        self._stage = str(text)
+        self.set_progress(value)
 
     def update_page(self, index: int, total: int) -> None:
         self.page_label.setText(f"{index + 1} / {total}" if total else "— / —")
-
-    def update_zoom(self, value: int) -> None:
-        self.zoom_label.setText(f"{value}%")
 
     def export_format(self) -> str:
         return self.format_choice.currentText()
