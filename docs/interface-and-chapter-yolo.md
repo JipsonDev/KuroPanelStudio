@@ -8,6 +8,12 @@ El lote conserva las páginas con cajas para proteger su OCR, traducción y
 edición manual. Para detectar nuevamente una página, elige **Página actual**.
 La detección es local y funciona sin configurar las credenciales OCR.
 
+Para manga, abre **Procesar → OCR → Lectura y portapapeles** y activa
+**Lectura manga · derecha → izquierda**. Se aplica a todo el capítulo y
+se guarda con el proyecto. Cambiar la dirección renumera las cajas existentes
+y conserva el texto de cada una. En cada fila, los globos pueden estar
+a distinta altura y siguen leyéndose de derecha a izquierda.
+
 El progreso muestra la página y el porcentaje del lote. Las imágenes se
 procesan en orden, una a la vez, mediante el trabajador de modelos. Cancelar
 o fallar no aplica resultados parciales. Deshacer revierte el lote completo.

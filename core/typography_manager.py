@@ -384,6 +384,32 @@ class TypographyManager:
         """Stable panel reading order: top-to-bottom, then horizontal direction."""
         if not regions:
             return []
+        if manga_mode:
+            def right_edge(item: dict) -> int:
+                return int(item["x"]) + int(item.get("width", 0))
+
+            rows: list[list[dict]] = []
+            for region in sorted(regions, key=lambda item: (int(item["y"]), -int(item["height"]), -right_edge(item))):
+                if rows:
+                    anchor = rows[-1][0]
+                    top = int(anchor["y"])
+                    y = int(region["y"])
+                    anchor_height = max(1, int(anchor["height"]))
+                    height = max(1, int(region["height"]))
+                    shorter = min(anchor_height, height)
+                    overlap = min(top + anchor_height, y + height) - y
+                    # Compare against the first box, so staggered neighbors
+                    # cannot chain a row all the way down the page.
+                    if overlap * 2 >= shorter and y - top <= max(12, shorter * .65):
+                        rows[-1].append(region)
+                        continue
+                rows.append([region])
+            return [
+                region for row in rows for region in sorted(
+                    row,
+                    key=lambda item: (-right_edge(item), int(item["y"])),
+                )
+            ]
         typical_height = max(1, int(sorted(max(1, int(r["height"])) for r in regions)[len(regions) // 2]))
         row_height = max(12, typical_height // 2)
         top = min(int(region["y"]) for region in regions)
@@ -391,7 +417,7 @@ class TypographyManager:
             regions,
             key=lambda region: (
                 (int(region["y"]) - top) // row_height,
-                -int(region["x"]) if manga_mode else int(region["x"]),
+                int(region["x"]),
                 int(region["y"]),
             ),
         )

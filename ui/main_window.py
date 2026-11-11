@@ -1210,14 +1210,13 @@ class MainWindow(QMainWindow):
             self._page_workflow_status(page_key(page)) for page in self.project.pages
         ])
 
+    def _manga_mode_for_key(self, key: str | None) -> bool:
+        styles = self.page_styles.get(key, {})
+        ocr_direction = styles.get("ocr", {}).get("manga_mode", False)
+        return bool(styles.get("translation", {}).get("manga_mode", ocr_direction))
+
     def _ordered_regions_for_key(self, key: str) -> list[dict]:
-        manga = bool(
-            self.page_styles.get(key, {}).get("translation", {}).get(
-                "manga_mode",
-                self.page_styles.get(key, {}).get("ocr", {}).get("manga_mode", False),
-            )
-        )
-        return TypographyManager.ordered(self.page_regions.get(key, []), manga)
+        return TypographyManager.ordered(self.page_regions.get(key, []), self._manga_mode_for_key(key))
 
     def _pending_text_items(self, key: str, create: bool = True) -> list[dict]:
         page_style = self.page_styles.setdefault(key, {}) if create else self.page_styles.get(key, {})
@@ -1253,12 +1252,7 @@ class MainWindow(QMainWindow):
         pending = self._pending_text_items(key)
         if not pending or not regions:
             return 0
-        ordered = TypographyManager.ordered(
-            regions,
-            bool(self.page_styles.get(key, {}).get("translation", {}).get(
-                "manga_mode", self.page_styles.get(key, {}).get("ocr", {}).get("manga_mode", False),
-            )),
-        )
+        ordered = TypographyManager.ordered(regions, self._manga_mode_for_key(key))
         consumed = 0
         for region in ordered:
             if consumed >= len(pending):
@@ -1285,12 +1279,12 @@ class MainWindow(QMainWindow):
     def _numbered_page_content(self, key: str, target: str | None = None) -> str:
         target = target or ("translation" if self.ai_panel.current_mode == "translation" else "ocr")
         entries = []
-        for fallback, region in enumerate(self._ordered_regions_for_key(key), 1):
+        for number, region in enumerate(self._ordered_regions_for_key(key), 1):
             if target == "translation":
                 value = region.get("translation") or region.get("applied_text") or region.get("text", "")
             else:
                 value = region.get("text", "")
-            entries.append((int(region.get("number", fallback)), value))
+            entries.append((number, value))
         text = format_numbered_entries(entries)
         if text:
             return text
@@ -1303,10 +1297,10 @@ class MainWindow(QMainWindow):
         if key:
             ordered = self._ordered_regions_for_key(key)
             numbered_texts = []
-            for fallback_number, region in enumerate(ordered, start=1):
+            for number, region in enumerate(ordered, start=1):
+                region["number"] = number
                 text = str(region.get("translation") or region.get("text") or "").strip()
                 if text:
-                    number = int(region.get("number", fallback_number))
                     numbered_texts.append(f"#{number:02} {text}")
             pending = self._pending_text_items(key, create=False)
             self.page_texts[key] = "\n\n".join(numbered_texts) or format_numbered_entries(
@@ -1491,8 +1485,9 @@ class MainWindow(QMainWindow):
 
     def _sync_script_panel(self) -> None:
         if hasattr(self, "script_panel"):
-            self.script_panel.set_regions(self.regions, self.project.active_index)
             key = self._active_key()
+            ordered = TypographyManager.ordered(self.regions, self._manga_mode_for_key(key))
+            self.script_panel.set_regions(ordered, self.project.active_index)
             source = str(self.page_styles.get(key or "", {}).get("text_transfer", {}).get("source", ""))
             if self.script_panel.queue_input.toPlainText() != source:
                 self.script_panel.queue_input.setPlainText(source)
@@ -3190,7 +3185,15 @@ class MainWindow(QMainWindow):
         if key:
             self.page_styles.setdefault(key, {})[mode] = dict(options)
             if mode in {"ocr", "translation"} and "manga_mode" in options:
-                self.canvas_shell.canvas.set_manga_mode(bool(options["manga_mode"]))
+                manga_mode = bool(options["manga_mode"])
+                for page in self.project.pages:
+                    page_id = page_key(page)
+                    styles = self.page_styles.setdefault(page_id, {})
+                    for text_mode in ("ocr", "translation"):
+                        styles.setdefault(text_mode, {})["manga_mode"] = manga_mode
+                    if self.page_regions.get(page_id):
+                        self._refresh_page_text(page_id)
+                self.canvas_shell.canvas.set_manga_mode(manga_mode)
                 selected = self.layers.current_index()
                 selected_id = (
                     str(self.regions[selected].get("id", ""))
@@ -3199,6 +3202,8 @@ class MainWindow(QMainWindow):
                 self.layers.set_regions(
                     self.regions, selected_id or None, keep_empty_selection=selected < 0,
                 )
+                if self.tool_panel.currentWidget() is self.script_panel:
+                    self._sync_script_panel()
             self._history_timer.start()
 
     def _commit_debounced_state(self) -> None:
@@ -3435,6 +3440,8 @@ class MainWindow(QMainWindow):
             self.inspector.clear_layer_text()
         for mode, options in self.page_styles.get(key, {}).items():
             self.ai_panel.set_style_options(mode, options)
+        for mode in ("ocr", "translation"):
+            self.ai_panel.set_style_options(mode, {"manga_mode": self._manga_mode_for_key(key)})
         self.canvas_shell.page_label.setText(f"{index + 1}  /  {len(self.project.pages)}")
         self.inspector.update_page(index, len(self.project.pages))
         if same_page:
@@ -3447,14 +3454,7 @@ class MainWindow(QMainWindow):
 
     def _render_page_layers(self, key: str, page_changed: bool = False) -> None:
         render_started = perf_counter()
-        manga_mode = bool(
-            self.page_styles.get(key, {}).get("translation", {}).get(
-                "manga_mode",
-                self.page_styles.get(key, {}).get("ocr", {}).get("manga_mode", False),
-            )
-        )
-        self.canvas_shell.canvas.set_manga_mode(manga_mode)
-        self.canvas_shell.canvas.set_regions(self.regions)
+        self.canvas_shell.canvas.set_regions(self.regions, manga_mode=self._manga_mode_for_key(key))
         visible_text = [
             region.get("applied_text") or region.get("translation") or region.get("text", "")
             for region in self.regions
@@ -3874,6 +3874,8 @@ class MainWindow(QMainWindow):
                     continue
                 for region in regions:
                     region.setdefault("id", f"region-{uuid.uuid4().hex}")
+                if self._manga_mode_for_key(key):
+                    regions = TypographyManager.ordered(regions, True)
                 self._apply_dialogue_defaults(regions, key=key)
                 self._consume_pending_text(key, regions)
                 self.page_regions[key] = regions
@@ -3937,16 +3939,14 @@ class MainWindow(QMainWindow):
         page = self.project.active_page
         source_states = copy.deepcopy(self._source_layer_states(self._active_key()))
         request_targets: dict[str, dict] = {}
-        request_regions: list[dict] = []
-        for region in target_regions:
+        ordered: list[dict] = []
+        reading_order = {id(region): index for index, region in enumerate(self._ordered_regions_for_key(page_key(page)))}
+        for region in sorted(target_regions, key=lambda item: reading_order.get(id(item), len(reading_order))):
             token = uuid.uuid4().hex
             requested = copy.deepcopy(region)
             requested["_ocr_request_token"] = token
             request_targets[token] = region
-            request_regions.append(requested)
-        ordered = TypographyManager.ordered(
-            request_regions, bool(self.ai_panel.style_options("ocr").get("manga_mode", False))
-        )
+            ordered.append(requested)
         self.ai_panel.set_status(
             "ocr", f"OCR en cola segura · {len(ordered)} caja(s) · {self.ocr.parallelism} conexión(es)",
             self.ai_panel.STATUS_WARNING,
@@ -4031,7 +4031,7 @@ class MainWindow(QMainWindow):
         for page in self.project.pages:
             key = page_key(page)
             missing = [
-                region for region in self.page_regions.get(key, [])
+                region for region in self._ordered_regions_for_key(key)
                 if OCRManager.needs_recognition(region)
             ]
             if page.path and missing:
@@ -4067,10 +4067,8 @@ class MainWindow(QMainWindow):
 
         def recognize_chapter(progress, cancelled):
             results = {}
-            for page_index, (page, missing) in enumerate(work):
+            for page_index, (page, ordered) in enumerate(work):
                 page_id = page_key(page)
-                manga = bool(self.page_styles.get(page_id, {}).get("ocr", {}).get("manga_mode", False))
-                ordered = TypographyManager.ordered(missing, manga)
                 offset, span = page_index * 100 / len(work), 100 / len(work)
                 page_stage = f"Página {page_index + 1} de {len(work)} · OCR"
                 progress(int(offset), page_stage, page_id)
@@ -4162,8 +4160,7 @@ class MainWindow(QMainWindow):
                 "glossary": configuration.get("glossary", ""),
                 "prompt": configuration.get("prompt", ""),
             }
-        manga = bool(self.ai_panel.style_options("translation").get("manga_mode", False))
-        candidates = self.regions
+        candidates = self._ordered_regions_for_key(self._active_key())
         if scope == "one":
             index = self.layers.current_index()
             if not 0 <= index < len(self.regions):
@@ -4185,7 +4182,7 @@ class MainWindow(QMainWindow):
                 )
                 self._toast("Traducción ya disponible", "Todas las cajas de esta página ya están traducidas.")
                 return
-        ordered = [region for region in TypographyManager.ordered(candidates, manga) if str(region.get("text", "")).strip()]
+        ordered = [region for region in candidates if str(region.get("text", "")).strip()]
         if not ordered:
             self._toast("Sin OCR", "Ninguna capa contiene texto original para traducir.")
             return
@@ -4265,9 +4262,8 @@ class MainWindow(QMainWindow):
                 if cancelled():
                     return {}
                 key = page_key(page)
-                manga = bool(self.page_styles.get(key, {}).get("translation", {}).get("manga_mode", False))
                 ordered = [
-                    region for region in TypographyManager.ordered(self.page_regions.get(key, []), manga)
+                    region for region in self._ordered_regions_for_key(key)
                     if str(region.get("text", "")).strip()
                     and not (
                         bool(region.get("translation_completed", False))
@@ -4370,13 +4366,16 @@ class MainWindow(QMainWindow):
             )
 
     def _show_regions(self, regions: list[dict]) -> None:
-        self._apply_dialogue_defaults(regions)
         key = self._active_key()
+        manga_mode = self._manga_mode_for_key(key)
+        if manga_mode:
+            regions = TypographyManager.ordered(regions, True)
+        self._apply_dialogue_defaults(regions)
         if key:
             self._consume_pending_text(key, regions)
         self.regions = regions
         self._store_active_regions(regions)
-        self.canvas_shell.canvas.set_regions(regions)
+        self.canvas_shell.canvas.set_regions(regions, manga_mode=manga_mode)
         self.canvas_shell.canvas.add_text(
             [region.get("applied_text") or region.get("translation") or region.get("text", "") for region in regions],
             regions,
