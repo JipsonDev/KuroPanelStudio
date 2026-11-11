@@ -14,6 +14,10 @@ se guarda con el proyecto. Cambiar la dirección renumera las cajas existentes
 y conserva el texto de cada una. En cada fila, los globos pueden estar
 a distinta altura y siguen leyéndose de derecha a izquierda.
 
+Cuando hay dos grupos claramente separados por un hueco vertical, se lee
+primero el grupo de la derecha. Las filas alineadas y los grupos superiores
+se completan antes de bajar al siguiente grupo.
+
 El progreso muestra la página y el porcentaje del lote. Las imágenes se
 procesan en orden, una a la vez, mediante el trabajador de modelos. Cancelar
 o fallar no aplica resultados parciales. Deshacer revierte el lote completo.

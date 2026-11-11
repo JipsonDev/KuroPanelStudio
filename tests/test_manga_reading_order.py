@@ -24,6 +24,69 @@ def manga_boxes():
     ]
 
 
+def separated_manga_blocks():
+    # The IDs are the original overlay numbers in the reported screenshot.
+    return [
+        {"id": str(number), "x": x, "y": y, "width": width, "height": height, "text": str(number)}
+        for number, x, y, width, height in (
+            (1, 863, 55, 73, 211),
+            (2, 119, 161, 90, 154),
+            (3, 781, 358, 72, 153),
+            (4, 178, 358, 52, 54),
+            (5, 45, 398, 35, 106),
+            (6, 611, 472, 44, 87),
+            (7, 155, 481, 75, 106),
+        )
+    ]
+
+
+def test_manga_finishes_the_right_block_before_crossing_the_panel():
+    regions = separated_manga_blocks()
+    ordered = TypographyManager.ordered(regions, True)
+    assert [region["id"] for region in ordered] == ["1", "3", "6", "2", "4", "5", "7"]
+    assert TypographyManager.ordered(regions[::-1], True) == ordered
+
+
+def test_manga_finishes_an_upper_panel_row_before_a_lower_one():
+    regions = separated_manga_blocks()
+    lower = [{**region, "id": f'lower-{region["id"]}', "y": region["y"] + 800} for region in regions]
+    ordered = TypographyManager.ordered(lower + regions, True)
+    one_panel = ["1", "3", "6", "2", "4", "5", "7"]
+    assert [region["id"] for region in ordered] == one_panel + [f"lower-{key}" for key in one_panel]
+
+
+def test_tall_boxes_below_the_reported_panel_do_not_interrupt_its_order():
+    # Full-page geometry from the saved chapter includes three more boxes
+    # below the screenshot. Their height must not mask the gap above them.
+    regions = [
+        {"id": str(number), "x": x, "y": y, "width": width, "height": height}
+        for number, x, y, width, height in (
+            (1, 1155, 754, 91, 263),
+            (2, 225, 886, 112, 192),
+            (3, 1053, 1133, 89, 191),
+            (4, 299, 1132, 65, 68),
+            (5, 133, 1183, 43, 132),
+            (6, 840, 1275, 55, 108),
+            (7, 271, 1286, 93, 133),
+            (8, 770, 1520, 78, 371),
+            (9, 120, 1551, 173, 387),
+            (10, 1101, 1765, 180, 225),
+        )
+    ]
+    ordered = [box["id"] for box in TypographyManager.ordered(regions, True)]
+    assert ordered == ["1", "3", "6", "2", "4", "5", "7", "10", "8", "9"]
+
+
+def test_regular_grid_reads_each_row_before_the_next():
+    regions = [
+        {"id": f"{column}-{y}", "x": x, "y": y, "width": 70, "height": 100}
+        for y in (0, 120) for column, x in (("left", 0), ("right", 500))
+    ]
+    assert [region["id"] for region in TypographyManager.ordered(regions, True)] == [
+        "right-0", "left-0", "right-120", "left-120",
+    ]
+
+
 def test_staggered_balloons_in_one_manga_row_read_right_first():
     assert [r["id"] for r in TypographyManager.ordered(manga_boxes(), True)] == [
         "top", "right", "left", "bottom",
@@ -49,8 +112,8 @@ def editor(tmp_path, monkeypatch):
     pages = []
     for index in range(2):
         path = tmp_path / f"{index}.png"
-        Image.new("RGB", (320, 400), "white").save(path)
-        pages.append(Page(path.name, path, 320, 400))
+        Image.new("RGB", (1000, 640), "white").save(path)
+        pages.append(Page(path.name, path, 1000, 640))
     with (
         patch.object(MainWindow, "_offer_recovery"),
         patch.object(MainWindow, "_import_legacy_profiles_async"),
@@ -68,6 +131,23 @@ def editor(tmp_path, monkeypatch):
         app_wait(app, lambda: window._displayed_page_path == pages[0].path)
         yield window, pages, app
         window.close()
+
+
+def test_existing_boxes_get_the_new_numbers_and_keep_their_text(editor):
+    window, pages, _ = editor
+    key = str(pages[0].path)
+    original = separated_manga_blocks()
+    for box in original:
+        box["number"] = int(box["id"])
+        box["translation"] = "Translation " + box["id"]
+    window.page_regions[key] = original
+    window.page_styles[key]["translation"]["manga_mode"] = True
+    window._set_page(0)
+
+    assert [item.region["number"] for item in window.canvas_shell.canvas._regions] == [1, 4, 2, 5, 6, 3, 7]
+    assert window._numbered_page_content(key, "translation").splitlines() == [
+        f"{number}. Translation {old}" for number, old in enumerate((1, 3, 6, 2, 4, 5, 7), 1)
+    ]
 
 
 @pytest.mark.parametrize("chapter", [False, True])
