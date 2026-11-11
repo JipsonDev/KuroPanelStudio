@@ -1,5 +1,10 @@
 # Historial de cambios
 
+## 0.2.22 — bloques de lectura manga
+
+- Si las cajas forman bloques claramente separados a la derecha e izquierda, el orden manga completa primero el bloque derecho. Las filas alineadas mantienen la lectura de arriba abajo y de derecha a izquierda.
+- Se verificó el orden con las siete cajas de la captura, las diez de la página completa y cajas existentes al abrir un proyecto.
+
 ## 0.2.21 — orden de lectura manga
 
 - La detección YOLO ordena de derecha a izquierda los globos de una misma fila, aunque estén a distinta altura.
