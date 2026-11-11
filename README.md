@@ -3,10 +3,10 @@
 Editor de escritorio para OCR, traducción, limpieza y typpeo de manhua, manhwa
 y manga. Está construido con Python, PySide6, OpenCV y ONNX Runtime.
 
-**Versión 0.2.20:** interfaz simplificada, detección YOLO para todo el capítulo,
-limpieza MI-GAN/LaMa y exportación a resolución original.
+**Versión 0.2.21** corrige el orden de lectura de derecha a izquierda en la
+detección YOLO por página y por capítulo.
 
-[Descargar instalador para Windows x64](https://github.com/JipsonDev/KuroPanelStudio/releases/download/v0.2.20/KuroPanelStudio-Setup-0.2.20-Windows-x64.exe)
+[Descargar instalador para Windows x64](https://github.com/JipsonDev/KuroPanelStudio/releases/download/v0.2.21/KuroPanelStudio-Setup-0.2.21-Windows-x64.exe)
 · [Última versión](https://github.com/JipsonDev/KuroPanelStudio/releases/latest)
 · [Historial de cambios](CHANGELOG.md)
 
@@ -64,6 +64,10 @@ página a la vez, muestra progreso y permite cancelar. Conserva las páginas
 que ya tienen cajas para proteger OCR, traducciones y ediciones; para volver
 a detectar una página, elige **Página actual**. Cancelar o fallar no aplica
 resultados parciales, y **Deshacer** revierte el lote completo.
+
+Para mangas de derecha a izquierda, activa **Lectura manga · derecha →
+izquierda** dentro de **Procesar → OCR → Lectura y portapapeles**. Se aplica
+a todo el capítulo, renumera las cajas existentes y se guarda con el proyecto.
 
 ![Cajas de detección sobre globos](docs/images/ocr-boxes.png)
 
@@ -286,7 +290,7 @@ que puedas compartir legalmente.
 La aplicación instalable se construye con:
 
 ```powershell
-.\build_windows.ps1 -Version 0.2.20
+.\build_windows.ps1 -Version 0.2.21
 ```
 
 La edición compacta CPU-first se construye con:
@@ -298,12 +302,12 @@ La edición compacta CPU-first se construye con:
 Para crear el instalador x64 con Inno Setup 6:
 
 ```powershell
-.\build_installer.ps1 -Version 0.2.20
+.\build_installer.ps1 -Version 0.2.21
 ```
 
-El instalador para GitHub se genera en `github-release/KuroPanelStudio-v0.2.20/`.
+El instalador para GitHub se genera en `github-release/KuroPanelStudio-v0.2.21/`.
 Usa `-LocalOnly` en ambos comandos para generar un instalador local registrado en
-`local-builds/KuroPanelStudio-v0.2.20/`.
+`local-builds/KuroPanelStudio-v0.2.21/`.
 En GitHub, una etiqueta `vX.Y.Z` inicia el flujo de Windows que compila,
 prueba y adjunta el instalador y las notas de cambios a la Release sin subirlos manualmente.
 Consulta [la guía de publicación](docs/actualizaciones.md).

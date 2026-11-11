@@ -2274,6 +2274,7 @@ class UIWorkflowTests(unittest.TestCase):
                 {"text": "Segunda", "target": "translation"},
             ]}}}
             _pending_text_items = MainWindow._pending_text_items
+            _manga_mode_for_key = MainWindow._manga_mode_for_key
             _assign_transferred_text = staticmethod(MainWindow._assign_transferred_text)
 
             @staticmethod
@@ -2325,6 +2326,7 @@ class UIWorkflowTests(unittest.TestCase):
 
         class WindowStub:
             _pending_text_items = MainWindow._pending_text_items
+            _manga_mode_for_key = MainWindow._manga_mode_for_key
             _assign_transferred_text = staticmethod(MainWindow._assign_transferred_text)
             layers = LayersStub()
             project = SimpleNamespace(active_index=0)

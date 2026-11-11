@@ -230,6 +230,8 @@ ES_TO_EN = {
     "Flujo y lectura": "Workflow and reading",
     "Ajustes del pincel": "Brush settings",
     "Lectura manga · derecha → izquierda": "Manga reading · right → left",
+    "Aplica la lectura de derecha a izquierda a todas las páginas del capítulo.":
+        "Read right to left on every page of the chapter.",
     "Ordena las cajas de cada fila de derecha a izquierda y mantiene el avance de arriba abajo":
         "Order each row's boxes from right to left, then continue downward",
     "Autodetectar cajas de texto con YOLO": "Automatically detect text boxes with YOLO",

@@ -1122,7 +1122,9 @@ class CanvasView(QGraphicsView):
     def original_image(self) -> QImage:
         return self._pixmap_item.pixmap().toImage().copy()
 
-    def set_regions(self, regions: list[dict]) -> None:
+    def set_regions(self, regions: list[dict], *, manga_mode: bool | None = None) -> None:
+        if manga_mode is not None:
+            self._manga_mode = manga_mode
         used_ids: set[str] = set()
         for index, region in enumerate(regions):
             region_id = str(region.get("id", "")).strip()

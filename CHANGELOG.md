@@ -1,5 +1,11 @@
 # Historial de cambios
 
+## 0.2.21 — orden de lectura manga
+
+- La detección YOLO ordena de derecha a izquierda los globos de una misma fila, aunque estén a distinta altura.
+- La lectura manga se aplica a todas las páginas del capítulo y se guarda con el proyecto.
+- Lienzo, guion, texto copiado, OCR y traducción usan el mismo orden de lectura. Cambiar la dirección actualiza los números de las cajas existentes y conserva su texto.
+
 ## 0.2.20 — interfaz simplificada y YOLO por capítulo
 
 - Cabecera compacta, superficies neutras y paneles planos; selección dorada discreta y más espacio para el lienzo.

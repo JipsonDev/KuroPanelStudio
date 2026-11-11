@@ -768,8 +768,9 @@ class AIOptionsPanel(QScrollArea):
             manga_row = QHBoxLayout()
             manga_row.setSpacing(7)
             manga_toggle = Toggle()
+            manga_toggle.setAccessibleName("Lectura manga · derecha → izquierda")
             manga_toggle.setToolTip(
-                "Ordena las cajas de cada fila de derecha a izquierda y mantiene el avance de arriba abajo"
+                "Aplica la lectura de derecha a izquierda a todas las páginas del capítulo."
             )
             manga_toggle.toggled.connect(
                 lambda checked, source=mode: self._manga_mode_changed(source, checked)
@@ -796,7 +797,6 @@ class AIOptionsPanel(QScrollArea):
             toggle.blockSignals(True)
             toggle.setChecked(bool(checked))
             toggle.blockSignals(False)
-            self._emit_style_changed(mode)
         self._emit_style_changed(source_mode)
 
     def _add_numeric(self, layout: QVBoxLayout, label: str, value: int, mode: str) -> QSpinBox:

@@ -1,11 +1,11 @@
 #ifndef MyAppVersion
-  #define MyAppVersion "0.2.20"
+  #define MyAppVersion "0.2.21"
 #endif
 #ifndef SourceDir
   #define SourceDir "..\dist\KuroPanelStudio"
 #endif
 #ifndef OutputDir
-  #define OutputDir "..\github-release\KuroPanelStudio-v0.2.20"
+  #define OutputDir "..\github-release\KuroPanelStudio-v0.2.21"
 #endif
 
 #define MyAppName "KuroPanel Studio"
