@@ -4,7 +4,9 @@ import copy
 import os
 import subprocess
 import sys
+import threading
 import uuid
+from concurrent.futures import ThreadPoolExecutor
 from time import monotonic, perf_counter
 from pathlib import Path
 
@@ -24,6 +26,7 @@ from core.chapter_detection import detect_chapter
 from core.font_profile_manager import FontProfileManager
 from core.history_manager import HistoryManager
 from core.image_manager import ImageManager
+from core.failure_messages import describe_failure
 from core.ocr_manager import OCRManager
 from core.project_io import load_project_bundle, page_key, save_project_bundle
 from core.project_manager import ProjectManager
@@ -3291,12 +3294,19 @@ class MainWindow(QMainWindow):
         self._active_task_page_key = None
         self.current_task = None
         self.inspector.set_progress(100, active=False)
-        self.task_progress.finish()
         if metric:
             self.status.set_operation_time(metric.name, metric.seconds)
             self._refresh_performance_monitor()
-        if finished:
-            finished(result)
+        self._task_warning = None
+        try:
+            if finished:
+                finished(result)
+        finally:
+            warning, self._task_warning = self._task_warning, None
+            if warning:
+                self.task_progress.finish(warning=warning[0], warning_detail=warning[1])
+            else:
+                self.task_progress.finish()
         category = self._operation_category(title)
         if category:
             completed = {page_id} if page_id and "capítulo" not in title.casefold() else set()
@@ -3307,8 +3317,15 @@ class MainWindow(QMainWindow):
                     self._page_failures[key].pop(category, None)
                     if not self._page_failures[key]:
                         del self._page_failures[key]
+            if warning and category:
+                for key, reason in warning[2].items():
+                    self._page_failures.setdefault(key, {})[category] = reason
+                completed = completed or set(warning[2])
             if completed:
                 self._refresh_page_statuses()
+        if warning:
+            self._toast(f"{title} incompleto", f"{warning[0]}. Vuelve a ejecutarlo para completar solo lo pendiente.", "warning")
+            return
         self._toast(f"{title} completado", message)
 
     @staticmethod
@@ -3349,12 +3366,16 @@ class MainWindow(QMainWindow):
                 self._refresh_performance_monitor()
             self._toast("Proceso cancelado", "No se aplicaron resultados de la tarea.")
             return
+        failure = describe_failure(operation_name, message)
         category = self._operation_category(operation_name)
         if category and page_id:
-            self._page_failures.setdefault(page_id, {})[category] = message.splitlines()[0]
+            self._page_failures.setdefault(page_id, {})[category] = failure.title
             self._refresh_page_statuses()
         if "OCR" in operation_name.upper():
-            self.ai_panel.set_status("ocr", message.splitlines()[0], self.ai_panel.STATUS_WARNING)
+            status = failure.title if failure.kind != "unknown" else message.splitlines()[0]
+            if "404" in message and "404" not in status:
+                status = f"{status} (404)"
+            self.ai_panel.set_status("ocr", status, self.ai_panel.STATUS_WARNING)
             if "404" in message:
                 provider, model = self.ai_panel.ocr_configuration()
                 self._ocr_rejected_config = (
@@ -3368,7 +3389,9 @@ class MainWindow(QMainWindow):
         if metric:
             self.status.set_operation_time(metric.name, metric.seconds)
             self._refresh_performance_monitor()
-        self._toast("Error de proceso", message)
+        # The bar keeps the technical text under «Ver detalle»; the toast only
+        # says what happened and what to do.
+        self._toast(failure.title, failure.action, "error")
 
     def _set_empty_canvas(self) -> None:
         # Also invalidates a preparation task that is still running and has not
@@ -3954,7 +3977,7 @@ class MainWindow(QMainWindow):
         self._start_task(
             lambda progress, cancelled: self.ocr.run_regions(
                 page.path, ordered, provider, model, key, progress, cancelled, source_states,
-                force_refresh=force,
+                force_refresh=force, keep_going=True,
             ),
             "OCR completado",
             "El texto reconocido se insertó en las cajas y en el panel de aplicación.",
@@ -3965,6 +3988,10 @@ class MainWindow(QMainWindow):
     def _show_ocr_text(
         self, regions: list[dict], request_targets: dict[str, dict] | None = None,
     ) -> None:
+        failed = [region for region in regions if region.get(OCRManager.FAILED_KEY)]
+        regions = [region for region in regions if not region.get(OCRManager.FAILED_KEY)]
+        if failed:
+            self._report_ocr_failures({self._active_key(): failed})
         if request_targets:
             self._merge_ocr_results(regions, request_targets)
         else:
@@ -3984,9 +4011,35 @@ class MainWindow(QMainWindow):
         self._refresh_page_text(key)
         self._layer_selected(max(0, self.layers.current_index()))
         self._record_history()
-        self.ai_panel.set_status(
-            "ocr", f"OCR listo · {len(regions)} caja(s) · caché activa",
-            self.ai_panel.STATUS_OK,
+        if failed:
+            self.ai_panel.set_status(
+                "ocr", f"OCR incompleto · {len(regions)} leída(s), {len(failed)} pendiente(s)",
+                self.ai_panel.STATUS_WARNING,
+            )
+        else:
+            self.ai_panel.set_status(
+                "ocr", f"OCR listo · {len(regions)} caja(s) · caché activa",
+                self.ai_panel.STATUS_OK,
+            )
+
+    def _report_ocr_failures(self, failures: dict[str, list[dict]]) -> None:
+        """Keep read boxes, and tell the user exactly what to do about the rest."""
+        count = sum(len(items) for items in failures.values())
+        first = next(iter(failures.values()))[0]
+        failure = describe_failure("OCR", str(first.get(OCRManager.FAILED_KEY, "")))
+        aborted = any(item.get(OCRManager.ABORTED_KEY) for items in failures.values() for item in items)
+        cause = (
+            "La conexión falló varias veces seguidas y se dejó de enviar." if aborted
+            else f"{failure.title}."
+        )
+        pages = len(failures)
+        headline = f"{count} caja(s) sin leer" + (f" en {pages} página(s)" if pages > 1 else "")
+        self._task_warning = (
+            headline,
+            f"{cause} Las demás cajas ya tienen su texto.\n\n"
+            "Vuelve a ejecutar OCR: solo se enviarán las cajas pendientes.\n\n"
+            f"Detalle técnico:\n{failure.detail}",
+            {key: failure.title for key in failures},
         )
 
     def _merge_ocr_results(
@@ -4066,21 +4119,58 @@ class MainWindow(QMainWindow):
             return
 
         def recognize_chapter(progress, cancelled):
-            results = {}
-            for page_index, (page, ordered) in enumerate(work):
+            # Two pages share the connection budget. A page with fewer boxes
+            # than connections no longer leaves the others idle while its
+            # slowest reply arrives, and the total stays within the limit.
+            lanes = 2 if len(work) > 1 else 1
+            connections = max(1, -(-self.ocr.parallelism // lanes))
+            fractions = [0.0] * len(work)
+            lock = threading.Lock()
+            stop = threading.Event()
+
+            def report(page_index, value, label, page_id):
+                # Two pages advance at once: report pages finished, not
+                # whichever page happened to send the last update.
+                with lock:
+                    fractions[page_index] = float(value)
+                    overall = sum(fractions) / len(work)
+                    done = sum(fraction >= 100 for fraction in fractions)
+                progress(int(overall), f"{done} de {len(work)} páginas listas", page_id)
+
+            def recognize_page(page_index):
+                page, ordered = work[page_index]
                 page_id = page_key(page)
-                offset, span = page_index * 100 / len(work), 100 / len(work)
-                page_stage = f"Página {page_index + 1} de {len(work)} · OCR"
-                progress(int(offset), page_stage, page_id)
-                results[page_id] = self.ocr.run_regions(
-                    page.path, ordered, provider, model, key,
-                    lambda value, base=offset, amount=span, label=page_stage, current=page_id: progress(
-                        int(base + value * amount / 100), label, current,
-                    ),
-                    cancelled, copy.deepcopy(self._source_layer_states(page_id)),
-                )
-                if cancelled():
-                    return {}
+                if stop.is_set() or cancelled():
+                    return page_id, None
+                label = f"Página {page_index + 1} de {len(work)} · OCR"
+                report(page_index, 0, label, page_id)
+                try:
+                    recognized = self.ocr.run_regions(
+                        page.path, ordered, provider, model, key,
+                        lambda value, index=page_index, text=label, current=page_id: report(
+                            index, value, text, current,
+                        ),
+                        # Another page's failure only stops new pages: this
+                        # page keeps the readings it already paid for.
+                        cancelled,
+                        copy.deepcopy(self._source_layer_states(page_id)),
+                        keep_going=True, max_workers=connections,
+                    )
+                except Exception:
+                    stop.set()
+                    raise
+                # With the connection down, the next pages would only fail too.
+                if any(item.get(OCRManager.ABORTED_KEY) for item in recognized):
+                    stop.set()
+                return page_id, recognized
+
+            results = {}
+            with ThreadPoolExecutor(max_workers=lanes) as pool:
+                for page_id, recognized in pool.map(recognize_page, range(len(work))):
+                    if recognized is not None:
+                        results[page_id] = recognized
+            if cancelled():
+                return {}
             return results
 
         self.ai_panel.set_status(
@@ -4098,6 +4188,17 @@ class MainWindow(QMainWindow):
         self, results: dict[str, list[dict]],
         chapter_targets: dict[str, dict[str, dict]] | None = None,
     ) -> None:
+        failures = {
+            key: [item for item in items if item.get(OCRManager.FAILED_KEY)]
+            for key, items in results.items()
+        }
+        failures = {key: items for key, items in failures.items() if items}
+        results = {
+            key: [item for item in items if not item.get(OCRManager.FAILED_KEY)]
+            for key, items in results.items()
+        }
+        if failures:
+            self._report_ocr_failures(failures)
         for key, recognized_regions in results.items():
             if chapter_targets and key in chapter_targets:
                 self._merge_ocr_results(recognized_regions, chapter_targets[key])
@@ -4115,7 +4216,13 @@ class MainWindow(QMainWindow):
             self.regions = self.page_regions[self._active_key()]
             self._render_page_layers(self._active_key())
         self._record_history()
-        self.ai_panel.set_status("ocr", "OCR del capítulo listo · caché activa", self.ai_panel.STATUS_OK)
+        if failures:
+            self.ai_panel.set_status(
+                "ocr", f"OCR del capítulo incompleto · {sum(map(len, failures.values()))} caja(s) pendiente(s)",
+                self.ai_panel.STATUS_WARNING,
+            )
+        else:
+            self.ai_panel.set_status("ocr", "OCR del capítulo listo · caché activa", self.ai_panel.STATUS_OK)
 
     @staticmethod
     def _promote_ocr_overlay(region: dict) -> None:

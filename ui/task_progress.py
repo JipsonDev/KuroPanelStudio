@@ -2,6 +2,7 @@
 from time import monotonic
 from PySide6.QtCore import QEvent, QTimer, Qt, Signal
 from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel, QMessageBox, QProgressBar, QPushButton, QVBoxLayout
+from core.failure_messages import describe_failure, format_remaining
 from ui.widgets.icons import icon
 
 
@@ -27,6 +28,12 @@ class TaskProgress(QFrame):
         self.complete_icon.setPixmap(icon("check", "#20D985", 20).pixmap(20, 20))
         self.complete_icon.hide()
         row.addWidget(self.complete_icon)
+        self.alert_icon = QLabel("!")
+        self.alert_icon.setObjectName("ProgressAlertIcon")
+        self.alert_icon.setAlignment(Qt.AlignCenter)
+        self.alert_icon.setFixedSize(20, 20)
+        self.alert_icon.hide()
+        row.addWidget(self.alert_icon)
         self.details = QPushButton("Ver detalle")
         self.details.clicked.connect(self._show_details)
         row.addWidget(self.details)
@@ -49,6 +56,7 @@ class TaskProgress(QFrame):
         self.timer.timeout.connect(self._tick)
         self._text = ""
         self._error = ""
+        self._explanation = ""
         self._dialog = None
         self._owner = None
         self._stage = ""
@@ -63,11 +71,14 @@ class TaskProgress(QFrame):
         self._text = f"{self._title} · {self._stage}"
         self._started = monotonic()
         self._error = ""
+        self._explanation = ""
         self._cancel_pending = False
+        self._set_state("running")
         self.cancel_button.setEnabled(True)
         self.cancel_button.show()
         self.details.hide()
         self.complete_icon.hide()
+        self.alert_icon.hide()
         self.dismiss.hide()
         self.bar.show()
         self.bar.setRange(0, 0)
@@ -108,26 +119,61 @@ class TaskProgress(QFrame):
         self._refresh_label()
         self.cancel_requested.emit()
 
-    def finish(self, error: str = "", owner: str = "foreground", cancelled: bool = False):
+    def finish(
+        self, error: str = "", owner: str = "foreground", cancelled: bool = False,
+        warning: str = "", warning_detail: str = "",
+    ):
+        """Show the outcome: completed, completed with warnings, cancelled or failed.
+
+        An error is shown as its cause and the action to take; the raw text
+        stays available under «Ver detalle».
+        """
         if self._owner != owner:
             return
         self.timer.stop()
         self._error = error
-        self._text = f"{self._title} · {'Cancelado' if cancelled else 'Error: ' + error.splitlines()[0] if error else 'Completado'}"
+        if cancelled:
+            outcome, state = "Cancelado · no se aplicó ningún resultado", "cancelled"
+            self._explanation = ""
+        elif error:
+            failure = describe_failure(self._title, error)
+            outcome, state = failure.title, "error"
+            self._explanation = f"{failure.title}.\n\n{failure.action}\n\nDetalle técnico:\n{error}"
+        elif warning:
+            outcome, state = warning, "warning"
+            self._explanation = f"{warning}\n\n{warning_detail}".strip()
+        else:
+            outcome, state = "Completado", "done"
+            self._explanation = ""
+        self._text = f"{self._title} · {outcome}"
         self.bar.setRange(0, 100)
         self.bar.setValue(0 if error or cancelled else 100)
-        self.bar.setVisible(not bool(error or cancelled))
-        self.details.setVisible(bool(error) and not cancelled)
-        self.complete_icon.setVisible(not bool(error or cancelled))
+        self.bar.setVisible(state in {"done", "warning"})
+        self.details.setVisible(state in {"error", "warning"})
+        self.complete_icon.setVisible(state == "done")
+        self.alert_icon.setVisible(state in {"error", "warning"})
         self.cancel_button.hide()
         self.dismiss.show()
         self._owner = None
+        self._set_state(state)
         self._refresh_label()
         self.active_changed.emit(False)
 
+    def _set_state(self, state: str) -> None:
+        if self.property("state") == state:
+            return
+        self.setProperty("state", state)
+        style = self.style()
+        for widget in (self, self.label, self.alert_icon, self.bar):
+            style.unpolish(widget)
+            style.polish(widget)
+
     def _tick(self):
-        seconds = int(monotonic() - self._started)
-        self.elapsed.setText(f"{seconds // 60:02d}:{seconds % 60:02d}")
+        elapsed = monotonic() - self._started
+        seconds = int(elapsed)
+        clock = f"{seconds // 60:02d}:{seconds % 60:02d}"
+        remaining = format_remaining(elapsed, self.bar.value()) if self.bar.maximum() == 100 else ""
+        self.elapsed.setText(f"{clock} · {remaining}" if remaining and self.timer.isActive() else clock)
         self._refresh_label()
 
     def _refresh_label(self):
@@ -144,6 +190,8 @@ class TaskProgress(QFrame):
         return super().eventFilter(watched, event)
 
     def _show_details(self):
-        self._dialog = QMessageBox(QMessageBox.Warning, "Error de proceso", self._error, QMessageBox.Ok, self)
+        title = "Proceso incompleto" if self.property("state") == "warning" else "Error de proceso"
+        text = self._explanation or self._error
+        self._dialog = QMessageBox(QMessageBox.Warning, title, text, QMessageBox.Ok, self)
         self._dialog.setTextFormat(Qt.PlainText)
         self._dialog.open()

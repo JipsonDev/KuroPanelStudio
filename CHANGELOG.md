@@ -1,5 +1,27 @@
 # Historial de cambios
 
+## 0.2.24 — OCR que continúa tras un fallo, errores claros y limpieza de rótulos densos
+
+Comprobado con las tiras del capítulo 185.
+
+**OCR**
+- Un fallo de red ya no detiene la tanda: se leen las demás cajas y solo quedan pendientes las fallidas. Al volver a ejecutar OCR se envían solo esas. Tras cuatro fallos seguidos se deja de enviar y no se empiezan páginas nuevas. Los errores de clave o de saldo siguen deteniendo la tanda.
+- El OCR del capítulo procesa dos páginas a la vez dentro del mismo límite de conexiones; una página con pocas cajas ya no deja conexiones paradas esperando su respuesta más lenta.
+
+**Progreso y errores**
+- Cada fallo se muestra igual en la barra de progreso, el aviso y el estado del proveedor: qué pasó y qué hacer (conexión, saldo, clave, modelo, saturación, memoria, GPU, archivo). El texto técnico sigue en «Ver detalle».
+- Un resultado parcial, como cajas sin leer, se marca en ámbar en la barra en vez de «Completado».
+- La barra estima el tiempo restante y, en el OCR del capítulo, cuenta las páginas terminadas.
+
+**Limpieza**
+- Las letras gruesas con poco interlineado se limpian en todas las líneas («够了大姐…»).
+- Un rótulo con borde blanco sobre piel clara ya no deja manchas blancas con la forma del texto («突然拿出»).
+- Los corazones, estrellas y otros adornos de color junto a texto negro o gris se conservan.
+- La versión de caché de máscaras pasa a 48.
+
+**Rendimiento**
+- La detección calcula la geometría de los globos mientras se ejecuta la red: alrededor de un 10 % menos de tiempo en una tira de 60.000 px con dos núcleos, con los mismos resultados.
+
 ## 0.2.23 — limpieza de rótulos, costuras de detección, reintentos de OCR y globos cortados
 
 Comprobado con las tres tiras del capítulo 185 (900 × 60.000 px) y una página sintética de manga.

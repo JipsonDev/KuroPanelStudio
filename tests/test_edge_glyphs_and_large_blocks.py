@@ -308,3 +308,148 @@ def test_gutters_and_inner_crop_edges_are_not_balloons():
     cv2.rectangle(gutter, (0, 0), (499, 120), (60, 60, 60), cv2.FILLED)
     cv2.rectangle(gutter, (0, 280), (499, 399), (60, 60, 60), cv2.FILLED)
     assert detect_full_balloon(gutter, (150, 170, 200, 60), 8, (True, True, True, True)) is None
+
+
+def _read_page(tmp_path, replies, boxes=6, **options):
+    from unittest.mock import Mock, patch
+    path = tmp_path / "page.png"
+    page = Image.new("RGB", (120, 40 * boxes), "white")
+    for index in range(boxes):
+        # Distinct pixels per box, so no reading is shared through the cache.
+        page.paste((index * 30, 0, 0), (10 + index, 10 + index * 40, 30 + index, 30 + index * 40))
+    page.save(path)
+    manager = OCRManager()
+    manager._session = Mock()
+    manager._session.post.side_effect = replies
+    manager._parallelism = 1
+    regions = [dict(id=str(i), x=0, y=i * 40, width=120, height=40) for i in range(boxes)]
+    with patch.object(OCRManager, "REJECTED_RETRY_DELAYS", ()):
+        result = manager.run_regions(path, regions, "Alibaba Cloud", "model", "key",
+                                     lambda _: None, lambda: False, **options)
+    return manager, result
+
+
+def test_a_network_failure_no_longer_discards_the_rest_of_the_batch(tmp_path):
+    replies = [_Reply(200, "uno"), ConnectionResetError(10054, "reset"), _Reply(200, "tres"),
+               _Reply(200, "cuatro"), _Reply(504), _Reply(200, "seis")]
+    manager, result = _read_page(tmp_path, replies, keep_going=True)
+    assert [item["id"] for item in result] == [str(i) for i in range(6)]
+    failed = [item["id"] for item in result if item.get(OCRManager.FAILED_KEY)]
+    assert failed == ["1", "4"]
+    assert [item["text"] for item in result if not item.get(OCRManager.FAILED_KEY)] == ["uno", "tres", "cuatro", "seis"]
+    assert not any(item.get(OCRManager.ABORTED_KEY) for item in result)
+    # Each box was sent exactly once: nothing that may have been billed is repeated.
+    assert manager._session.post.call_count == 6
+
+
+def test_a_dead_connection_stops_sending_after_a_few_failures(tmp_path):
+    replies = [ConnectionResetError(10054, "reset")] * 10
+    manager, result = _read_page(tmp_path, replies, boxes=8, keep_going=True)
+    assert manager._session.post.call_count == OCRManager.NETWORK_ABORT_AFTER
+    assert len(result) == 8
+    assert all(item.get(OCRManager.FAILED_KEY) and item.get(OCRManager.ABORTED_KEY) for item in result)
+
+
+def test_configuration_errors_still_stop_the_batch(tmp_path):
+    import pytest
+    from core.ocr_manager import OCRConfigurationError
+    with pytest.raises(OCRConfigurationError):
+        _read_page(tmp_path, [_Reply(200, "uno"), _Reply(401)], boxes=2, keep_going=True)
+
+
+def test_without_keep_going_the_first_failure_still_raises(tmp_path):
+    import pytest
+    from core.ocr_manager import OCRNetworkError
+    with pytest.raises(OCRNetworkError):
+        _read_page(tmp_path, [_Reply(200, "uno"), _Reply(504), _Reply(200, "tres")], boxes=3)
+
+
+def dense_bold_balloon():
+    """Three lines of heavy lettering with tight leading, close to the balloon outline."""
+    rgb = np.full((330, 640, 3), 255, np.uint8)
+    cv2.ellipse(rgb, (325, 160), (260, 115), 0, 0, 360, (0, 0, 0), 4)
+    for row in range(3):
+        for column in range(9 - (row == 0) * 4):
+            x, y = 120 + column * 42 + (row == 0) * 84, 80 + row * 48
+            cv2.rectangle(rgb, (x, y), (x + 38, y + 44), (0, 0, 0), cv2.FILLED)
+            cv2.rectangle(rgb, (x + 9, y + 9), (x + 15, y + 35), (255, 255, 255), cv2.FILLED)
+            cv2.rectangle(rgb, (x + 23, y + 9), (x + 29, y + 35), (255, 255, 255), cv2.FILLED)
+    selection = np.zeros(rgb.shape[:2], np.uint8)
+    selection[76:228, 116:498] = 255
+    ink = np.all(rgb < 40, axis=2) & (selection > 0)
+    return rgb, selection, ink
+
+
+def test_heavy_lettering_with_tight_leading_is_masked_on_every_line():
+    from core.cleaning_manager import CleaningManager
+    rgb, selection, ink = dense_bold_balloon()
+    mask, fill = CleaningManager._solid_balloon_text_mask(rgb, selection)
+    assert fill == (255, 255, 255)
+    assert np.count_nonzero((mask > 0) & ink) >= np.count_nonzero(ink) * .97
+
+
+def test_contour_mask_finishes_lines_the_locator_confirmed():
+    from core.cleaning_manager import CleaningManager
+    solid = np.zeros((200, 400), np.uint8)
+    cv2.rectangle(solid, (20, 20), (380, 60), 255, cv2.FILLED)
+    cv2.rectangle(solid, (20, 90), (380, 130), 255, cv2.FILLED)
+    wedge = solid.copy()
+    cv2.rectangle(wedge, (0, 140), (399, 199), 255, cv2.FILLED)
+    guided = np.zeros_like(solid)
+    cv2.rectangle(guided, (120, 25), (380, 55), 255, cv2.FILLED)
+    cv2.rectangle(guided, (150, 95), (380, 125), 255, cv2.FILLED)
+    extended = CleaningManager._extend_guided_lines(guided, solid)
+    assert np.all(extended[solid > 0])
+    # A tall piece the locator never confirmed, such as a page wedge, stays out.
+    assert not np.any(CleaningManager._extend_guided_lines(guided, wedge)[150:])
+
+
+def test_white_border_on_pale_skin_is_covered_by_the_mask():
+    from core.glyph_completion import cover_lettering_halo
+    rng = np.random.default_rng(4)
+    rgb = np.clip(rng.normal((250, 232, 226), 2, (200, 320, 3)), 0, 255).astype(np.uint8)
+    strokes = [np.array([(60, 120), (110, 70), (160, 120), (210, 70), (260, 120)], np.int32)]
+    cv2.polylines(rgb, strokes, False, (254, 254, 253), 34, cv2.LINE_AA)
+    cv2.polylines(rgb, strokes, False, (150, 20, 70), 14, cv2.LINE_AA)
+    halo = np.zeros(rgb.shape[:2], np.uint8)
+    cv2.polylines(halo, strokes, False, 255, 34)
+    # The locator mask reaches into the border but stops short of its edge.
+    mask = np.zeros_like(halo)
+    cv2.polylines(mask, strokes, False, 255, 24)
+    selection = np.zeros_like(halo)
+    selection[45:150, 40:285] = 255
+    grown = cover_lettering_halo(rgb, mask, selection)
+    assert np.count_nonzero((halo > 0) & (grown == 0)) < np.count_nonzero(halo) * .03
+    assert np.count_nonzero(grown) < np.count_nonzero(halo) * 1.4
+
+
+def test_failures_are_described_as_cause_and_action():
+    from core.failure_messages import describe_failure
+    cases = {
+        "Alibaba Cloud: Saldo insuficiente. Recarga saldo en tu cuenta.": "billing",
+        "Alibaba Cloud (HTTP 401): clave no válida o sin permisos para esta región/modelo.": "credentials",
+        "Alibaba Cloud (HTTP 404): modelo o ruta no disponible.": "model",
+        "Alibaba Cloud: Límite de solicitudes alcanzado (Rate Limit).": "rate_limit",
+        "Alibaba Cloud interrumpió la 10054. Intentos: 1.": "network",
+        "HTTPSConnectionPool: Read timed out.": "network",
+        "No se encontró el modelo requerido: lama.onnx": "model_files",
+        "La imagen activa ya no existe.": "missing_file",
+        "El modo GPU está activo, pero CUDA no está disponible para YOLO.": "gpu",
+        "Operación cancelada": "cancelled",
+    }
+    for message, kind in cases.items():
+        failure = describe_failure("OCR", message)
+        assert failure.kind == kind, message
+        assert failure.detail == message and failure.title and failure.action
+    unknown = describe_failure("Limpieza", "Alibaba Cloud: algo raro pasó.\nTraceback ...")
+    assert unknown.kind == "unknown" and unknown.title == "algo raro pasó"
+    assert describe_failure("Limpieza", "").title == "Limpieza no se completó"
+
+
+def test_remaining_time_is_shown_only_once_it_is_meaningful():
+    from core.failure_messages import format_remaining
+    assert format_remaining(1, 50) == ""
+    assert format_remaining(30, 2) == ""
+    assert format_remaining(20, 50) == "quedan ~20 s"
+    assert format_remaining(120, 25) == "quedan ~6 min"
+    assert format_remaining(40, 99) == "casi listo"

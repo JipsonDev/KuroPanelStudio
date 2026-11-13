@@ -90,6 +90,9 @@ class OCRManager:
     """Recognizes the contents of existing regions; it never creates boxes."""
 
     MIN_CROP_PIXELS = 20_000
+    NETWORK_ABORT_AFTER = 4
+    FAILED_KEY = "_ocr_failed"
+    ABORTED_KEY = "_ocr_aborted"
 
     def __init__(self, cache_path: Path | None = None) -> None:
         self._cache: OrderedDict[tuple, str] = OrderedDict()
@@ -485,8 +488,18 @@ class OCRManager:
         cancelled: Callable[[], bool],
         source_states: dict[str, dict] | None = None,
         force_refresh: bool = False,
+        keep_going: bool = False,
+        max_workers: int | None = None,
     ) -> list[dict]:
-        """OCR each YOLO region separately and preserve its canvas geometry."""
+        """OCR each YOLO region separately and preserve its canvas geometry.
+
+        With ``keep_going`` a network failure no longer discards the rest of
+        the batch: the other boxes are still read, and each failed box is
+        returned unchanged with ``FAILED_KEY`` holding the reason. After
+        ``NETWORK_ABORT_AFTER`` consecutive failures the connection is taken
+        as down and the boxes not yet sent are returned failed as well, with
+        ``ABORTED_KEY`` set. Configuration and billing errors still raise.
+        """
         api_key = self.validate(provider, configured_key)
         if not regions:
             raise ValueError("Primero ejecuta Autodetectar texto (YOLO).")
@@ -660,7 +673,7 @@ class OCRManager:
 
         # Keep only a bounded window of JPEGs/futures alive. Preparing the next
         # crop overlaps HTTP work; results always belong to their source index.
-        workers = min(self.parallelism, len(pending))
+        workers = min(self.parallelism, len(pending), max(1, int(max_workers or len(pending))))
         with ExitStack() as stack:
             source_page = load_source_image(image_path, source_states) if is_psd(image_path) else Image.open(image_path)
             page = stack.enter_context(source_page)
@@ -668,12 +681,15 @@ class OCRManager:
             executor = stack.enter_context(ThreadPoolExecutor(max_workers=workers))
             futures = {}
             next_index = 0
+            failed: dict[int, str] = {}
+            consecutive_failures = 0
+            aborted = False
             try:
-                while next_index < len(pending) or futures:
+                while (next_index < len(pending) and not aborted) or futures:
                     if cancelled():
                         return []
-                    limit = min(workers, self.parallelism)
-                    while next_index < len(pending) and len(futures) < limit:
+                    limit = max(1, min(workers, self.parallelism))
+                    while next_index < len(pending) and len(futures) < limit and not aborted:
                         if cancelled():
                             return []
                         index, region, cache_key = pending[next_index]
@@ -690,10 +706,20 @@ class OCRManager:
                         try:
                             text = future.result()
                         except Exception as error:
+                            if keep_going and self._is_transient_error(error):
+                                reason = str(error).splitlines()[0] or "Fallo de conexión"
+                                for index in duplicates[item[2]]:
+                                    failed[index] = reason
+                                completed += len(duplicates[item[2]])
+                                progress(int(completed * 100 / len(regions)))
+                                consecutive_failures += 1
+                                aborted = consecutive_failures >= self.NETWORK_ABORT_AFTER
+                                continue
                             failure = error
                             continue
                         if cancelled():
                             return []
+                        consecutive_failures = 0
                         cache_key = item[2]
                         for index in duplicates[cache_key]:
                             results[index] = {**regions[index], "text": text}
@@ -704,7 +730,21 @@ class OCRManager:
             finally:
                 for future in futures:
                     future.cancel()
-        return [result for result in results if result is not None]
+        if not keep_going:
+            return [result for result in results if result is not None]
+        for _index, _region, cache_key in pending[next_index:]:
+            for index in duplicates[cache_key]:
+                failed[index] = "No se envió: la conexión falló varias veces seguidas."
+        output = []
+        for index, region in enumerate(regions):
+            if results[index] is not None:
+                output.append(results[index])
+            elif index in failed:
+                entry = {**region, self.FAILED_KEY: failed[index]}
+                if aborted:
+                    entry[self.ABORTED_KEY] = True
+                output.append(entry)
+        return output
 
     def _request_unless_rejected(self, request, cancelled):
         """Send once; wait and resend only when the provider refused to read it."""

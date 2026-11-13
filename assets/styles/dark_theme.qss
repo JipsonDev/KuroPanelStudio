@@ -9,6 +9,11 @@ QDialog { background: #191A1C; }
 QFrame#TaskProgress { background: #222326; border-bottom: 1px solid #3B3D42; }
 QFrame#TaskProgress QProgressBar { background: #3B3D42; border: 0; border-radius: 4px; }
 QFrame#TaskProgress QProgressBar::chunk { background: #E7BC64; border-radius: 4px; }
+QFrame#TaskProgress[state="error"] { border-bottom: 2px solid #FF856E; }
+QFrame#TaskProgress[state="warning"] { border-bottom: 2px solid #F2A04B; }
+QFrame#TaskProgress[state="warning"] QProgressBar::chunk { background: #F2A04B; }
+QFrame#TaskProgress QLabel#ProgressAlertIcon { border-radius: 10px; font-weight: 700; color: #191A1C; background: #F2A04B; }
+QFrame#TaskProgress[state="error"] QLabel#ProgressAlertIcon { background: #FF856E; }
 QWidget#TopBar { background: #1C1D20; border-bottom: 1px solid #3B3D42; }
 QLabel#BrandLogo { background: transparent; border: 0; border-radius: 0; }
 QLabel#BrandTitle { font-size: 14px; font-weight: 600; color: #EEEFF1; }

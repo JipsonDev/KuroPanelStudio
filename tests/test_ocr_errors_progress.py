@@ -265,3 +265,22 @@ def test_real_worker_progress_visible_with_inspector_hidden(tmp_path, monkeypatc
             window.thread_pool.waitForDone(5000)
             window.close()
             app.processEvents()
+
+
+def test_progress_bar_explains_failures_and_partial_results():
+    app = QApplication.instance() or QApplication([])
+    banner = TaskProgress()
+    banner.start("OCR")
+    banner.finish(error="Alibaba Cloud interrumpió la 10054. Intentos: 1.")
+    assert "Se cortó la conexión" in banner.label.toolTip()
+    assert "10054" not in banner.label.toolTip()
+    assert banner.details.isVisible() and banner.alert_icon.isVisible()
+    assert banner.property("state") == "error"
+    assert "10054" in banner._explanation and "Revisa tu conexión" in banner._explanation
+    banner.start("OCR del capítulo")
+    assert banner.property("state") == "running" and not banner.alert_icon.isVisible()
+    banner.finish(warning="3 caja(s) sin leer", warning_detail="Vuelve a ejecutar OCR.")
+    assert "3 caja(s) sin leer" in banner.label.toolTip()
+    assert banner.property("state") == "warning"
+    assert banner.details.isVisible() and not banner.complete_icon.isVisible()
+    banner.close()
