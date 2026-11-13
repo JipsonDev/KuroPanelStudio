@@ -35,6 +35,8 @@ requests = _LazyRequests()
 ALIBABA_COMPATIBLE_URL = "https://dashscope-intl.aliyuncs.com/compatible-mode/v1/chat/completions"
 OCR_PROMPT = (
     "Transcribe all visible text, including vertical/color text and punctuation. "
+    "Read vertical columns top to bottom, starting with the rightmost column. "
+    "Omit furigana: the small reading glyphs beside kanji. "
     "Text only; no commentary or markdown. Join wrapped lines, keep real paragraphs "
     "and Korean word spaces; add no Chinese/Japanese spaces. Return empty if unreadable."
 )
@@ -69,6 +71,13 @@ class OCRNetworkError(RuntimeError):
     """A temporary provider/network failure that can safely be retried."""
 
 
+class OCRRejectedError(OCRNetworkError):
+    """The provider refused the request before reading it (HTTP 429 or 503).
+
+    Nothing was recognized or billed, so waiting and sending it again is safe.
+    """
+
+
 class OCRBatchParseError(ValueError):
     pass
 
@@ -80,6 +89,8 @@ class OCRIncompleteError(RuntimeError):
 class OCRManager:
     """Recognizes the contents of existing regions; it never creates boxes."""
 
+    MIN_CROP_PIXELS = 20_000
+
     def __init__(self, cache_path: Path | None = None) -> None:
         self._cache: OrderedDict[tuple, str] = OrderedDict()
         self._cache_lock = threading.Lock()
@@ -87,6 +98,8 @@ class OCRManager:
         self._cache_hits = 0
         self._retry_lock = threading.Lock()
         self._session = None
+        self._owned_session = None
+        self._session_used = 0.0
         self._session_lock = threading.Lock()
         self._parallelism = 3
         self._latencies: deque[float] = deque(maxlen=8)
@@ -164,20 +177,49 @@ class OCRManager:
     def set_endpoint(self, value: str = "") -> None:
         self.endpoint = self.normalize_endpoint(value)
 
+    # Servers and routers drop idle keep-alive connections without notice;
+    # the next POST on one fails with "connection reset" (WinError 10054).
+    SESSION_IDLE_SECONDS = 20.0
+    REJECTED_RETRY_DELAYS = (1.5, 4.0)
+
     def _get_session(self):
-        if self._session is None:
-            with self._session_lock:
-                if self._session is None:
-                    s = requests.Session()
-                    try:
-                        from requests.adapters import HTTPAdapter
-                        adapter = HTTPAdapter(pool_connections=16, pool_maxsize=32, max_retries=0)
-                        s.mount("https://", adapter)
-                        s.mount("http://", adapter)
-                    except Exception:
-                        pass
-                    self._session = s
-        return self._session
+        with self._session_lock:
+            now = time.monotonic()
+            owned = self._session is not None and self._session is self._owned_session
+            if owned and now - self._session_used > self.SESSION_IDLE_SECONDS:
+                self._discard_session_locked()
+            if self._session is None:
+                s = requests.Session()
+                try:
+                    from requests.adapters import HTTPAdapter
+                    from urllib3.util.retry import Retry
+                    # Only failures to *open* a connection are retried here:
+                    # the request has not left, so it cannot be billed twice.
+                    retries = Retry(
+                        total=2, connect=2, read=0, status=0, other=0,
+                        backoff_factor=0.4, allowed_methods=None,
+                    )
+                    adapter = HTTPAdapter(pool_connections=4, pool_maxsize=8, max_retries=retries)
+                    s.mount("https://", adapter)
+                    s.mount("http://", adapter)
+                except Exception:
+                    pass
+                self._session = self._owned_session = s
+            self._session_used = now
+            return self._session
+
+    def _discard_session_locked(self) -> None:
+        session, self._session, self._owned_session = self._session, None, None
+        try:
+            session.close()
+        except Exception:
+            pass
+
+    def _discard_session(self, failed) -> None:
+        """Drop pooled connections after a network failure, keeping injected sessions."""
+        with self._session_lock:
+            if self._session is failed and failed is self._owned_session:
+                self._discard_session_locked()
 
     def set_resource_policy(self, policy) -> None:
         self._resource_profile = str(getattr(policy, "name", "balanced"))
@@ -506,8 +548,10 @@ class OCRManager:
             for attempt in range(self._max_attempts):
                 if cancelled():
                     return None
+                session = None
                 try:
                     def request():
+                        nonlocal session
                         session = self._get_session()
                         with self._usage_lock:
                             self._usage["requests"] += 1
@@ -548,10 +592,12 @@ class OCRManager:
                         with self._retry_lock:
                             text = request()
                     else:
-                        text = request()
+                        text = self._request_unless_rejected(request, cancelled)
                     self._observe_latency(time.perf_counter() - started)
                     return text
                 except Exception as error:
+                    if self._is_transient_error(error):
+                        self._discard_session(session)
                     if not self._is_transient_error(error):
                         self._observe_latency(time.perf_counter() - started, failed=True)
                         raise
@@ -660,6 +706,22 @@ class OCRManager:
                     future.cancel()
         return [result for result in results if result is not None]
 
+    def _request_unless_rejected(self, request, cancelled):
+        """Send once; wait and resend only when the provider refused to read it."""
+        for delay in (*self.REJECTED_RETRY_DELAYS, None):
+            try:
+                return request()
+            except OCRRejectedError:
+                if delay is None or cancelled():
+                    raise
+                with self._latency_lock:
+                    self._parallelism = min(self._parallelism, 2)
+                deadline = time.monotonic() + delay
+                while time.monotonic() < deadline:
+                    if cancelled():
+                        raise
+                    time.sleep(0.1)
+
     def _prepare_crop(self, page: Image.Image, region: dict) -> tuple[bytes, tuple[int, int]]:
         """Encode one crop only when a request slot is available."""
         x, y, width, height = (int(region[k]) for k in ("x", "y", "width", "height"))
@@ -676,8 +738,15 @@ class OCRManager:
         # Preserve native glyph detail without quadrupling ordinary dialogue
         # images. Only genuinely tiny crops need interpolation before JPEG.
         shortest = min(crop.width, crop.height)
-        if shortest < 48:
-            scale = min(2.0, 48.0 / max(1, shortest))
+        scale = min(2.0, 48.0 / max(1, shortest)) if shortest < 48 else 1.0
+        # A two-column manga balloon can be 50 x 100 px: wide enough to skip
+        # the rule above, yet only a handful of 28 px vision patches for
+        # 18 px kanji. Give such crops a minimum area; ordinary dialogue
+        # lines already exceed it and are sent at native size.
+        area = crop.width * crop.height
+        if area < self.MIN_CROP_PIXELS:
+            scale = max(scale, min(2.0, (self.MIN_CROP_PIXELS / max(1, area)) ** 0.5))
+        if scale > 1.0:
             crop = crop.resize(
                 (max(1, int(round(crop.width * scale))), max(1, int(round(crop.height * scale)))),
                 Image.Resampling.LANCZOS,
@@ -771,7 +840,9 @@ class OCRManager:
                 message = f"Alibaba Cloud respondió HTTP {status}"
                 if detail:
                     message += f": {detail}"
-            if int(status) == 429 or int(status) >= 500:
+            if int(status) in (429, 503):
+                raise OCRRejectedError(message)
+            if int(status) >= 500:
                 raise OCRNetworkError(message)
             raise OCRConfigurationError(message)
         try:

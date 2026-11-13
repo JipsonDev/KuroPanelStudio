@@ -23,7 +23,7 @@ from core.stroke_engine import StrokeEngine
 from core.retouch_layers import normalized_layer_states, patch_layer
 from core.balloon_typesetter import (
     balloon_search_rect, effective_balloon_padding, fit_balanced_text,
-    text_layout_geometry, usable_mask_bounds,
+    page_edge_sides, text_layout_geometry, usable_mask_bounds,
 )
 from core.typography_manager import TypographyManager
 from core.sfx_layout import automatic_sfx_lines
@@ -2966,6 +2966,8 @@ class CanvasView(QGraphicsView):
             local_rect, mask = text_layout_geometry(
                 search, (x - search_x, y - search_y, width, height),
                 padding, manual_box,
+                page_edge_sides(base.width(), base.height(),
+                                (search_x, search_y, search_width, search_height)),
             )
             layout_rect = (
                 search_x + local_rect[0], search_y + local_rect[1],

@@ -14,7 +14,7 @@ from core.project_manager import Page
 from core.psd_manager import load_source_image
 from core.balloon_typesetter import (
     balloon_search_rect, effective_balloon_padding, fit_balanced_text,
-    text_layout_geometry,
+    page_edge_sides, text_layout_geometry,
 )
 from core.sfx_layout import automatic_sfx_lines
 from core.sfx_transform import bezier_baseline, build_warp
@@ -367,6 +367,8 @@ def _draw_region_text(image: Image.Image, region: dict, default_style: dict, *, 
             local_rect, balloon_mask = text_layout_geometry(
                 search_rgb, (x - search_x, y - search_y, width, height),
                 padding, bool(region.get("typeset_box_manual", False)),
+                page_edge_sides(image.width, image.height,
+                                (search_x, search_y, search_width, search_height)),
             )
             layout_rect = (
                 search_x + local_rect[0], search_y + local_rect[1],

@@ -19,7 +19,7 @@ from PIL import Image
 from core.model_paths import ModelPaths
 from core.glyph_completion import (
     complete_anchored_glyph_fragments, complete_boundary_glyphs,
-    complete_soft_text_halos,
+    complete_outlined_lettering, complete_soft_text_halos, cover_lettering_halo,
 )
 from core.bubble_mask import colour_connected_balloon_mask, protect_flat_balloon_border
 from core.performance_manager import (
@@ -45,7 +45,7 @@ class CleaningManager:
     INPAINT_CONTEXT = 64
     LAMA_TILE_SIZE = 1024
     LAMA_TILE_CONTEXT = 64
-    MASK_PIPELINE_VERSION = 45
+    MASK_PIPELINE_VERSION = 46
 
     def __init__(self, models_root: Path) -> None:
         self.paths = ModelPaths(models_root)
@@ -1681,6 +1681,11 @@ class CleaningManager:
 
         if np.count_nonzero(interior) < selection_area * 0.08:
             return empty, None
+        # A white gutter or page margin crossing one edge of an effect drawn
+        # over artwork is not its balloon. Flat-filling that sliver erased a
+        # corner of the lettering and kept the rest away from reconstruction.
+        if np.count_nonzero((interior > 0) & selected) < selection_area * 0.20:
+            return empty, None
 
         difference = np.linalg.norm(
             rgb.astype(np.float32) - fill.reshape(1, 1, 3), axis=2
@@ -2133,6 +2138,9 @@ class CleaningManager:
             cv2.getStructuringElement(cv2.MORPH_RECT, (121, 17)),
             iterations=1,
         )
+        touching_line = cv2.dilate(
+            line_envelope, cv2.getStructuringElement(cv2.MORPH_RECT, (3, 9)), iterations=1,
+        )
         punctuation_count, punctuation_labels, punctuation_stats, _ = (
             cv2.connectedComponentsWithStats(punctuation_candidates, 8)
         )
@@ -2155,6 +2163,23 @@ class CleaningManager:
             )
             if round_fragment or adjacent_sign:
                 punctuation[component] = 255
+        # The detector band can end a few pixels above a glyph's lowest
+        # horizontal stroke, which then stayed behind as a dash. Judge solid
+        # ink on its own: faint fringes along the band join every remnant of
+        # a line into one long component that no size rule accepts.
+        strokes = np.where(
+            (punctuation_candidates > 0) & (difference > 60.0), 255, 0
+        ).astype(np.uint8)
+        stroke_count, stroke_labels, stroke_stats, _ = (
+            cv2.connectedComponentsWithStats(strokes, 8)
+        )
+        for label in range(1, stroke_count):
+            x, y, width, height, area = (int(value) for value in stroke_stats[label])
+            if (area >= 2
+                    and min(width, height) <= max(6, int(typical_line_height * 0.2))
+                    and max(width, height) <= max(24, int(typical_line_height * 4))
+                    and np.any(touching_line[y:y + height, x:x + width] > 0)):
+                punctuation[stroke_labels == label] = 255
         if np.any(punctuation):
             punctuation = cv2.dilate(
                 punctuation,
@@ -2164,6 +2189,33 @@ class CleaningManager:
             punctuation = cv2.bitwise_and(punctuation, punctuation_support)
             punctuation = cv2.bitwise_and(punctuation, cv2.bitwise_not(exterior))
             filtered = cv2.bitwise_or(filtered, punctuation)
+        # Heavy display lettering is much taller than the band the detector
+        # confirms, so only the middle of each glyph was filled and black
+        # blobs remained. Finish every solid glyph the band already covers
+        # by a quarter; ink joined to the outline or artwork is excluded.
+        bodies = np.where(
+            (difference > 60.0) & (exterior == 0) & (selection > 0), 255, 0
+        ).astype(np.uint8)
+        body_count, body_labels, body_stats, _ = cv2.connectedComponentsWithStats(bodies, 8)
+        completed_bodies = np.zeros_like(filtered)
+        selection_pixels = max(1, int(np.count_nonzero(selection)))
+        for label in range(1, body_count):
+            x, y, width, height, area = (int(value) for value in body_stats[label])
+            if area < 12 or area > selection_pixels * 0.2:
+                continue
+            body = body_labels[y:y + height, x:x + width] == label
+            covered = int(np.count_nonzero(body & (filtered[y:y + height, x:x + width] > 0)))
+            if area * 0.25 <= covered < area:
+                completed_bodies[y:y + height, x:x + width][body] = 255
+        if np.any(completed_bodies):
+            completed_bodies = cv2.dilate(
+                completed_bodies, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5)),
+                iterations=1,
+            )
+            completed_bodies = cv2.bitwise_and(completed_bodies, cv2.bitwise_not(exterior))
+            if np.any(safe_interior):
+                completed_bodies = cv2.bitwise_and(completed_bodies, safe_interior)
+            filtered = cv2.bitwise_or(filtered, completed_bodies)
         return cv2.bitwise_and(filtered, selection)
 
     @staticmethod
@@ -2973,6 +3025,17 @@ class CleaningManager:
                 detected_masks[item] = np.ascontiguousarray(
                     shared[cy1 - gy1:cy2 - gy1, cx1 - gx1:cx2 - gx1]
                 )
+                # The locator responds relative to its whole input: beside a
+                # high-contrast balloon, pale or coloured lettering can fall
+                # below the threshold and the box was silently left as it was.
+                # Ask again with that box alone before giving up on it.
+                tx1, ty1, tx2, ty2 = target_boxes[item]
+                if len(group) > 1 and not np.any(
+                    detected_masks[item][ty1 - cy1:ty2 - cy1, tx1 - cx1:tx2 - cx1]
+                ):
+                    detected_masks[item] = self._text_mask(
+                        np.ascontiguousarray(page[cy1:cy2, cx1:cx2])
+                    )
             progress(20 + int(group_number * 45 / max(1, len(detection_groups))))
 
         def build_fresh_entry(index: int) -> tuple[int, dict | None]:
@@ -3054,11 +3117,20 @@ class CleaningManager:
                     context_rgb, final_mask, selection
                 )
             final_mask = complete_soft_text_halos(context_rgb, final_mask, selection)
+            if method == "lama":
+                final_mask = complete_outlined_lettering(context_rgb, final_mask, selection)
+                final_mask = cover_lettering_halo(context_rgb, final_mask, selection)
             # Recovery may add a disconnected impact stroke after an earlier
             # contour check. Enforce the source silhouette after every growth
             # step, so flat filling cannot erase the crown of a thought balloon.
             if method == "solid_fill":
-                final_mask = protect_flat_balloon_border(context_rgb, final_mask, selection, fill_color)
+                protected = protect_flat_balloon_border(context_rgb, final_mask, selection, fill_color)
+                if connected_masks[index]:
+                    # The connected mask was validated against its own contour,
+                    # including glyphs that touch the outline. Re-deriving the
+                    # contour here would cut those glyphs out again.
+                    protected = cv2.bitwise_or(protected, cv2.bitwise_and(final_mask, fallback_mask))
+                final_mask = protected
             if not np.any(final_mask):
                 return index, None
             mx, my, width, height = cv2.boundingRect(final_mask)

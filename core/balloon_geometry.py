@@ -59,8 +59,16 @@ def closed_balloon_text_candidates(rgb: np.ndarray) -> list[tuple[int, ...]]:
     return candidates
 
 
-def enclosed_balloon_mask(rgb: np.ndarray, selection: np.ndarray | None = None) -> np.ndarray | None:
+def enclosed_balloon_mask(
+    rgb: np.ndarray, selection: np.ndarray | None = None,
+    page_sides: tuple[bool, bool, bool, bool] | None = None,
+) -> np.ndarray | None:
     """Find an enclosed background, filling glyph holes but never a crop frame.
+
+    ``page_sides`` marks the (left, top, right, bottom) crop edges that are
+    the real edge of the page. A balloon drawn off the page is closed by that
+    edge; a compact blob touching exactly one such side is accepted. Gutters
+    and page backgrounds touch several sides or are far from convex.
 
     A selection asks for a contour containing at least 90% of that text box.
     Without one, prefer the largest enclosed central region for typesetting.
@@ -86,8 +94,13 @@ def enclosed_balloon_mask(rgb: np.ndarray, selection: np.ndarray | None = None) 
     best, best_score = None, 0
     for label in range(1, count):
         x, y, w, h, area = (int(v) for v in stats[label])
-        if x == 0 or y == 0 or x + w == width or y + h == height:
-            continue
+        touching = (x == 0, y == 0, x + w == width, y + h == height)
+        cut_by_page = False
+        if any(touching):
+            if (page_sides is None or sum(touching) != 1
+                    or not page_sides[touching.index(True)] or area > height * width * .6):
+                continue
+            cut_by_page = True
         if area < max(48, reference_area * .12):
             continue
         component = np.where(labels[y:y + h, x:x + w] == label, 255, 0).astype(np.uint8)
@@ -98,6 +111,10 @@ def enclosed_balloon_mask(rgb: np.ndarray, selection: np.ndarray | None = None) 
         # Thin rings between the two sides of an outline are not backgrounds.
         if filled_area < reference_area * .22 or area < filled_area * .35:
             continue
+        if cut_by_page:
+            hull = cv2.convexHull(np.concatenate(contours, axis=0))
+            if filled_area < cv2.contourArea(hull) * .85:
+                continue
         mask = np.zeros((height, width), np.uint8)
         mask[y:y + h, x:x + w] = filled
         if selected is not None:

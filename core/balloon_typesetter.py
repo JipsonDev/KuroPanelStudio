@@ -43,8 +43,17 @@ def balloon_search_rect(
     return left, top, max(1, right - left), max(1, bottom - top)
 
 
+def page_edge_sides(
+    page_width: int, page_height: int, search_rect: tuple[int, int, int, int],
+) -> tuple[bool, bool, bool, bool]:
+    """Report which (left, top, right, bottom) edges of a search crop are page edges."""
+    x, y, width, height = (int(value) for value in search_rect)
+    return x <= 0, y <= 0, x + width >= int(page_width), y + height >= int(page_height)
+
+
 def detect_full_balloon(
     search_rgb: np.ndarray, text_box: tuple[int, int, int, int], padding: int,
+    page_sides: tuple[bool, bool, bool, bool] | None = None,
 ) -> tuple[tuple[int, int, int, int], np.ndarray] | None:
     """Find a closed balloon containing the box centre in a larger page crop.
 
@@ -65,7 +74,7 @@ def detect_full_balloon(
     if x2 <= x1 or y2 <= y1:
         return None
     seed[y1:y2, x1:x2] = 255
-    enclosed = enclosed_balloon_mask(search_rgb, seed)
+    enclosed = enclosed_balloon_mask(search_rgb, seed, page_sides)
     if enclosed is None:
         return None
     left, top, right, bottom = usable_mask_bounds(enclosed)
@@ -87,6 +96,7 @@ def text_layout_geometry(
     text_box: tuple[int, int, int, int],
     padding: int,
     manual_box: bool = False,
+    page_sides: tuple[bool, bool, bool, bool] | None = None,
 ) -> tuple[tuple[int, int, int, int], np.ndarray]:
     """Resolve the layout area relative to a page crop.
 
@@ -95,7 +105,7 @@ def text_layout_geometry(
     handles actually control where the text can be drawn.
     """
     x, y, width, height = (int(value) for value in text_box)
-    full = detect_full_balloon(search_rgb, text_box, padding)
+    full = detect_full_balloon(search_rgb, text_box, padding, page_sides)
     if full is not None and not manual_box:
         return full
     if full is not None:

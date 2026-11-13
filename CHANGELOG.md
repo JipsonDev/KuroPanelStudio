@@ -1,5 +1,22 @@
 # Historial de cambios
 
+## 0.2.23 — limpieza de rótulos, costuras de detección, reintentos de OCR y globos cortados
+
+Comprobado con las tres tiras del capítulo 185 (900 × 60.000 px) y una página sintética de manga.
+
+- Detección: cuando una franja corta un bloque y la franja vecina lo ve entero, se conserva la caja completa. Un párrafo perdía sus primeras líneas.
+- Detección: un bloque que ocupa más del 15 % de la imagen se conserva si sus píxeles son rotulación sobre fondo uniforme.
+- Limpieza: una letra gruesa ya no se toma por un globo; antes solo se rellenaba su hueco interior y el texto quedaba intacto.
+- Limpieza: las letras gruesas se completan fuera de la banda del detector y el trazo inferior de un glifo ya no queda como guion.
+- Limpieza: un glifo que toca o roza el contorno del globo ya no deja sin borrar su columna.
+- Limpieza: una franja blanca de calle que cruza un efecto dibujado sobre la ilustración ya no desvía la caja al relleno plano.
+- Limpieza: si el localizador no responde a un rótulo pálido procesado junto a un globo vecino, se repite con esa caja sola. La caja quedaba sin limpiar.
+- Limpieza: la máscara cubre el borde blanco o de color de un rótulo sobre ilustración y sigue un borde negro cortado por la caja; la reconstrucción dejaba una mancha clara con la forma del texto. La versión de caché de máscaras pasa a 46.
+- OCR: las conexiones inactivas más de 20 s se renuevan antes de enviar y se reintentan los fallos al abrir la conexión. Una respuesta 429 o 503 se reenvía hasta dos veces. Un envío que pudo haberse leído (corte a mitad, 500, 504) sigue sin repetirse.
+- OCR: los recortes muy pequeños se amplían hacia un área de 20.000 px, con un límite de 2× por lado. La instrucción pide leer las columnas de derecha a izquierda y omitir el furigana. Las lecturas en caché siguen siendo válidas. Sin comprobar contra la API.
+- Typpeo: un globo cortado por el borde de la página usa todo su interior en vez de la caja del texto original.
+- Pruebas: `tests/test_edge_glyphs_and_large_blocks.py`.
+
 ## 0.2.22 — bloques de lectura manga
 
 - Si las cajas forman bloques claramente separados a la derecha e izquierda, el orden manga completa primero el bloque derecho. Las filas alineadas mantienen la lectura de arriba abajo y de derecha a izquierda.
