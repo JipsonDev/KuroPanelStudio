@@ -1,5 +1,9 @@
 # Historial de cambios
 
+## 0.2.25 — páginas que ya no se congelan al mostrar el texto
+
+- Al abrir una página después del OCR, el panel podía quedarse congelado mientras colocaba el texto. En los globos altos o cortados por el borde de la página se probaban hasta 24 números de líneas imposibles, y cada globo podía tardar más de un segundo. Ahora se descartan antes de buscar los saltos de línea: en las tiras del capítulo 185 el texto se coloca de 3 a 5 veces más rápido y el resultado es idéntico en los 544 casos comparados.
+
 ## 0.2.24 — OCR que continúa tras un fallo, errores claros y limpieza de rótulos densos
 
 Comprobado con las tiras del capítulo 185.

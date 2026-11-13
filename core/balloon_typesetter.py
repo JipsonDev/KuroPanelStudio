@@ -408,6 +408,10 @@ def fit_balanced_text(
             measurement_cache[key] = result
         return result
 
+    tokens, separator = _tokens(text)
+    flattened = separator.join(tokens)
+    token_count = max(1, len(tokens), len(str(text).replace("\r\n", "\n").split("\n")))
+
     def attempt_size(size: int) -> dict | None:
         compressions = [1.0]
         if auto_scale:
@@ -448,10 +452,23 @@ def fit_balanced_text(
                     interval_candidates.append((intervals, [right - left for left, right in intervals]))
                 geometry_cache[scale_y] = interval_candidates
             best_transform = None
+            measure = lambda value, s=size, sx=scale_x: measured(s, value) * sx
+            # A tall balloon offers up to 24 line counts. Counts that cannot
+            # hold the text, or that would leave most of every line empty,
+            # only made the line breaker search hopeless hyphenations: several
+            # seconds per balloon, spent while the page was being shown.
+            natural = measure(flattened) if flattened else 0.0
+            space = measure(" ") if separator else 0.0
             for intervals, widths in interval_candidates:
                 if not intervals:
                     continue
-                measure = lambda value, s=size, sx=scale_x: measured(s, value) * sx
+                if len(widths) > token_count + (2 if hyphenate else 0):
+                    break
+                capacity = float(sum(widths))
+                if capacity + space * len(widths) < natural:
+                    continue
+                if best_transform is not None and capacity > natural * 2.2 + max(widths):
+                    break
                 lines = linguistic_wrap(
                     text, widths, measure, language, hyphenate,
                     orphan_control, hanging_punctuation,
