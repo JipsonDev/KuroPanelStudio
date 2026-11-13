@@ -133,13 +133,21 @@ def cover_lettering_halo(rgb, mask, selection):
     reach = max(8, min(22, int(round(min(sw, sh) * .18))))
     masked = mask > 0
     ring = (cv2.dilate(mask, disc(4)) > 0) & ~masked
+    inner = masked & (cv2.erode(mask, disc(3)) == 0)
     limit = cv2.dilate(mask, disc(reach))
     far = (cv2.dilate(mask, disc(reach + 10)) > 0) & (limit == 0)
     if np.count_nonzero(ring) < 32 or np.count_nonzero(far) < 32:
         return mask
-    halo = np.median(rgb[ring].astype(np.int16), axis=0)
-    alike = np.max(np.abs(rgb.astype(np.int16) - halo), axis=2) <= 26
-    if np.mean(alike[ring]) < .6 or np.mean(alike[far]) > .35:
+    # The halo is either just outside the mask or, when the mask already
+    # reaches into it, along its inner edge. A pale halo on pale skin needs
+    # the tighter tolerance.
+    pixels = rgb.astype(np.int16)
+    for band, tolerance in ((ring, 26), (inner, 12)):
+        halo = np.median(pixels[band], axis=0)
+        alike = np.max(np.abs(pixels - halo), axis=2) <= tolerance
+        if np.mean(alike[band]) >= .6 and np.mean(alike[far]) <= .3:
+            break
+    else:
         return mask
     candidate = alike & (limit > 0) & ~masked
     count, labels = cv2.connectedComponents((candidate | masked).astype(np.uint8), 8)
@@ -150,6 +158,51 @@ def cover_lettering_halo(rgb, mask, selection):
         return mask
     grown = cv2.dilate(grown.astype(np.uint8) * 255, disc(2))
     return cv2.bitwise_or(mask, cv2.bitwise_and(grown, limit))
+
+
+def spare_coloured_ornaments(rgb, mask, selection):
+    """Keep hearts, stars and other coloured marks beside black or grey lettering.
+
+    Such marks belong to the drawing of the balloon, not to the dialogue the
+    typesetter will replace. When the lettering itself is coloured, every
+    mark shares its hue and nothing is spared.
+    """
+    if rgb.shape[:2] != mask.shape or mask.shape != selection.shape:
+        return mask
+    masked = mask > 0
+    if not np.any(masked):
+        return mask
+    pixels = rgb.astype(np.int16)
+    ring = (cv2.dilate(mask, np.ones((9, 9), np.uint8)) > 0) & ~masked
+    if np.count_nonzero(ring) < 16:
+        return mask
+    background = np.median(pixels[ring], axis=0)
+    ink = masked & (np.max(np.abs(pixels - background), axis=2) > 60)
+    if np.count_nonzero(ink) < 40:
+        return mask
+    chroma = pixels.max(axis=2) - pixels.min(axis=2)
+    dominant = np.median(pixels[ink], axis=0)
+    if dominant.max() - dominant.min() >= 40:
+        return mask
+    count, labels, stats, _ = cv2.connectedComponentsWithStats(ink.astype(np.uint8), 8)
+    total = int(np.count_nonzero(ink))
+    ornaments = np.zeros_like(mask)
+    for label in range(1, count):
+        x, y, width, height, area = (int(value) for value in stats[label])
+        component = labels[y:y + height, x:x + width] == label
+        if area < 12 or area > total * .25:
+            continue
+        if np.median(chroma[y:y + height, x:x + width][component]) < 90:
+            continue
+        ornaments[y:y + height, x:x + width][component] = 255
+    if not np.any(ornaments):
+        return mask
+    # Leave the mark and its antialiased edge, but never uncover lettering.
+    lettering = cv2.dilate(np.where(ink & (ornaments == 0), 255, 0).astype(np.uint8),
+                           np.ones((5, 5), np.uint8))
+    spared = cv2.bitwise_and(cv2.dilate(ornaments, np.ones((7, 7), np.uint8)),
+                             cv2.bitwise_not(lettering))
+    return cv2.bitwise_and(mask, cv2.bitwise_not(spared))
 
 
 def complete_boundary_glyphs(rgb, mask, selection, locator=None):

@@ -20,6 +20,7 @@ from core.model_paths import ModelPaths
 from core.glyph_completion import (
     complete_anchored_glyph_fragments, complete_boundary_glyphs,
     complete_outlined_lettering, complete_soft_text_halos, cover_lettering_halo,
+    spare_coloured_ornaments,
 )
 from core.bubble_mask import colour_connected_balloon_mask, protect_flat_balloon_border
 from core.performance_manager import (
@@ -45,7 +46,7 @@ class CleaningManager:
     INPAINT_CONTEXT = 64
     LAMA_TILE_SIZE = 1024
     LAMA_TILE_CONTEXT = 64
-    MASK_PIPELINE_VERSION = 46
+    MASK_PIPELINE_VERSION = 48
 
     def __init__(self, models_root: Path) -> None:
         self.paths = ModelPaths(models_root)
@@ -1529,7 +1530,7 @@ class CleaningManager:
 
     @staticmethod
     def _solid_balloon_text_mask(
-        rgb: np.ndarray, selection: np.ndarray,
+        rgb: np.ndarray, selection: np.ndarray, contract: int | None = None,
     ) -> tuple[np.ndarray, tuple[int, int, int] | None]:
         """Detect text as holes inside a connected, nearly solid light balloon.
 
@@ -1567,7 +1568,9 @@ class CleaningManager:
             cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3)), iterations=1,
         )
         sx, sy, sw, sh = cv2.boundingRect(selection)
-        contract = max(5, min(20, int(round(min(sw, sh) * 0.08))))
+        retry_allowed = contract is None
+        if contract is None:
+            contract = max(5, min(20, int(round(min(sw, sh) * 0.08))))
         contract_kernel = cv2.getStructuringElement(
             cv2.MORPH_ELLIPSE, (contract * 2 + 1, contract * 2 + 1)
         )
@@ -1669,6 +1672,17 @@ class CleaningManager:
             silhouette = np.zeros_like(light)
             cv2.drawContours(silhouette, outline, -1, 255, cv2.FILLED)
             cv2.bitwise_or(interior, cv2.bitwise_and(grown, silhouette), dst=interior)
+        # Heavy lettering with tight leading leaves white gaps thinner than
+        # the contraction, so only a corner of the balloon survived and the
+        # rest of the text stayed. Retry once with a contraction that keeps
+        # those gaps when the reconstructed interior misses most of the light
+        # inside the box.
+        selected_light = int(np.count_nonzero((light > 0) & selected))
+        if (retry_allowed and contract > 6 and selected_light >= selection_area * 0.35
+                and np.count_nonzero((interior > 0) & (light > 0) & selected) < selected_light * 0.5):
+            retried = CleaningManager._solid_balloon_text_mask(rgb, selection, max(4, contract // 3))
+            if retried[1] is not None and np.count_nonzero(retried[0]):
+                return retried
         component = cv2.bitwise_and(light, interior)
         component_fraction = np.count_nonzero(component) / selection_area
         component_pixels = rgb[component > 0].astype(np.float32)
@@ -1895,6 +1909,36 @@ class CleaningManager:
         if masked < 8 or masked > interior_area * 0.60:
             return empty, None
         return filtered, tuple(int(round(value)) for value in fill)
+
+    @staticmethod
+    def _extend_guided_lines(guided: np.ndarray, solid: np.ndarray) -> np.ndarray:
+        """Finish the text lines the detector confirmed with the contour mask.
+
+        Dense heavy lettering makes the contour mask large enough to be
+        double-checked against the neural locator, which then dropped the
+        glyphs at the start of each line it did not activate on. Add every
+        line-sized piece of the contour mask that the locator confirms in
+        part; a page wedge is taller than any confirmed line and stays out.
+        """
+        if not np.any(guided) or not np.any(solid):
+            return guided
+        count, _, stats, _ = cv2.connectedComponentsWithStats(guided, 8)
+        heights = [int(stats[label, cv2.CC_STAT_HEIGHT]) for label in range(1, count)
+                   if stats[label, cv2.CC_STAT_AREA] >= 12]
+        if not heights:
+            return guided
+        tallest = max(heights)
+        pieces, labels, piece_stats, _ = cv2.connectedComponentsWithStats(solid, 8)
+        extended = guided.copy()
+        for label in range(1, pieces):
+            x, y, width, height, area = (int(value) for value in piece_stats[label])
+            if height > tallest * 1.6:
+                continue
+            piece = labels[y:y + height, x:x + width] == label
+            confirmed = int(np.count_nonzero(piece & (guided[y:y + height, x:x + width] > 0)))
+            if confirmed >= max(20, area * 0.25):
+                extended[y:y + height, x:x + width][piece] = 255
+        return extended
 
     @staticmethod
     def _protect_solid_balloon_silhouette(
@@ -3073,6 +3117,9 @@ class CleaningManager:
                         guided = self._build_text_mask(
                             context_rgb, detected, selection
                         )
+                    guided = self._extend_guided_lines(
+                        guided, cv2.bitwise_and(fallback_mask, selection)
+                    )
                     # For a suspicious geometric mask, doing nothing is safer
                     # than repainting an entire page/balloon wedge.
                     final_mask = guided
@@ -3123,6 +3170,7 @@ class CleaningManager:
             # Recovery may add a disconnected impact stroke after an earlier
             # contour check. Enforce the source silhouette after every growth
             # step, so flat filling cannot erase the crown of a thought balloon.
+            final_mask = spare_coloured_ornaments(context_rgb, final_mask, selection)
             if method == "solid_fill":
                 protected = protect_flat_balloon_border(context_rgb, final_mask, selection, fill_color)
                 if connected_masks[index]:

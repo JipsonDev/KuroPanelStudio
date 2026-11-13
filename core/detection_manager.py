@@ -325,7 +325,10 @@ class DetectionManager:
         regions: list[TextRegion] = []
         cut_by_seam: set[int] = set()
         recovery_windows: dict[tuple[int, ...], tuple[int, ...]] = {}
-        with load_source_image(image_path, source_states) as image:
+        from concurrent.futures import ThreadPoolExecutor
+        from core.balloon_geometry import closed_balloon_text_candidates
+        with load_source_image(image_path, source_states) as image, \
+                ThreadPoolExecutor(max_workers=1) as geometry_pool:
             width, height = image.size
             starts = self._tile_starts(height, self.tile_height, self.tile_overlap)
             memory = cuda_memory_mb() if self._device != "cpu" else None
@@ -346,6 +349,9 @@ class DetectionManager:
                     np.asarray(image.crop((0, top, width, min(height, top + self.tile_height))))
                     for top in batch_starts
                 ]
+                # Balloon geometry is pure OpenCV work that releases the GIL;
+                # compute it while the network runs instead of afterwards.
+                geometry = [geometry_pool.submit(closed_balloon_text_candidates, strip) for strip in strips]
                 if isinstance(model, _OnnxTextDetector):
                     # Ultralytics first performs per-tile NMS at its default
                     # IoU 0.70.  Cross-tile suppression is applied below.
@@ -372,9 +378,8 @@ class DetectionManager:
                             for box, score in zip(result.boxes.xyxy.cpu().numpy(), result.boxes.conf.cpu().numpy()):
                                 x1, y1, x2, y2 = (int(value) for value in box)
                                 regions.append(TextRegion(x1, y1 + top, x2 - x1, y2 - y1, float(score)))
-                from core.balloon_geometry import closed_balloon_text_candidates
-                for top, strip in zip(batch_starts, strips):
-                    for bx, by, bw, bh, tx, ty, tw, th in closed_balloon_text_candidates(strip):
+                for top, candidates in zip(batch_starts, geometry):
+                    for bx, by, bw, bh, tx, ty, tw, th in candidates.result():
                         ty += top
                         # A partially found line must not hide the rest of its
                         # balloon. Require coverage of the full ink rectangle.
