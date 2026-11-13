@@ -453,3 +453,18 @@ def test_remaining_time_is_shown_only_once_it_is_meaningful():
     assert format_remaining(20, 50) == "quedan ~20 s"
     assert format_remaining(120, 25) == "quedan ~6 min"
     assert format_remaining(40, 99) == "casi listo"
+
+
+def test_tall_balloons_lay_out_quickly_with_the_same_result():
+    """Hopeless line counts are skipped instead of searched (page loads froze)."""
+    import time
+    from core.balloon_typesetter import fit_balanced_text
+    mask = np.zeros((860, 870), np.uint8)
+    cv2.ellipse(mask, (435, 430), (420, 415), 0, 0, 360, 255, cv2.FILLED)
+    text = "Ya es tarde. Para salvarte a ti y a su hermana, él se ofreció voluntario para la cacería."
+    started = time.perf_counter()
+    layout = fit_balanced_text(text, mask, 36, 6, True, lambda size: size * 1.3,
+                               lambda size, value: len(value) * size * .55, language="es")
+    assert time.perf_counter() - started < 1.0
+    assert not layout["overflow"] and layout["font_size"] == 36
+    assert " ".join(layout["lines"]).replace("- ", "") .replace("-", "") .split() == text.split()
