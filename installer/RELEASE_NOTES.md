@@ -1,8 +1,8 @@
 # KuroPanel Studio @VERSION@
 
-- La detección conserva el bloque de texto completo cuando una de las franjas lo ve entero y recupera rótulos grandes sobre fondos uniformes.
-- La limpieza cubre mejor las letras gruesas y sus bordes, incluso cuando rozan el contorno del globo o aparecen sobre la ilustración.
-- El OCR amplía recortes pequeños, indica el orden de lectura de columnas manga y reintenta ciertos fallos temporales de conexión.
-- El ajuste de texto aprovecha el interior visible de los globos cortados por el borde de la página.
+- El OCR ya no se detiene por un fallo de conexión: lee las demás cajas y, al repetirlo, solo envía las pendientes. El OCR del capítulo trabaja con dos páginas a la vez.
+- Cada error se explica igual en la barra de progreso y en el aviso: qué pasó y qué hacer. Los resultados parciales se marcan en ámbar y la barra estima el tiempo restante.
+- La limpieza cubre letras gruesas con poco interlineado y rótulos con borde blanco sobre piel clara, y conserva corazones y adornos de color.
+- La detección es algo más rápida en tiras largas.
 
 Descarga `KuroPanelStudio-Setup-@VERSION@-Windows-x64.exe` y verifica `SHA256SUMS.txt`.

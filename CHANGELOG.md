@@ -1,6 +1,6 @@
 # Historial de cambios
 
-## Sin publicar — OCR que continúa tras un fallo, errores claros y limpieza de rótulos densos
+## 0.2.24 — OCR que continúa tras un fallo, errores claros y limpieza de rótulos densos
 
 Comprobado con las tiras del capítulo 185.
 
