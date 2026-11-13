@@ -1,10 +1,8 @@
 # KuroPanel Studio @VERSION@
 
-## Bloques de lectura manga
-
-- Al detectar dos bloques de cajas separados por un hueco amplio, el modo manga completa el bloque derecho antes de pasar al izquierdo.
-- Las filas alineadas siguen de derecha a izquierda. Los grupos separados en altura se leen de arriba abajo.
-- Se aplica al abrir páginas con cajas existentes y al detectar por página o capítulo.
-- Activa **Procesar → OCR → Lectura y portapapeles → Lectura manga · derecha → izquierda** para usar esta dirección en el capítulo.
+- La detección conserva el bloque de texto completo cuando una de las franjas lo ve entero y recupera rótulos grandes sobre fondos uniformes.
+- La limpieza cubre mejor las letras gruesas y sus bordes, incluso cuando rozan el contorno del globo o aparecen sobre la ilustración.
+- El OCR amplía recortes pequeños, indica el orden de lectura de columnas manga y reintenta ciertos fallos temporales de conexión.
+- El ajuste de texto aprovecha el interior visible de los globos cortados por el borde de la página.
 
 Descarga `KuroPanelStudio-Setup-@VERSION@-Windows-x64.exe` y verifica `SHA256SUMS.txt`.

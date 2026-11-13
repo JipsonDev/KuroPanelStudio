@@ -323,6 +323,7 @@ class DetectionManager:
             return [dict(region) for region in cached]
         model = self._load_model()
         regions: list[TextRegion] = []
+        cut_by_seam: set[int] = set()
         recovery_windows: dict[tuple[int, ...], tuple[int, ...]] = {}
         with load_source_image(image_path, source_states) as image:
             width, height = image.size
@@ -349,10 +350,13 @@ class DetectionManager:
                     # Ultralytics first performs per-tile NMS at its default
                     # IoU 0.70.  Cross-tile suppression is applied below.
                     predictions = model.predict_boxes(strips, self.confidence, 0.70)
-                    for top, boxes in zip(batch_starts, predictions):
+                    for top, strip, boxes in zip(batch_starts, strips, predictions):
                         for box, score in boxes:
                             x1, y1, x2, y2 = (int(value) for value in box)
                             regions.append(TextRegion(x1, y1 + top, x2 - x1, y2 - y1, float(score)))
+                            if ((top > 0 and y1 <= 2)
+                                    or (top + strip.shape[0] < height and y2 >= strip.shape[0] - 2)):
+                                cut_by_seam.add(id(regions[-1]))
                 else:
                     predictions = model.predict(
                         # Ultralytics accepts OpenCV-style BGR numpy arrays.
@@ -399,7 +403,9 @@ class DetectionManager:
             regions = [item for item in regions if item.width > 0 and item.height > 0
                        and ((item.width * item.height) / page_area <= 0.15
                             or self._shared_balloon(image, item, item) is True
-                            or self._supported_text_block(image, item, regions))]
+                            or self._supported_text_block(image, item, regions)
+                            or self._lettering_evidence(image, item))]
+            regions = self._drop_seam_fragments(regions, cut_by_seam)
             regions = self._deduplicate(regions)
             regions = self._merge_same_balloon_lines(regions, image, cancelled)
         if cancelled():
@@ -442,6 +448,74 @@ class DetectionManager:
                                       candidate.y + candidate.height)).convert("RGB"))
         background = np.median(crop.reshape(-1, 3), axis=0)
         return bool(np.mean(np.max(np.abs(crop.astype(np.float32) - background), axis=2) <= 10) >= .65)
+
+    @staticmethod
+    def _drop_seam_fragments(regions: list[TextRegion], cut_by_seam: set[int]) -> list[TextRegion]:
+        """Prefer the complete box when a strip edge cut the same text in another strip.
+
+        The cut half often scores higher than the complete block seen by the
+        overlapping strip, and confidence-ordered suppression then kept the
+        half: the first or last lines of a paragraph were left outside the box.
+        """
+        if not cut_by_seam:
+            return regions
+        whole = [region for region in regions if id(region) not in cut_by_seam]
+        kept = list(whole)
+        for region in regions:
+            if id(region) not in cut_by_seam:
+                continue
+            area = region.width * region.height
+            covered = any(
+                max(0, min(region.x + region.width, other.x + other.width) - max(region.x, other.x))
+                * max(0, min(region.y + region.height, other.y + other.height) - max(region.y, other.y))
+                >= area * .75
+                and other.width * other.height <= area * 4
+                for other in whole
+            )
+            if not covered:
+                kept.append(region)
+        return kept
+
+    @staticmethod
+    def _lettering_evidence(image, candidate) -> bool:
+        """Keep a large block whose own pixels are lettering on a flat ground.
+
+        A single cropped balloon, a narration page or a balloon cut by the
+        image edge has neither a closed contour nor three separate line
+        predictions, so the block used to be discarded and the page was left
+        without boxes. Artwork fails here: its ground is not flat, or its ink
+        is long line art instead of many glyph-sized pieces.
+        """
+        import cv2
+        page_area = max(1, image.width * image.height)
+        if candidate.width * candidate.height > page_area * .6:
+            return False
+        crop = np.asarray(image.crop((
+            candidate.x, candidate.y, candidate.x + candidate.width, candidate.y + candidate.height,
+        )).convert("RGB"))
+        height, width = crop.shape[:2]
+        if min(height, width) < 24:
+            return False
+        scale = 480 / max(height, width)
+        if scale < 1:
+            crop = cv2.resize(crop, (max(1, round(width * scale)), max(1, round(height * scale))),
+                              interpolation=cv2.INTER_AREA)
+            height, width = crop.shape[:2]
+        background = np.median(crop.reshape(-1, 3), axis=0)
+        difference = np.max(np.abs(crop.astype(np.int16) - background), axis=2)
+        if np.mean(difference <= 12) < .55:
+            return False
+        ink = (difference > 60).astype(np.uint8)
+        ink_pixels = int(np.count_nonzero(ink))
+        if not .02 <= ink_pixels / (height * width) <= .40:
+            return False
+        count, _, stats, _ = cv2.connectedComponentsWithStats(ink, 8)
+        limit = max(8, min(height, width) * .35)
+        glyphs = [
+            (int(y), int(h), int(area)) for _, y, w, h, area in stats[1:]
+            if area >= 4 and max(w, h) <= limit
+        ]
+        return len(glyphs) >= 6 and sum(area for _, _, area in glyphs) >= ink_pixels * .75
 
     def _recover_balloon_text(self, model, image, windows, batch_limit, progress, cancelled):
         """Ask YOLO locally about missed closed balloons at their own scale."""

@@ -67,6 +67,68 @@ def protect_flat_balloon_border(
     return cv2.bitwise_and(mask, safe)
 
 
+def _touching_glyph_pockets(
+    rgb: np.ndarray, silhouette: np.ndarray, difference: np.ndarray,
+    selected: np.ndarray, interior_area: int,
+) -> np.ndarray:
+    """Return text-sized concavities cut into a balloon by glyphs on its outline.
+
+    A pocket must lie inside the text box, be no larger than the lettering
+    already enclosed by the balloon and share its ink colour. Tails, concave
+    outlines and artwork beside the balloon differ in size or colour and
+    stay protected.
+    """
+    pockets = np.zeros_like(silhouette)
+    contours, _ = cv2.findContours(silhouette, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    if not contours or not np.any(selected):
+        return pockets
+    hull = np.zeros_like(silhouette)
+    cv2.drawContours(hull, [cv2.convexHull(np.concatenate(contours, axis=0))], -1, 255, cv2.FILLED)
+    concave = cv2.bitwise_and(hull, cv2.bitwise_not(silhouette))
+    count, labels, stats, _ = cv2.connectedComponentsWithStats(concave, 8)
+    candidates = []
+    for label in range(1, count):
+        x, y, w, h, area = (int(v) for v in stats[label])
+        if area < 12 or min(w, h) < 4 or area > interior_area * .12:
+            continue
+        pocket = labels[y:y+h, x:x+w] == label
+        if np.count_nonzero(pocket & selected[y:y+h, x:x+w]) < area * .9:
+            continue
+        strong = pocket & (difference[y:y+h, x:x+w] > 20)
+        if np.count_nonzero(strong) < area * .45:
+            continue
+        candidates.append((x, y, w, h, area, pocket, strong))
+    if not candidates:
+        return pockets
+    # Reference lettering: islands fully enclosed by the background.
+    distance = cv2.distanceTransform(cv2.copyMakeBorder(silhouette, 1, 1, 1, 1, cv2.BORDER_CONSTANT), cv2.DIST_L2, 5)[1:-1, 1:-1]
+    enclosed = np.where((silhouette > 0) & (difference > 20), 255, 0).astype(np.uint8)
+    n, ink_labels, ink_stats, _ = cv2.connectedComponentsWithStats(enclosed, 8)
+    near = np.unique(ink_labels[(enclosed > 0) & (distance < 2.5)])
+    reference = [
+        item for item in range(1, n)
+        if item not in near and 4 <= ink_stats[item, cv2.CC_STAT_AREA] <= interior_area * .2
+    ]
+    if not reference:
+        return pockets
+    ink_colour = np.median(rgb[np.isin(ink_labels, reference)].astype(np.int16), axis=0)
+    glyph_side = max(int(max(ink_stats[item, cv2.CC_STAT_WIDTH], ink_stats[item, cv2.CC_STAT_HEIGHT]))
+                     for item in reference)
+    accepted = 0
+    for x, y, w, h, area, pocket, strong in candidates:
+        if max(w, h) > max(12, glyph_side * 1.6):
+            continue
+        colour = np.median(rgb[y:y+h, x:x+w][strong].astype(np.int16), axis=0)
+        if np.max(np.abs(colour - ink_colour)) > 24:
+            continue
+        pockets[y:y+h, x:x+w][pocket] = 255
+        accepted += area
+    # Many accepted pockets mean a concave outline, not lettering.
+    if accepted > interior_area * .2:
+        pockets[:] = 0
+    return pockets
+
+
 def colour_connected_balloon_mask(rgb: np.ndarray, selection: np.ndarray):
     """Return (glyph mask, flat fill) or None when contour evidence is absent.
 
@@ -129,9 +191,23 @@ def colour_connected_balloon_mask(rgb: np.ndarray, selection: np.ndarray):
             ring = cv2.subtract(cv2.dilate(full, np.ones((5, 5), np.uint8)), full) > 0
             if np.mean(difference[ring] > 20) < .65:
                 continue
-            inner_distance = cv2.distanceTransform(cv2.copyMakeBorder(silhouette, 1, 1, 1, 1, cv2.BORDER_CONSTANT), cv2.DIST_L2, 5)[1:-1, 1:-1]
+            # A bold glyph is also a closed flat shape, with its counters as
+            # "text". It is an island in a flat field of another colour that
+            # fills the text box; a balloon is bordered by outline or artwork.
+            beyond = cv2.subtract(cv2.dilate(full, np.ones((13, 13), np.uint8)),
+                                  cv2.dilate(full, np.ones((7, 7), np.uint8))) > 0
+            ring_colour = np.median(rgb[beyond if np.any(beyond) else ring].astype(np.int16), axis=0)
+            if np.mean(np.max(np.abs(samples.astype(np.int16) - ring_colour), axis=1) <= 8) >= .35:
+                continue
             local_diff = difference[y:y+h, x:x+w]
-            holes = np.where((silhouette > 0) & (local_diff > 3), 255, 0).astype(np.uint8)
+            # A glyph touching the outline is a concavity of the background,
+            # not a hole. Left alone it is skipped, and every neighbouring
+            # glyph within the contour guard of it is skipped in turn.
+            pockets = _touching_glyph_pockets(
+                rgb[y:y+h, x:x+w], silhouette, local_diff, local_selection, interior_area)
+            shape = cv2.bitwise_or(silhouette, pockets)
+            inner_distance = cv2.distanceTransform(cv2.copyMakeBorder(shape, 1, 1, 1, 1, cv2.BORDER_CONSTANT), cv2.DIST_L2, 5)[1:-1, 1:-1]
+            holes = np.where((shape > 0) & (local_diff > 3), 255, 0).astype(np.uint8)
             n, hole_labels, hole_stats, _ = cv2.connectedComponentsWithStats(holes, 8)
             text = np.zeros_like(holes)
             # A whole-balloon selection is allowed to recover all inner dots;
@@ -145,8 +221,14 @@ def colour_connected_balloon_mask(rgb: np.ndarray, selection: np.ndarray):
                 component_pixels = hole_labels == item
                 if pixels < 2 or pixels > interior_area * .2:
                     continue
-                if np.any(component_pixels & (inner_distance < 2.5)):
-                    continue
+                in_pocket = np.count_nonzero(component_pixels & (pockets > 0)) >= pixels * .5
+                if not in_pocket:
+                    near_contour = np.count_nonzero(component_pixels & (inner_distance < 2.5))
+                    # An enclosed island is separated from the outline by real
+                    # background. Skip specks and slivers hugging the contour,
+                    # but keep a glyph that merely sits close to it.
+                    if near_contour and (min(hw, hh) < 6 or near_contour > pixels * .15):
+                        continue
                 if np.count_nonzero(component_pixels & allowed) < pixels * .95:
                     continue
                 # Reject line-art spanning much of the balloon.

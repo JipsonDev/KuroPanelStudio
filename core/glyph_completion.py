@@ -65,6 +65,93 @@ def complete_soft_text_halos(rgb, mask, selection):
     return result
 
 
+def complete_outlined_lettering(rgb, mask, selection):
+    """Finish a lettering outline that leaves the text box over artwork.
+
+    Outlined captions and effects sit directly on the drawing, and a tight
+    detector box cuts through their border. Boundary protection then trims
+    the mask, and the reconstruction keeps dark specks of that border. Follow
+    only near-black or near-white components that the mask already covers by
+    half, stay close to the box and never reach the context frame; balloon
+    outlines, panel frames and artwork fail the coverage test.
+    """
+    if rgb.shape[:2] != mask.shape or mask.shape != selection.shape:
+        return mask
+    if not np.any(mask) or not np.any(selection):
+        return mask
+    height, width = mask.shape
+    sx, sy, sw, sh = cv2.boundingRect(selection)
+    pad = max(6, min(20, int(round(min(sw, sh) * .15))))
+    x1, y1 = max(1, sx - pad), max(1, sy - pad)
+    x2, y2 = min(width - 1, sx + sw + pad), min(height - 1, sy + sh + pad)
+    if x2 <= x1 or y2 <= y1:
+        return mask
+    masked = mask > 0
+    additions = np.zeros_like(mask)
+    polarities = (rgb.max(axis=2) <= 70, rgb.min(axis=2) >= 215)
+    for polarity in polarities:
+        count, labels, stats, _ = cv2.connectedComponentsWithStats(polarity.astype(np.uint8), 8)
+        for label in np.unique(labels[masked]):
+            if label == 0 or label >= count:
+                continue
+            cx, cy, cw, ch, area = (int(v) for v in stats[label])
+            if cx < x1 or cy < y1 or cx + cw > x2 or cy + ch > y2:
+                continue
+            if area < 24 or area > sw * sh * .5:
+                continue
+            component = labels[cy:cy + ch, cx:cx + cw] == label
+            covered = np.count_nonzero(component & masked[cy:cy + ch, cx:cx + cw])
+            if covered < area * .5 or area - covered < 4:
+                continue
+            additions[cy:cy + ch, cx:cx + cw][component] = 255
+    if not np.any(additions):
+        return mask
+    additions = cv2.dilate(additions, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5)))
+    reach = np.zeros_like(mask)
+    reach[y1:y2, x1:x2] = 255
+    return cv2.bitwise_or(mask, cv2.bitwise_and(additions, reach))
+
+
+def cover_lettering_halo(rgb, mask, selection):
+    """Extend a mask over the glow or border painted around lettering on artwork.
+
+    When the mask stops inside a white or coloured border, the reconstruction
+    samples that border and paints a pale blob in the shape of the text. A
+    halo is a band of one colour hugging the mask that ends within a short
+    reach; a balloon or garment of the same colour continues past that reach
+    and is left alone.
+    """
+    if rgb.shape[:2] != mask.shape or mask.shape != selection.shape:
+        return mask
+    if not np.any(mask) or not np.any(selection):
+        return mask
+
+    def disc(radius):
+        return cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (radius * 2 + 1, radius * 2 + 1))
+
+    _, _, sw, sh = cv2.boundingRect(selection)
+    reach = max(8, min(22, int(round(min(sw, sh) * .18))))
+    masked = mask > 0
+    ring = (cv2.dilate(mask, disc(4)) > 0) & ~masked
+    limit = cv2.dilate(mask, disc(reach))
+    far = (cv2.dilate(mask, disc(reach + 10)) > 0) & (limit == 0)
+    if np.count_nonzero(ring) < 32 or np.count_nonzero(far) < 32:
+        return mask
+    halo = np.median(rgb[ring].astype(np.int16), axis=0)
+    alike = np.max(np.abs(rgb.astype(np.int16) - halo), axis=2) <= 26
+    if np.mean(alike[ring]) < .6 or np.mean(alike[far]) > .35:
+        return mask
+    candidate = alike & (limit > 0) & ~masked
+    count, labels = cv2.connectedComponents((candidate | masked).astype(np.uint8), 8)
+    attached = np.unique(labels[masked])
+    grown = candidate & np.isin(labels, attached[attached != 0])
+    edge = (limit > 0) & (cv2.erode(limit, disc(2)) == 0)
+    if not np.any(grown) or (np.any(edge) and np.mean(grown[edge]) > .3):
+        return mask
+    grown = cv2.dilate(grown.astype(np.uint8) * 255, disc(2))
+    return cv2.bitwise_or(mask, cv2.bitwise_and(grown, limit))
+
+
 def complete_boundary_glyphs(rgb, mask, selection, locator=None):
     """Follow small ink components across box edges on uniform backgrounds.
 
