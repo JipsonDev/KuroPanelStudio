@@ -848,7 +848,7 @@ class OCRManager:
     def _response_content(response) -> str:
         status = getattr(response, "status_code", 200)
         if status not in (None, 200):
-            detail = ""
+            detail, payload = "", None
             try:
                 payload = response.json()
                 api_error = payload.get("error", {}) if isinstance(payload, dict) else {}
@@ -858,7 +858,21 @@ class OCRManager:
             except (ValueError, AttributeError):
                 pass
             lower = detail.casefold()
-            if status == 402 or "insufficient balance" in lower:
+            code = ""
+            try:
+                api_error = payload.get("error", {}) if isinstance(payload, dict) else {}
+                code = str((api_error.get("code") if isinstance(api_error, dict) else "") or payload.get("code", "") or "")
+            except (NameError, AttributeError):
+                pass
+            # Alibaba's own reason, kept for «Ver detalle»; the generic texts
+            # below used to hide it, so every 401/403 looked like a bad key.
+            reason = f"\nRespuesta de Alibaba: {code + ': ' if code else ''}{detail}" if detail or code else ""
+            if "good standing" in lower or code.casefold() == "arrearage":
+                message = (
+                    "Alibaba Cloud: la cuenta tiene un pago pendiente o está restringida. "
+                    "Revisa Gastos y costos en la consola de Alibaba Cloud." + reason
+                )
+            elif status == 402 or "insufficient balance" in lower:
                 message = "Alibaba Cloud: Saldo insuficiente. Recarga saldo en tu cuenta de Alibaba Cloud Model Studio."
             elif status == 403 and "free quota" in lower:
                 message = (
@@ -867,7 +881,10 @@ class OCRManager:
                     "La aplicación no puede ampliar esa cuota."
                 )
             elif status in (401, 403) or "invalid_api_key" in lower or "incorrect api key" in lower:
-                message = f"Alibaba Cloud (HTTP {status}): clave no válida o sin permisos para esta región/modelo. Revisa la clave y la URL OCR en Configuración → OCR y traducción."
+                message = (
+                    f"Alibaba Cloud (HTTP {status}): clave no válida o sin permisos para esta región/modelo. "
+                    "Revisa la clave y la URL OCR en Configuración → OCR y traducción." + reason
+                )
             elif status == 404 or "model_not_found" in lower:
                 message = (
                     f"Alibaba Cloud (HTTP {status}): modelo o ruta no disponible. "
