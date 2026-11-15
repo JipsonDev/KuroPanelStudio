@@ -3,7 +3,7 @@
 Editor de escritorio para OCR, traducción, limpieza y typpeo de manhua, manhwa
 y manga. Está construido con Python, PySide6, OpenCV y ONNX Runtime.
 
-**Versión 0.2.26** muestra el motivo exacto cuando Alibaba Cloud rechaza una solicitud de OCR o traducción, en vez de indicar siempre que la clave no es válida.
+**Versión 0.2.26** muestra el motivo exacto cuando Alibaba Cloud rechaza una solicitud de OCR o traducción en vez de indicar siempre que la clave no es válida, y el selector de modelo muestra el modelo en uso y conserva los que escribes.
 
 [Descargar instalador para Windows x64](https://github.com/JipsonDev/KuroPanelStudio/releases/download/v0.2.26/KuroPanelStudio-Setup-0.2.26-Windows-x64.exe)
 · [Última versión](https://github.com/JipsonDev/KuroPanelStudio/releases/latest)
