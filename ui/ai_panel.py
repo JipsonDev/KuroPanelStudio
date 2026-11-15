@@ -207,15 +207,47 @@ class AIOptionsPanel(QScrollArea):
         elif combo.isEditable():
             combo.setEditText(value)
 
+    @staticmethod
+    def _add_models(combo: QComboBox, models) -> None:
+        for model in models:
+            model = str(model or "").strip()
+            if model and combo.findText(model) < 0:
+                combo.addItem(model)
+
     def set_configuration(self, settings: dict) -> None:
-        self._select(self.ocr_provider, settings["ocr"]["platform"])
-        self._select(self.ocr_model, settings["ocr"]["model"])
-        self._select(self.translate_provider, settings["translate"]["platform"])
-        if self.translate_model.findText(settings["translate"]["model"]) < 0:
-            self.translate_model.addItem(settings["translate"]["model"])
-        self._select(self.translate_model, settings["translate"]["model"])
-        self._select(self.clean_provider, settings["clean"]["platform"])
-        self._select(self.clean_model, settings["clean"]["model"])
+        """Show the saved providers and models, without saving them again.
+
+        Signals stay blocked: selecting a provider used to reset the
+        translation model to that provider's default, and every change was
+        written back to the settings it had just been read from.
+        """
+        combos = (self.ocr_provider, self.ocr_model, self.translate_provider,
+                  self.translate_model, self.clean_provider, self.clean_model)
+        blocked = [combo.blockSignals(True) for combo in combos]
+        try:
+            self._add_models(self.ocr_model, [*settings["ocr"].get("saved_models", []), settings["ocr"]["model"]])
+            self._add_models(self.translate_model, [
+                *settings["translate"].get("saved_models", []), settings["translate"]["model"],
+            ])
+            self._select(self.ocr_provider, settings["ocr"]["platform"])
+            self._select(self.ocr_model, settings["ocr"]["model"])
+            self._select(self.translate_provider, settings["translate"]["platform"])
+            self._select(self.translate_model, settings["translate"]["model"])
+            self._select(self.clean_provider, settings["clean"]["platform"])
+            self._select(self.clean_model, settings["clean"]["model"])
+        finally:
+            for combo, was_blocked in zip(combos, blocked):
+                combo.blockSignals(was_blocked)
+
+    def _commit_model(self, mode: str, combo: QComboBox, provider: QComboBox) -> None:
+        """Add a typed model to its list and report the selection once."""
+        model = combo.currentText().strip()
+        if model and combo.findText(model) < 0:
+            blocked = combo.blockSignals(True)
+            combo.addItem(model)
+            combo.setCurrentIndex(combo.findText(model))
+            combo.blockSignals(blocked)
+        self.provider_changed.emit(mode, provider.currentText(), model)
 
     @staticmethod
     def _configuration(provider: QComboBox, model: QComboBox) -> tuple[str, str]:
@@ -446,10 +478,10 @@ class AIOptionsPanel(QScrollArea):
         )
         self.ocr_provider.currentTextChanged.connect(lambda: self.provider_changed.emit("ocr", *self.ocr_configuration()))
         self.ocr_model.activated.connect(
-            lambda _index: self.provider_changed.emit("ocr", *self.ocr_configuration())
+            lambda _index: self._commit_model("ocr", self.ocr_model, self.ocr_provider)
         )
         self.ocr_model.lineEdit().editingFinished.connect(
-            lambda: self.provider_changed.emit("ocr", *self.ocr_configuration())
+            lambda: self._commit_model("ocr", self.ocr_model, self.ocr_provider)
         )
         config.addWidget(self.ocr_model)
         model_hint = QLabel("Selecciona un modelo o escribe el identificador disponible en tu cuenta.")
@@ -508,9 +540,16 @@ class AIOptionsPanel(QScrollArea):
         self.translate_model.setEditable(True)
         self.translate_model.setInsertPolicy(QComboBox.NoInsert)
         self.translate_model.setToolTip("Selecciona un modelo o escribe el identificador exacto disponible en tu cuenta")
-        self.translate_provider.currentTextChanged.connect(lambda: self.provider_changed.emit("translate", *self.translate_configuration()))
+        # One handler: it picks the provider's default model first, so the
+        # saved pair never mixes the new provider with the previous model.
         self.translate_provider.currentTextChanged.connect(self._sync_translation_model)
-        self.translate_model.currentTextChanged.connect(lambda: self.provider_changed.emit("translate", *self.translate_configuration()))
+        # Saving on every keystroke stored partial identifiers; commit once.
+        self.translate_model.activated.connect(
+            lambda _index: self._commit_model("translate", self.translate_model, self.translate_provider)
+        )
+        self.translate_model.lineEdit().editingFinished.connect(
+            lambda: self._commit_model("translate", self.translate_model, self.translate_provider)
+        )
         config.addWidget(QLabel("Modelo"))
         config.addWidget(self.translate_model)
         layout.addWidget(self._status("translation", "Proveedor no autenticado", self.STATUS_WARNING))
@@ -540,7 +579,10 @@ class AIOptionsPanel(QScrollArea):
             "OpenAI": "gpt-5-mini", "DeepSeek": "deepseek-chat", "DeepL": "deepl",
         }.get(provider)
         if preferred:
+            blocked = self.translate_model.blockSignals(True)
             self.translate_model.setCurrentText(preferred)
+            self.translate_model.blockSignals(blocked)
+        self.provider_changed.emit("translate", *self.translate_configuration())
 
     def _clean_page(self) -> QWidget:
         page, layout = self._page_layout()

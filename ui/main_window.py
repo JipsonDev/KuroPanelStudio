@@ -2817,7 +2817,10 @@ class MainWindow(QMainWindow):
         self.settings.update_workflow(values)
         self.ui_translator.set_language(self.settings.data["general"]["ui_language"])
         self.ocr.set_endpoint(values.get("ocr_base_url", ""))
-        self.ai_panel.ocr_model.setCurrentText(self.settings.data["ocr"]["model"])
+        # Show what was just saved: the panel kept the previous translation
+        # provider/model, so the app used one model and displayed another.
+        self.ai_panel.set_configuration(self.settings.data)
+        self._update_provider_statuses()
         self._psd_auto_sync = bool(values.get("psd_auto_sync", True))
         self._configure_psd_watcher(reset_signatures=False)
         self.resource_policy = build_resource_policy(

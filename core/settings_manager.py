@@ -80,9 +80,29 @@ class SettingsManager:
             if temporary.exists():
                 temporary.unlink()
 
+    MAX_SAVED_MODELS = 20
+
+    def saved_models(self, section: str) -> list[str]:
+        """Model identifiers the user typed, newest first, for the model lists."""
+        stored = self.data.get(section, {}).get("saved_models", [])
+        return [str(value) for value in stored if str(value).strip()] if isinstance(stored, list) else []
+
+    def remember_model(self, section: str, model: str) -> bool:
+        model = str(model or "").strip()
+        if section not in {"ocr", "translate"} or not model:
+            return False
+        current = self.saved_models(section)
+        updated = [model, *(value for value in current if value != model)][:self.MAX_SAVED_MODELS]
+        if updated == current:
+            return False
+        self.data[section]["saved_models"] = updated
+        return True
+
     def update_provider(self, section: str, platform: str, model: str) -> None:
+        model = str(model or "").strip()
         self.data[section]["platform"] = platform
         self.data[section]["model"] = model
+        self.remember_model(section, model)
         self.save()
 
     def update_workflow(self, values: dict) -> None:
@@ -90,8 +110,10 @@ class SettingsManager:
             self.data["ocr"]["base_url"] = str(values["ocr_base_url"]).strip()
         if "ocr_model" in values:
             self.data["ocr"]["model"] = str(values["ocr_model"]).strip()
+            self.remember_model("ocr", self.data["ocr"]["model"])
+        self.remember_model("translate", values["model"])
         self.data["translate"].update({
-            "platform": values["provider"], "model": values["model"],
+            "platform": values["provider"], "model": str(values["model"]).strip(),
             "source_language": values["source_language"], "target_language": values["target_language"],
         })
         self.data["general"]["autosave_minutes"] = int(values["autosave_minutes"])

@@ -1,5 +1,12 @@
 # Historial de cambios
 
+## 0.2.26 — motivo real del rechazo y lista de modelos que se conserva
+
+- Cuando Alibaba Cloud rechazaba una solicitud con HTTP 401 o 403, la app indicaba siempre «clave no válida» y ocultaba el motivo que da Alibaba (modelo sin activar, permisos de la región, cuenta restringida…). Ahora ese motivo aparece en «Ver detalle», en OCR y en traducción.
+- Una cuenta con pago pendiente o restringida («Access denied, please make sure your account is in good standing») se identifica como tal en vez de mostrarse como un error desconocido o de clave.
+- El selector de modelo del panel ahora muestra el modelo que se está usando. Al guardar en Configuración, el panel seguía mostrando el modelo anterior; y al abrir la app, el modelo de traducción se cambiaba por el predeterminado del proveedor.
+- Los modelos que escribes (por ejemplo `qwen3.8-flash`) se añaden a la lista de OCR o traducción y siguen ahí al volver a abrir la app (hasta 20 por lista). El modelo de traducción se guarda al terminar de escribirlo, no letra por letra.
+
 ## 0.2.25 — páginas que ya no se congelan al mostrar el texto
 
 - Al abrir una página después del OCR, el panel podía quedarse congelado mientras colocaba el texto. En los globos altos o cortados por el borde de la página se probaban hasta 24 números de líneas imposibles, y cada globo podía tardar más de un segundo. Ahora se descartan antes de buscar los saltos de línea: en las tiras del capítulo 185 el texto se coloca de 3 a 5 veces más rápido y el resultado es idéntico en los 544 casos comparados.

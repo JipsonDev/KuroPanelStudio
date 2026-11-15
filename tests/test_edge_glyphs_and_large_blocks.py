@@ -468,3 +468,31 @@ def test_tall_balloons_lay_out_quickly_with_the_same_result():
     assert time.perf_counter() - started < 1.0
     assert not layout["overflow"] and layout["font_size"] == 36
     assert " ".join(layout["lines"]).replace("- ", "") .replace("-", "") .split() == text.split()
+
+
+def test_rejected_requests_keep_alibabas_own_reason():
+    from unittest.mock import Mock
+    import pytest
+    from core.failure_messages import describe_failure
+    from core.ocr_manager import OCRConfigurationError
+
+    def reply(status, payload):
+        return Mock(status_code=status, json=lambda: payload)
+
+    overdue = reply(400, {"error": {"code": "Arrearage", "message":
+                      "Access denied, please make sure your account is in good standing."}})
+    with pytest.raises(OCRConfigurationError) as error:
+        OCRManager._response_content(overdue)
+    assert describe_failure("OCR", str(error.value)).kind == "billing"
+    assert "good standing" in str(error.value)
+
+    denied = reply(403, {"code": "Model.AccessDenied", "message": "Model access denied."})
+    with pytest.raises(OCRConfigurationError) as error:
+        OCRManager._response_content(denied)
+    text = str(error.value)
+    assert "Model.AccessDenied" in text and "Model access denied." in text
+    assert describe_failure("OCR", text).kind == "credentials"
+
+    unreadable = Mock(status_code=401, json=Mock(side_effect=ValueError()))
+    with pytest.raises(OCRConfigurationError, match="clave no válida"):
+        OCRManager._response_content(unreadable)

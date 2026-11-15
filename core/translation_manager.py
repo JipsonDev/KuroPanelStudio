@@ -304,8 +304,10 @@ class TranslationManager:
                     lower = detail.casefold()
                     if response.status_code == 402 or "insufficient balance" in lower:
                         message = f"{provider}: saldo insuficiente. Recarga saldo en la cuenta del proveedor."
+                    elif "good standing" in lower or "arrearage" in lower:
+                        message = f"{provider}: la cuenta tiene un pago pendiente o está restringida.\nRespuesta: {detail}"
                     elif response.status_code in {401, 403}:
-                        message = f"{provider}: la API key no es válida o no tiene permiso para ese modelo."
+                        message = f"{provider}: la API key no es válida o no tiene permiso para ese modelo.\nRespuesta: {detail}"
                     elif response.status_code == 429:
                         message = f"{provider}: se agotó la cuota o hay demasiadas solicitudes. Intenta nuevamente en unos segundos."
                     elif response.status_code == 404 or "model_not_found" in lower:
