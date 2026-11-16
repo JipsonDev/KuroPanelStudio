@@ -399,6 +399,13 @@ ES_TO_EN = {
     "Diálogo · ovalado": "Dialogue · oval",
     "Grito · puntiagudo": "Shout · pointed",
     "Cuadro · rectangular": "Caption · rectangular",
+    "Pensamiento · nube": "Thought · cloud",
+    "Cuadro · narración": "Caption · narration",
+    "SFX · onomatopeya": "SFX · sound effect",
+    "Detectado: Pensamiento · puedes corregirlo aquí.":
+        "Detected: Thought · you can correct it here.",
+    "Detectado: SFX · puedes corregirlo aquí.":
+        "Detected: SFX · you can correct it here.",
     "Elige el tipo de esta caja. Automático analiza el contorno; una elección manual tiene prioridad.":
         "Choose this box's type. Automatic analyzes the outline; a manual choice takes priority.",
     "Usa la fuente asignada a ese tipo en el proyecto.":

@@ -19,7 +19,7 @@ from PySide6.QtWidgets import QApplication, QFileDialog, QDialog, QHBoxLayout, Q
 from core.cleaning_process_manager import CleaningProcessManager
 from core.app_updater import ReleaseUpdater, UpdateInfo, check_available_update
 from core.app_version import APP_UPDATE_CHANNEL, APP_VERSION
-from core.balloon_classifier import BALLOON_KINDS, classify_balloon
+from core.balloon_classifier import BALLOON_KINDS, KIND_LOOK_KEYS, KIND_LOOKS, classify_balloon
 from core.credential_store import CredentialStore
 from core.detection_manager import DetectionManager
 from core.chapter_detection import detect_chapter
@@ -2216,12 +2216,10 @@ class MainWindow(QMainWindow):
                 )
                 return alias, family, str(path) if path else "", dict(entry.get("style", {}))
         fallback = {
-            "dialogue": ("Segoe UI", 400),
-            "shout": ("Arial", 900),
-            "caption": ("Segoe UI", 700),
+            "dialogue": "Segoe UI", "shout": "Arial", "thought": "Segoe UI",
+            "caption": "Segoe UI", "sfx": "Arial",
         }
-        family, weight = fallback.get(kind, fallback["dialogue"])
-        return "", family, "", {"font_weight": weight}
+        return "", fallback.get(kind, fallback["dialogue"]), "", {}
 
     def _set_kind_font(self, region: dict, kind: str, *, force: bool = False) -> None:
         style = region.get("style")
@@ -2231,13 +2229,19 @@ class MainWindow(QMainWindow):
             return
         alias, family, font_file, role_style = self._kind_font_defaults(kind)
         style.update({"font_family": family, "font_file": font_file})
-        for name in ("font_weight", "font_size", "italic"):
-            if name in role_style:
-                style[name] = role_style[name]
+        # The kind's own look (outline, case, colour), then the project's
+        # role for that kind, which always wins where it says something.
+        for name in KIND_LOOK_KEYS:
+            if name in DEFAULT_STYLE:
+                style[name] = DEFAULT_STYLE[name]
+        style.update(KIND_LOOKS.get(kind, {}))
+        style.update({name: value for name, value in role_style.items()
+                      if name not in {"font_family", "font_file"}})
         if force or region.get("balloon_font_from_kind") or style.get("balloon_shape", "auto") in {"", "auto"}:
             style["balloon_shape"] = {
-                "dialogue": "ellipse", "shout": "diamond", "caption": "rectangle",
-            }[kind]
+                "dialogue": "ellipse", "shout": "diamond", "thought": "ellipse",
+                "caption": "rectangle", "sfx": "rectangle",
+            }.get(kind, "ellipse")
         region["style"] = TypographyManager.normalized(style)
         if alias:
             region["font_role"] = alias

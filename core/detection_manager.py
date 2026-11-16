@@ -501,29 +501,11 @@ class DetectionManager:
 
     @staticmethod
     def _outlined_lettering(image, candidate) -> bool:
-        """A sound effect: one saturated fill colour bordered by a white outline.
-
-        Artwork rarely has a single hue that a white rim follows along most
-        of its edge; a thin watermark line is excluded by the minimum size.
-        """
-        import cv2
-        rgb = np.asarray(image.crop((
+        """A sound effect: one saturated fill colour bordered by a white outline."""
+        from core.balloon_classifier import is_sound_effect
+        return is_sound_effect(np.asarray(image.crop((
             candidate.x, candidate.y, candidate.x + candidate.width, candidate.y + candidate.height,
-        )).convert("RGB"))
-        scale = 320 / max(rgb.shape[:2])
-        if scale < 1:
-            rgb = cv2.resize(rgb, (max(1, round(rgb.shape[1] * scale)), max(1, round(rgb.shape[0] * scale))),
-                             interpolation=cv2.INTER_AREA)
-        hsv = cv2.cvtColor(rgb, cv2.COLOR_RGB2HSV)
-        white = rgb.min(axis=2) > 220
-        fill = (hsv[..., 1] > 110) & (hsv[..., 2] > 50)
-        if fill.mean() < .10 or not .04 <= white.mean() <= .5:
-            return False
-        hues = hsv[..., 0][fill]
-        dominant = np.bincount(hues // 10, minlength=19).max() / max(1, hues.size)
-        ring = cv2.dilate(fill.astype(np.uint8), np.ones((5, 5), np.uint8)).astype(bool) & ~fill
-        bordered = np.count_nonzero(white & ring) / max(1, np.count_nonzero(ring))
-        return bool(dominant >= .6 and bordered >= .35)
+        )).convert("RGB")))
 
     @staticmethod
     def _lettering_evidence(image, candidate) -> bool:

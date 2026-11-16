@@ -14,7 +14,9 @@ from statistics import median
 def _dialogue(region: dict) -> bool:
     style = region.get("style") if isinstance(region.get("style"), dict) else {}
     text = str(region.get("applied_text") or region.get("translation") or region.get("text") or "")
-    return bool(text.strip()) and not style.get("sfx_enabled", False) and style.get("auto_fit", True)
+    # Shouts, captions and SFX keep their own sizes; only speech is unified.
+    return (bool(text.strip()) and not style.get("sfx_enabled", False) and style.get("auto_fit", True)
+            and str(region.get("balloon_kind") or "dialogue") in {"dialogue", "thought"})
 
 
 def fitted_size(region: dict) -> int | None:
