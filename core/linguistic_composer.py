@@ -123,6 +123,43 @@ def _cjk_wrap(
     return list(result[1]) if result else None
 
 
+# Words that read badly at the end of a line: the reader stops on «de» or
+# «la» and has to carry it to the next line to make sense of it.
+_TRAILING_WORDS = {
+    "es": frozenset(
+        "a al ante con de del el en la las lo los mi mis me ni o para por que se si sin "
+        "su sus te tu tus u un una unos unas y e".split()
+    ),
+    "en": frozenset("a an and at by for from in of on or the to with my your his her its".split()),
+}
+TRAILING_WORD_COST = 0.6
+SHORT_LINE_COST = 0.35
+SENTENCE_BREAK_BONUS = 0.3
+
+
+def _line_penalty(candidate_words: tuple[str, ...], line: int, count: int, language: str,
+                  orphan_control: bool) -> float:
+    """Extra cost of one line besides the empty space it leaves."""
+    cost = 0.0
+    last = line == count - 1
+    if not last:
+        trailing = _TRAILING_WORDS.get(language) or _TRAILING_WORDS["es"]
+        word = candidate_words[-1].strip("«»\"'¡¿([").casefold()
+        if word in trailing and len(candidate_words) > 1:
+            cost += TRAILING_WORD_COST
+        if orphan_control and count >= 3 and len(candidate_words) == 1 and len(candidate_words[0]) < 6:
+            cost += SHORT_LINE_COST  # a lone short word in the middle of the balloon
+        # Ending a line where a sentence ends lets each line read on its own.
+        ending = candidate_words[-1].rstrip("»\"')")
+        if ending.endswith(("?", "!", ".", "…")):
+            cost -= SENTENCE_BREAK_BONUS
+        elif ending.endswith((",", ";", ":")):
+            cost -= SENTENCE_BREAK_BONUS / 3
+    elif orphan_control and len(candidate_words) == 1 and len(candidate_words[0]) < 8:
+        cost += 2.2
+    return cost
+
+
 def _word_wrap(
     text: str, widths: list[float], measure: Callable[[str], float], language: str,
     hyphenate: bool, orphan_control: bool, hanging: bool,
@@ -150,9 +187,7 @@ def _word_wrap(
             tail = solve(words[end:], line + 1)
             if tail is not None:
                 empty = (widths[line] - used) / max(1.0, widths[line])
-                cost = tail[0] + empty * empty
-                if orphan_control and line == count - 1 and len(words[:end]) == 1 and len(candidate) < 8:
-                    cost += 2.2
+                cost = tail[0] + empty * empty + _line_penalty(words[:end], line, count, language, orphan_control)
                 result = (cost, (candidate, *tail[1]))
                 if best is None or result[0] < best[0]:
                     best = result

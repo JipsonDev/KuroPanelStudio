@@ -580,6 +580,15 @@ class AIOptionsPanel(QScrollArea):
         self.translation_context.setWordWrap(True)
         layout.addWidget(self.translation_context)
         self.translation_scope = self._scope_action(layout, "translation", "Traducir texto", ("run_translation_one", "run_translation", "run_translation_all"))
+        self.unify_font_button = ModernButton("Igualar tamaño de letra del capítulo", icon_name="text")
+        self.unify_font_button.setMinimumWidth(0)
+        self.unify_font_button.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Fixed)
+        self.unify_font_button.setToolTip(
+            "Usa en todos los globos de diálogo el tamaño habitual del capítulo; "
+            "los globos donde el texto no cabe siguen reduciéndolo"
+        )
+        self.unify_font_button.clicked.connect(lambda: self.action_requested.emit("unify_font_size"))
+        layout.addWidget(self.unify_font_button)
         layout.addWidget(self.translation_settings)
         self._add_text_options(layout, mode="translation", include_mask=False, include_manga=True)
         layout.addStretch()

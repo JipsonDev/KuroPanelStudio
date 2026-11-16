@@ -31,6 +31,7 @@ from core.ocr_manager import OCR_PROVIDERS, OCRManager
 from core.project_io import load_project_bundle, page_key, save_project_bundle
 from core.psd_manager import is_psd
 from PIL import Image
+from core.chapter_font_size import chapter_font_size, unify_chapter_font_size
 from core.seam_balloons import SEAM_PARTNER_KEY, anchor_first, seam_pairs, stitched_file
 from core.project_manager import ProjectManager
 from core.psd_sync import file_signature, inspect_stable_source, reconcile_layer_states
@@ -831,6 +832,8 @@ class MainWindow(QMainWindow):
             self.run_translation("one")
         elif action == "run_translation_all":
             self.run_translation_chapter()
+        elif action == "unify_font_size":
+            self.unify_chapter_font_size()
         elif action == "edit_typography":
             self.edit_typography()
         elif action == "settings":
@@ -4204,6 +4207,31 @@ class MainWindow(QMainWindow):
             f"Se procesaron {len(work)} páginas pendientes en orden de lectura.",
             lambda results: self._show_chapter_ocr(results, chapter_targets),
             stage="Procesando OCR del capítulo…",
+        )
+
+    def unify_chapter_font_size(self) -> None:
+        """Give the chapter's dialogue one typical font size."""
+        pages = {page_key(page): self.page_regions.get(page_key(page), []) for page in self.project.pages}
+        size = chapter_font_size(pages)
+        if size is None:
+            self._toast(
+                "Faltan globos con texto colocado",
+                "Recorre algunas páginas con el texto ya colocado y vuelve a intentarlo.",
+            )
+            return
+        changed = unify_chapter_font_size(pages, size)
+        if not changed:
+            self._toast("Tamaño ya igualado", f"El diálogo del capítulo ya usa {size} pt como máximo.")
+            return
+        for key, regions in pages.items():
+            if regions:
+                self._refresh_page_text(key)
+        if self._active_key():
+            self._render_page_layers(self._active_key())
+        self._record_history()
+        self._toast(
+            f"Diálogo del capítulo a {size} pt",
+            f"{changed} globo(s) ajustado(s). Los que no tienen espacio usan un tamaño menor.",
         )
 
     def _chapter_seam_jobs(self, work: list[tuple]) -> list[tuple]:
