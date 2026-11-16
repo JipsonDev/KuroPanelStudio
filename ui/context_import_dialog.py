@@ -1,4 +1,4 @@
-"""Import a series' glossary and context from a ChatGPT project."""
+"""Import a series' glossary and context from a .txt file."""
 from __future__ import annotations
 
 from pathlib import Path
@@ -6,7 +6,7 @@ from pathlib import Path
 from PySide6.QtWidgets import (QApplication, QDialog, QDialogButtonBox, QFileDialog, QHBoxLayout,
                                QLabel, QPlainTextEdit, QPushButton, QVBoxLayout)
 
-from core.context_import import CHATGPT_REQUEST, merged_glossary, merged_prompt, parse_context
+from core.context_import import CONTEXT_REQUEST, merged_glossary, merged_prompt, parse_context
 
 
 class ContextImportDialog(QDialog):
@@ -19,22 +19,26 @@ class ContextImportDialog(QDialog):
         layout = QVBoxLayout(self)
 
         step_one = QLabel(
-            f"<b>1.</b> Copia esta petición y envíala en el proyecto de ChatGPT de <b>{project}</b>."
+            f"<b>1. Prompt para obtener el contexto.</b> Cópialo o guárdalo y envíalo en el chat "
+            f"donde traduces <b>{project}</b>. Guarda la respuesta en un .txt."
         )
         step_one.setWordWrap(True)
         layout.addWidget(step_one)
-        request = QPlainTextEdit(CHATGPT_REQUEST)
+        request = QPlainTextEdit(CONTEXT_REQUEST)
         request.setReadOnly(True)
         request.setMaximumHeight(150)
         layout.addWidget(request)
         copy_row = QHBoxLayout()
-        self.copy_button = QPushButton("Copiar petición")
+        self.copy_button = QPushButton("Copiar prompt")
         self.copy_button.clicked.connect(self._copy_request)
         copy_row.addWidget(self.copy_button)
+        save_prompt = QPushButton("Guardar prompt como .txt…")
+        save_prompt.clicked.connect(self._save_request)
+        copy_row.addWidget(save_prompt)
         copy_row.addStretch()
         layout.addLayout(copy_row)
 
-        step_two = QLabel("<b>2.</b> Pega aquí la respuesta completa de ChatGPT, o abre un .txt donde la guardaste.")
+        step_two = QLabel("<b>2. Abre el .txt con la respuesta</b> (o pega el texto aquí).")
         step_two.setWordWrap(True)
         layout.addWidget(step_two)
         self.answer = QPlainTextEdit()
@@ -43,6 +47,7 @@ class ContextImportDialog(QDialog):
         layout.addWidget(self.answer, 1)
         open_row = QHBoxLayout()
         open_button = QPushButton("Abrir .txt…")
+        open_button.setObjectName("Primary")
         open_button.clicked.connect(self._open_file)
         open_row.addWidget(open_button)
         open_row.addStretch()
@@ -68,12 +73,25 @@ class ContextImportDialog(QDialog):
         layout.addWidget(buttons)
 
     def _copy_request(self) -> None:
-        QApplication.clipboard().setText(CHATGPT_REQUEST)
-        self.copy_button.setText("Copiada ✓")
+        QApplication.clipboard().setText(CONTEXT_REQUEST)
+        self.copy_button.setText("Copiado ✓")
+
+    def _save_request(self) -> None:
+        filename, _ = QFileDialog.getSaveFileName(
+            self, "Guardar prompt", f"Prompt contexto - {self.project}.txt", "Texto (*.txt)",
+        )
+        if not filename:
+            return
+        try:
+            Path(filename).write_text(CONTEXT_REQUEST + "\n", encoding="utf-8")
+        except OSError as error:
+            self.summary.setText(f"No se pudo guardar el prompt: {error}")
+            return
+        self.summary.setText(f"Prompt guardado en {Path(filename).name}.")
 
     def _open_file(self) -> None:
         filename, _ = QFileDialog.getOpenFileName(
-            self, "Abrir respuesta de ChatGPT", "", "Texto (*.txt *.md *.json);;Todos los archivos (*)",
+            self, "Abrir contexto (.txt)", "", "Texto (*.txt *.md *.json);;Todos los archivos (*)",
         )
         if not filename:
             return

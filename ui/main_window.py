@@ -4212,7 +4212,7 @@ class MainWindow(QMainWindow):
         )
 
     def import_translation_context(self) -> None:
-        """Bring the active series' glossary and context from a ChatGPT project."""
+        """Import the active series' glossary and context from a .txt file."""
         from ui.context_import_dialog import ContextImportDialog
         if not self.font_profiles.has_project(self.active_font_type, self.active_font_profile):
             self._toast(

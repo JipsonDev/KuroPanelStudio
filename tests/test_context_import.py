@@ -1,4 +1,4 @@
-from core.context_import import (CHATGPT_REQUEST, CONTEXT_END, CONTEXT_START, merged_glossary,
+from core.context_import import (CONTEXT_REQUEST, CONTEXT_END, CONTEXT_START, merged_glossary,
                                  merged_prompt, parse_context)
 
 ANSWER = """```markdown
@@ -55,7 +55,7 @@ def test_other_shapes_are_accepted():
     assert as_json.title == "X" and as_json.glossary[0]["source"] == "甲"
     bare = parse_context("林枫 = Lin Feng\n小灵 = Xiao Ling")
     assert len(bare.glossary) == 2 and not bare.context
-    assert "## GLOSARIO" in CHATGPT_REQUEST
+    assert "## GLOSARIO" in CONTEXT_REQUEST
 
 
 def test_dialog_saves_into_the_project():
