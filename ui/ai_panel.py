@@ -630,7 +630,12 @@ class AIOptionsPanel(QScrollArea):
         self.clean_settings = ActionCard("Motor de limpieza", "Modelo local y rendimiento", "chip")
         # Do not expose the old remote selector: it never had an implementation.
         self.clean_provider = self._combo(["Local (AI)"])
-        self.clean_model = self._combo(["MI-GAN · migan_pipeline_v2.onnx", "LaMa · lama.onnx"])
+        self.clean_model = self._combo([
+            "Automático · según el fondo", "MI-GAN · migan_pipeline_v2.onnx", "LaMa · lama.onnx",
+        ])
+        self.clean_model.setToolTip(
+            "Automático usa MI-GAN, más rápido, en fondos lisos y LaMa en texturas y degradados"
+        )
         self.clean_provider.currentTextChanged.connect(lambda: self.provider_changed.emit("clean", *self.clean_configuration()))
         self.clean_model.currentTextChanged.connect(lambda: self.provider_changed.emit("clean", *self.clean_configuration()))
         self.clean_provider.setParent(page)

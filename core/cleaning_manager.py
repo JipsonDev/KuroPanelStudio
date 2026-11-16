@@ -30,6 +30,12 @@ from core.performance_manager import (
 from core.psd_manager import load_source_image, state_signature
 
 
+
+def inpaint_model_name(model: str) -> str:
+    """Settings label («MI-GAN · file», «Automático · según el fondo») to engine name."""
+    name = str(model).lower().split(" · ", 1)[0].strip()
+    return {"mi-gan": "migan", "automático": "auto", "automatico": "auto"}.get(name, name)
+
 class CleaningManager:
     """Detect text with ``ocr.onnx`` and reconstruct with MI-GAN or LaMa.
 
@@ -130,10 +136,8 @@ class CleaningManager:
             self.unload_models()
 
     def set_inpaint_model(self, model: str) -> None:
-        name = str(model).lower().split(" · ", 1)[0]
-        if name in {"mi-gan", "migan"}:
-            name = "migan"
-        if name not in {"migan", "lama"}:
+        name = inpaint_model_name(model)
+        if name not in {"migan", "lama", "auto"}:
             raise ValueError(f"Modelo de limpieza desconocido: {model}")
         with self._session_lock:
             if name != self.inpaint_model:
@@ -266,7 +270,7 @@ class CleaningManager:
             if active and active[0] == "DmlExecutionProvider"
             else "CPU optimizada · núcleos físicos"
         )
-        model_name = "MI-GAN" if self.inpaint_model == "migan" else "LaMa"
+        model_name = {"migan": "MI-GAN", "lama": "LaMa"}.get(self.inpaint_model, "Automático")
         self.runtime_label = f"{model_name} · {self.runtime_label}"
         self.last_used = monotonic()
         return session
@@ -308,10 +312,10 @@ class CleaningManager:
         progress(32)
         if cancelled():
             return self.runtime_label
-        if self.inpaint_model == "migan":
-            self._get_migan_session()
-        else:
+        if self.inpaint_model == "lama":
             self._get_lama_session()
+        else:  # «auto» starts with the fast model; LaMa loads on its first textured hole
+            self._get_migan_session()
         progress(68)
         if cancelled():
             return self.runtime_label
@@ -598,12 +602,47 @@ class CleaningManager:
         )
         return cv2.bitwise_and(guard, selection)
 
+    # Around a flat hole (a balloon, a plain sky) both models give the same
+    # result and MI-GAN is several times faster; on texture, gradients or
+    # screentone LaMa rebuilds the pattern better.
+    FLAT_RING_SPREAD = 14.0
+
+    @classmethod
+    def _flat_surroundings(cls, rgb: np.ndarray, mask: np.ndarray) -> bool:
+        selected = (mask > 127).astype(np.uint8)
+        if not np.any(selected):
+            return True
+        ring = cv2.dilate(selected, np.ones((25, 25), np.uint8)).astype(bool) & ~selected.astype(bool)
+        pixels = rgb[ring]
+        if pixels.shape[0] < 32:
+            return False
+        # Spread of the 10th–90th percentiles per channel: robust to the few
+        # dark outline pixels a balloon border adds to the ring.
+        low, high = np.percentile(pixels, (10, 90), axis=0)
+        return float(np.max(high - low)) <= cls.FLAT_RING_SPREAD
+
+    def _model_for(self, rgb: np.ndarray, mask: np.ndarray) -> str:
+        if self.inpaint_model != "auto":
+            return self.inpaint_model
+        return "migan" if self._flat_surroundings(rgb, mask) else "lama"
+
     def _inpaint(self, rgb: np.ndarray, mask: np.ndarray) -> np.ndarray:
-        if self.inpaint_model == "migan":
+        if self._model_for(rgb, mask) == "migan":
             return self._migan(rgb, mask)
         return self._lama(rgb, mask)
 
     def _inpaint_many(self, jobs: list[tuple[np.ndarray, np.ndarray]]) -> list[np.ndarray]:
+        if self.inpaint_model == "auto":
+            choices = [self._model_for(image, mask) for image, mask in jobs]
+            results: list[np.ndarray | None] = [None] * len(jobs)
+            textured = [index for index, choice in enumerate(choices) if choice == "lama"]
+            for index, choice in enumerate(choices):
+                if choice == "migan":
+                    results[index] = self._migan(*jobs[index])
+            if textured:
+                for index, restored in zip(textured, self._lama_many([jobs[index] for index in textured])):
+                    results[index] = restored
+            return results
         if self.inpaint_model == "migan":
             # The exported pipeline crops around one mask per invocation. Its
             # dynamic batch axis is not a supported multi-image batch contract.

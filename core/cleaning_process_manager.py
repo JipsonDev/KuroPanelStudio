@@ -95,9 +95,9 @@ class CleaningProcessManager:
         self.last_used = monotonic()
 
     def set_inpaint_model(self, model: str) -> None:
-        name = str(model).lower().split(" · ", 1)[0]
-        name = "migan" if name == "mi-gan" else name
-        if name not in {"migan", "lama"}:
+        from core.cleaning_manager import inpaint_model_name
+        name = inpaint_model_name(model)
+        if name not in {"migan", "lama", "auto"}:
             raise ValueError(f"Modelo de limpieza desconocido: {model}")
         self.inpaint_model = name
 
