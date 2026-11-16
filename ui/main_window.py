@@ -12,14 +12,14 @@ from pathlib import Path
 
 import numpy as np
 
-from PySide6.QtCore import QFileSystemWatcher, QPoint, QThreadPool, QTimer, Qt
+from PySide6.QtCore import QFile, QFileSystemWatcher, QPoint, QThreadPool, QTimer, Qt
 from PySide6.QtGui import QAction, QGuiApplication
-from PySide6.QtWidgets import QApplication, QFileDialog, QDialog, QHBoxLayout, QMainWindow, QMessageBox, QProgressDialog, QScrollArea, QSplitter, QStackedWidget, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QApplication, QCheckBox, QFileDialog, QDialog, QHBoxLayout, QMainWindow, QMessageBox, QProgressDialog, QScrollArea, QSplitter, QStackedWidget, QVBoxLayout, QWidget
 
 from core.cleaning_process_manager import CleaningProcessManager
 from core.app_updater import ReleaseUpdater, UpdateInfo, check_available_update
 from core.app_version import APP_UPDATE_CHANNEL, APP_VERSION
-from core.balloon_classifier import BALLOON_KINDS, classify_balloon
+from core.balloon_classifier import BALLOON_KINDS, KIND_LOOK_KEYS, KIND_LOOKS, classify_balloon
 from core.credential_store import CredentialStore
 from core.detection_manager import DetectionManager
 from core.chapter_detection import detect_chapter
@@ -29,9 +29,10 @@ from core.image_manager import ImageManager
 from core.failure_messages import describe_failure
 from core.ocr_manager import OCR_PROVIDERS, OCRManager
 from core.project_io import load_project_bundle, page_key, save_project_bundle
-from core.psd_manager import is_psd
+from core.upload_export import safe_export_folder
+from core.psd_manager import is_psd, load_source_image
 from PIL import Image
-from core.chapter_font_size import chapter_font_size, unify_chapter_font_size
+from core.chapter_font_size import measure_chapter_font_size, unify_chapter_font_size
 from core.seam_balloons import SEAM_PARTNER_KEY, anchor_first, seam_pairs, stitched_file
 from core.project_manager import ProjectManager
 from core.psd_sync import file_signature, inspect_stable_source, reconcile_layer_states
@@ -525,6 +526,7 @@ class MainWindow(QMainWindow):
         self.topbar.action_requested.connect(self._handle_action)
         self.canvas_shell.welcome.action_requested.connect(self._handle_action)
         self.images_panel.page_selected.connect(self._set_page)
+        self.images_panel.page_remove_requested.connect(self.remove_page)
         self.canvas_shell.previous_button.clicked.connect(self.previous_page)
         self.canvas_shell.next_button.clicked.connect(self.next_page)
         self.topbar.export_format_changed.connect(self.inspector.format_choice.setCurrentText)
@@ -759,7 +761,7 @@ class MainWindow(QMainWindow):
 
     def _handle_action(self, action: str) -> None:
         if self.canvas_shell.strip_button.isChecked() and action not in {
-            "watermark", "toggle_focus", "save_strip", "save_all", "save_project",
+            "watermark", "toggle_focus", "save_strip", "save_all", "save_project", "save_upload",
         }:
             self._edit_strip_page(self.canvas_shell.strip_view.visible_page())
         if action == "toggle_focus":
@@ -875,6 +877,8 @@ class MainWindow(QMainWindow):
             self.save_all()
         elif action == "save_strip":
             self.save_strip()
+        elif action == "save_upload":
+            self.save_for_upload()
         elif action == "save_project":
             self.save_project()
         elif action == "open_project":
@@ -2216,12 +2220,10 @@ class MainWindow(QMainWindow):
                 )
                 return alias, family, str(path) if path else "", dict(entry.get("style", {}))
         fallback = {
-            "dialogue": ("Segoe UI", 400),
-            "shout": ("Arial", 900),
-            "caption": ("Segoe UI", 700),
+            "dialogue": "Segoe UI", "shout": "Arial", "thought": "Segoe UI",
+            "caption": "Segoe UI", "sfx": "Arial",
         }
-        family, weight = fallback.get(kind, fallback["dialogue"])
-        return "", family, "", {"font_weight": weight}
+        return "", fallback.get(kind, fallback["dialogue"]), "", {}
 
     def _set_kind_font(self, region: dict, kind: str, *, force: bool = False) -> None:
         style = region.get("style")
@@ -2231,13 +2233,19 @@ class MainWindow(QMainWindow):
             return
         alias, family, font_file, role_style = self._kind_font_defaults(kind)
         style.update({"font_family": family, "font_file": font_file})
-        for name in ("font_weight", "font_size", "italic"):
-            if name in role_style:
-                style[name] = role_style[name]
+        # The kind's own look (outline, case, colour), then the project's
+        # role for that kind, which always wins where it says something.
+        for name in KIND_LOOK_KEYS:
+            if name in DEFAULT_STYLE:
+                style[name] = DEFAULT_STYLE[name]
+        style.update(KIND_LOOKS.get(kind, {}))
+        style.update({name: value for name, value in role_style.items()
+                      if name not in {"font_family", "font_file"}})
         if force or region.get("balloon_font_from_kind") or style.get("balloon_shape", "auto") in {"", "auto"}:
             style["balloon_shape"] = {
-                "dialogue": "ellipse", "shout": "diamond", "caption": "rectangle",
-            }[kind]
+                "dialogue": "ellipse", "shout": "diamond", "thought": "ellipse",
+                "caption": "rectangle", "sfx": "rectangle",
+            }.get(kind, "ellipse")
         region["style"] = TypographyManager.normalized(style)
         if alias:
             region["font_role"] = alias
@@ -4231,24 +4239,50 @@ class MainWindow(QMainWindow):
             f"{self.active_font_profile}.",
         )
 
-    def unify_chapter_font_size(self) -> None:
-        """Give the chapter's dialogue one typical font size."""
+    def unify_chapter_font_size(self, automatic: bool = False) -> None:
+        """Give the chapter's dialogue one typical font size.
+
+        A spread sample of the dialogue is fitted in its balloon exactly as
+        the export does, in the background; the median becomes the limit.
+        """
+        pages = [(page, copy.deepcopy(self.page_regions.get(page_key(page), [])))
+                 for page in self.project.pages if page.path]
+        if not any(regions for _page, regions in pages):
+            if not automatic:
+                self._toast("Sin texto colocado", "Traduce o escribe el texto de las páginas primero.")
+            return
+        states = {page_key(page): copy.deepcopy(self._source_layer_states(page_key(page))) for page, _ in pages}
+
+        def load(page):
+            return load_source_image(page.path, states.get(page_key(page)))
+
+        def measure(progress, cancelled):
+            return measure_chapter_font_size(pages, load, None, cancelled,
+                                             lambda value: progress(value, "Midiendo los globos del capítulo"))
+
+        self._start_task(
+            measure, "Tamaño de letra del capítulo",
+            "Se midió el diálogo del capítulo en sus globos.",
+            lambda size: self._apply_chapter_font_size(size, automatic),
+            stage="Igualando el tamaño de letra del capítulo…",
+        )
+
+    def _apply_chapter_font_size(self, size: int | None, automatic: bool) -> None:
         pages = {page_key(page): self.page_regions.get(page_key(page), []) for page in self.project.pages}
-        size = chapter_font_size(pages)
         if size is None:
-            self._toast(
-                "Faltan globos con texto colocado",
-                "Recorre algunas páginas con el texto ya colocado y vuelve a intentarlo.",
-            )
+            if not automatic:
+                self._toast("Pocos globos de diálogo", "Hacen falta al menos 3 globos de diálogo con texto.")
             return
         changed = unify_chapter_font_size(pages, size)
         if not changed:
-            self._toast("Tamaño ya igualado", f"El diálogo del capítulo ya usa {size} pt como máximo.")
+            if not automatic:
+                self._toast("Tamaño ya igualado", f"El diálogo del capítulo ya usa {size} pt como máximo.")
             return
         for key, regions in pages.items():
             if regions:
                 self._refresh_page_text(key)
         if self._active_key():
+            self.regions = self.page_regions.get(self._active_key(), [])
             self._render_page_layers(self._active_key())
         self._record_history()
         self._toast(
@@ -4550,6 +4584,9 @@ class MainWindow(QMainWindow):
             self.regions = self.page_regions[self._active_key()]
             self._render_page_layers(self._active_key())
         self._record_history()
+        if payload.get("pages"):
+            # After the progress bar of the translation has closed.
+            QTimer.singleShot(0, lambda: self.unify_chapter_font_size(automatic=True))
 
     def _recent_translation_context(self, limit: int = 5000) -> str:
         """Send a bounded sample of prior dialogue for chapter consistency."""
@@ -5122,6 +5159,156 @@ class MainWindow(QMainWindow):
         self.images_panel.list.setCurrentRow(index)
         self._set_page(index)
 
+    def _export_folder(self) -> Path:
+        """Where exports go by default: the open project's or chapter's folder.
+
+        The dialogs used to open without a folder and land in the program's
+        own directory. The last folder chosen for this chapter is reused.
+        """
+        last = getattr(self, "_last_export_folder", None)
+        if last and last[0] == self._export_owner() and Path(last[1]).is_dir():
+            return Path(last[1])
+        if self.project_file is not None and Path(self.project_file).parent.is_dir():
+            return Path(self.project_file).parent
+        for page in self.project.pages:
+            if page.path and Path(page.path).parent.is_dir():
+                return Path(page.path).parent
+        return Path.home()
+
+    def _export_owner(self) -> str:
+        if self.project_file is not None:
+            return str(self.project_file)
+        return str(self.project.pages[0].path.parent) if self.project.pages and self.project.pages[0].path else ""
+
+    def _remember_export_folder(self, folder: Path) -> None:
+        self._last_export_folder = (self._export_owner(), str(folder))
+
+    def remove_page(self, index: int) -> None:
+        """Take one image out of the chapter, optionally sending its file to the Recycle Bin."""
+        if self.current_task is not None:
+            self._toast("Proceso en curso", "Espera a que termine la tarea antes de quitar páginas.")
+            return
+        if not 0 <= index < len(self.project.pages):
+            return
+        page = self.project.pages[index]
+        box = QMessageBox(self)
+        box.setIcon(QMessageBox.Question)
+        box.setWindowTitle("Quitar imagen del capítulo")
+        box.setText(f"¿Quitar «{page.name}» del capítulo?")
+        box.setInformativeText(
+            "Se quitan sus cajas, textos y limpieza del proyecto. Esto no se puede deshacer. "
+            "La imagen original se conserva salvo que marques la casilla."
+        )
+        trash = QCheckBox("Enviar también el archivo a la Papelera de reciclaje")
+        box.setCheckBox(trash)
+        remove_button = box.addButton("Quitar", QMessageBox.DestructiveRole)
+        box.addButton("Cancelar", QMessageBox.RejectRole)
+        box.exec()
+        if box.clickedButton() is not remove_button:
+            return
+        self.cancel_clean_mask_preview(silent=True)
+        if self.canvas_shell.strip_button.isChecked():
+            self.canvas_shell.set_strip_mode(False)
+            self.canvas_shell.strip_view.dispose()
+        key = page_key(page)
+        for store in (self.page_regions, self.clean_results, self.page_texts, self.page_styles,
+                      self._page_view_states, self._page_failures):
+            store.pop(key, None)
+        for name in ("enabled_pages",):
+            values = self.watermark_settings.get(name)
+            if isinstance(values, list) and page.name in values:
+                values.remove(page.name)
+        positions = self.watermark_settings.get("page_positions")
+        if isinstance(positions, dict):
+            positions.pop(page.name, None)
+        del self.project.pages[index]
+        trashed = None
+        if trash.isChecked() and page.path:
+            trashed = QFile.moveToTrash(str(page.path))
+            trashed = bool(trashed[0] if isinstance(trashed, tuple) else trashed)
+        self._displayed_page_path = None
+        self.images_panel.refresh_pages(self.project.pages)
+        if not self.project.pages:
+            self.project.active_index = 0
+            self.regions = []
+            self._set_empty_canvas()
+        else:
+            new_index = min(index, len(self.project.pages) - 1)
+            self.project.active_index = new_index
+            self._refresh_page_statuses()
+            self.images_panel.list.blockSignals(True)
+            self.images_panel.list.setCurrentRow(new_index)
+            self.images_panel.list.blockSignals(False)
+            self._set_page(new_index)
+        self.history.reset(self._snapshot())
+        self._dirty = True
+        self._update_history_actions()
+        if trash.isChecked() and trashed is False:
+            self._toast("Página quitada", f"«{page.name}» salió del capítulo, pero no se pudo enviar a la Papelera.")
+        else:
+            self._toast("Página quitada", f"«{page.name}» salió del capítulo"
+                        + (" y está en la Papelera." if trashed else "; el archivo original sigue en su carpeta."))
+
+    def save_for_upload(self) -> None:
+        """Export the chapter as numbered slices of one height, plus a .zip."""
+        from ui.upload_export_dialog import UploadExportDialog
+        if not self.project.pages:
+            self._toast("Sin capítulo", "Abre un capítulo antes de exportar.")
+            return
+        if self.current_task is not None:
+            self._toast("Proceso en curso", "Espera a que termine el proceso antes de exportar.")
+            return
+        base = self._export_folder()
+        chapter = (self.project_file.stem if self.project_file is not None
+                   else (self.project.pages[0].path.parent.name if self.project.pages[0].path else "capitulo"))
+        dialog = UploadExportDialog(self.settings.data.get("upload", {}), base / f"{chapter} - subir", self)
+        if dialog.exec() != QDialog.Accepted:
+            return
+        self.settings.data["upload"] = dialog.settings()
+        self.settings.save()
+        options, destination = dialog.options(), dialog.destination()
+        self._remember_export_folder(destination.parent)
+        pages = [page for page in self.project.pages if page.path]
+        regions_by_page = copy.deepcopy(self.page_regions)
+        clean_by_page = dict(self.clean_results)
+        styles_by_page = copy.deepcopy(self.page_styles)
+        watermark_plan = chapter_watermark_settings([
+            dict(name=page.name, width=page.width, height=page.height,
+                 regions=regions_by_page.get(page_key(page), [])) for page in pages
+        ], copy.deepcopy(self.watermark_settings))
+
+        def export(progress, cancelled):
+            from core.export_manager import compose_page
+            from core.upload_export import export_for_upload
+
+            def composed():
+                for index, page in enumerate(pages, 1):
+                    progress(int((index - 1) * 95 / len(pages)), f"Página {index} de {len(pages)} · composición",
+                             page_key(page))
+                    key = page_key(page)
+                    styles = copy.deepcopy(styles_by_page.get(key, {}))
+                    if page.name in watermark_plan:
+                        styles["watermark"] = watermark_plan[page.name]
+                    regions = regions_by_page.get(key, [])
+                    text_rows = [(int(region["y"]), int(region["y"]) + int(region["height"]))
+                                 for region in regions if bool(region.get("visible", True))]
+                    yield compose_page(page, regions, clean_by_page.get(key), styles), text_rows
+
+            files = export_for_upload(composed(), destination, options, cancelled=cancelled, total=len(pages))
+            return [str(path) for path in files]
+
+        def finished(files):
+            images = [name for name in files or [] if not name.endswith(".zip")]
+            archive = next((name for name in files or [] if name.endswith(".zip")), "")
+            self._toast(
+                "Listo para subir",
+                f"{len(images)} imagen(es) en {destination.name}" + (f" y {Path(archive).name}" if archive else "") + ".",
+            )
+
+        self._start_task(export, "Exportación para subir",
+                         f"Se exportarán {len(pages)} páginas cortadas a {options.slice_height} px.",
+                         finished, stage="Preparando el capítulo para subir…")
+
     def save_strip(self) -> None:
         if not self.project.pages:
             self._toast("Sin capítulo", "Abre un capítulo antes de exportar.")
@@ -5129,13 +5316,13 @@ class MainWindow(QMainWindow):
         if self.current_task is not None:
             self._toast("Proceso en curso", "Espera a que termine el proceso antes de exportar la tira.")
             return
-        page = self.project.active_page
-        default = (page.path.parent if page.path else Path.cwd()) / "capitulo-tira.png"
+        default = self._export_folder() / "capitulo-tira.png"
         filename, _ = QFileDialog.getSaveFileName(self, "Exportar capítulo como tira", str(default), "PNG (*.png)")
         if not filename:
             return
         source = self._strip_source(include_watermarks=True)
         destination = Path(filename).with_suffix(".png")
+        self._remember_export_folder(destination.parent)
         def export(progress, cancelled):
             from core.chapter_strip import export_strip_png
             return str(export_strip_png(destination, source, progress, cancelled))
@@ -5149,13 +5336,15 @@ class MainWindow(QMainWindow):
         page = self.project.active_page
         format_name = self.inspector.export_format()
         extension = ".jpg" if format_name == "JPG" else f".{format_name.lower()}"
-        default_folder = page.path.parent / "Exportado" if page.path else Path.cwd()
-        default_path = default_folder / f"{Path(page.name).stem}{extension}"
+        default_path = self._export_folder() / f"{Path(page.name).stem}{extension}"
+        if page.path and default_path.resolve() == Path(page.path).resolve():
+            default_path = default_path.with_name(f"{default_path.stem}_final{extension}")
         filters = {"PNG": "PNG (*.png)", "JPG": "JPEG (*.jpg *.jpeg)", "WEBP": "WebP (*.webp)", "PSD": "Photoshop PSD (*.psd)"}
         filename, _ = QFileDialog.getSaveFileName(self, "Exportar página final", str(default_path), filters.get(format_name, "Todos (*.*)"))
         if not filename:
             return
         destination = Path(filename).with_suffix(extension)
+        self._remember_export_folder(destination.parent)
         key = page_key(page)
         regions = copy.deepcopy(self.page_regions.get(key, []))
         clean_result = self.clean_results.get(key)
@@ -5183,12 +5372,16 @@ class MainWindow(QMainWindow):
         if not self.project.pages:
             self._toast("Sin capítulo", "Abre un capítulo antes de exportar.")
             return
-        folder = QFileDialog.getExistingDirectory(self, "Directorio para exportar el capítulo")
+        folder = QFileDialog.getExistingDirectory(
+            self, "Directorio para exportar el capítulo", str(self._export_folder()),
+        )
         if not folder:
             return
+        self._remember_export_folder(Path(folder))
         format_name = self.inspector.export_format()
         extension = ".jpg" if format_name == "JPG" else f".{format_name.lower()}"
         pages = list(self.project.pages)
+        folder = str(safe_export_folder(Path(folder), pages, extension))
         active_index = self.project.active_index
         regions_by_page = copy.deepcopy(self.page_regions)
         clean_by_page = dict(self.clean_results)

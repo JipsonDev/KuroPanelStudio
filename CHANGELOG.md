@@ -18,7 +18,16 @@ Comprobado con las tiras del capítulo 185.
 
 **Typeo**
 - Las líneas ya no terminan en «de», «la», «con», «que»…, se evita una palabra corta sola en medio del globo y se prefiere cortar donde termina una frase.
-- «Igualar tamaño de letra del capítulo» (panel de traducción) usa en todo el diálogo el tamaño habitual del capítulo; los globos donde no cabe siguen reduciéndolo.
+- El tamaño de letra del diálogo se iguala solo al terminar de traducir el capítulo: se mide una muestra de globos como en la exportación y la mediana pasa a ser el máximo. El botón «Igualar tamaño de letra del capítulo» hace lo mismo cuando quieras; los globos donde no cabe el texto siguen reduciéndolo.
+- Estilo según el tipo de caja: grito (negrita y mayúsculas), pensamiento (cursiva; reconoce las nubes), narración (cuadro) y SFX (relleno blanco con doble contorno; reconoce las letras de color con borde blanco sobre el dibujo). Si el proyecto tiene un rol con ese nombre («Gritos», «Pensamiento», «Narrador», «SFX»), se usa su fuente y estilo. En el capítulo 185 los 9 SFX encontrados son correctos.
+
+**Limpieza**
+- Nuevo modelo «Automático · según el fondo» (predeterminado): MI-GAN, más rápido, en fondos lisos y LaMa en texturas y degradados. En el capítulo 185, 23 de 26 globos van con MI-GAN y los SFX sobre el dibujo con LaMa.
+
+**Exportar y capítulo**
+- Exportar → «Listo para subir (cortado y .zip)»: une el capítulo y lo corta a una altura (2000 px por defecto), moviendo cada corte a una fila lisa cercana y nunca por una caja de texto; nombres 001, 002…, JPG/WEBP/PNG y un .zip. En el capítulo 185: 73 imágenes y ningún corte por texto.
+- Las exportaciones se abren en la carpeta del proyecto o del capítulo (antes, en la del programa) y recuerdan la última carpeta. Exportar el capítulo nunca pisa las imágenes originales: si coincidirían, se guarda en «Exportado».
+- Quitar una imagen del capítulo: clic derecho en la miniatura → «Quitar del capítulo…» o tecla Supr. El archivo se conserva salvo que elijas enviarlo a la Papelera.
 
 ## 0.2.26 — motivo real del rechazo y lista de modelos que se conserva
 

@@ -7,5 +7,9 @@
 - Se detectan más narraciones, globos con picos y SFX.
 - Importa el glosario y el contexto de cada obra desde un .txt, con el prompt para obtenerlo incluido.
 - Saltos de línea más naturales y botón para igualar el tamaño de letra del capítulo.
+- El tamaño de letra del capítulo se iguala solo al traducir, y cada tipo de caja (grito, pensamiento, narración, SFX) tiene su estilo.
+- Limpieza automática: MI-GAN en fondos lisos y LaMa en texturas.
+- Exportar «Listo para subir»: imágenes numeradas a la misma altura, sin cortar textos, y un .zip.
+- Las exportaciones van a la carpeta del proyecto y se puede quitar una imagen del capítulo.
 
 Descarga `KuroPanelStudio-Setup-@VERSION@-Windows-x64.exe` y verifica `SHA256SUMS.txt`.

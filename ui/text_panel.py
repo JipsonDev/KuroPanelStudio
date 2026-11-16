@@ -64,7 +64,9 @@ class TextOptionsPanel(QScrollArea):
         self.balloon_kind.addItem("Automático", "auto")
         self.balloon_kind.addItem("Diálogo · ovalado", "dialogue")
         self.balloon_kind.addItem("Grito · puntiagudo", "shout")
-        self.balloon_kind.addItem("Cuadro · rectangular", "caption")
+        self.balloon_kind.addItem("Pensamiento · nube", "thought")
+        self.balloon_kind.addItem("Cuadro · narración", "caption")
+        self.balloon_kind.addItem("SFX · onomatopeya", "sfx")
         self.balloon_kind.setProperty("kuro_i18n_choices", True)
         self.balloon_kind.setToolTip("Elige el tipo de esta caja. Automático analiza el contorno; una elección manual tiene prioridad.")
         self.balloon_kind.currentIndexChanged.connect(self._emit_balloon_kind)
@@ -570,7 +572,8 @@ class TextOptionsPanel(QScrollArea):
     def set_balloon_kind(self, kind: str, manual: bool) -> None:
         self._loading = True
         self._set_data(self.balloon_kind, kind if manual else "auto")
-        names = {"dialogue": "Diálogo", "shout": "Grito", "caption": "Cuadro"}
+        names = {"dialogue": "Diálogo", "shout": "Grito", "thought": "Pensamiento",
+                 "caption": "Cuadro", "sfx": "SFX"}
         self.balloon_kind_hint.setText(
             "Usa la fuente asignada a ese tipo en el proyecto."
             if manual else f"Detectado: {names.get(kind, 'Diálogo')} · puedes corregirlo aquí."

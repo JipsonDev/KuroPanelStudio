@@ -34,3 +34,27 @@ def test_spanish_lines_do_not_end_on_articles_or_prepositions():
     assert not any(line.split()[-1] in {"DE", "CON", "LA", "QUE"} for line in lines[:-1])
     lines = linguistic_wrap("ESPERA. ¿DE VERDAD VAS A IR SOLO A LA MONTAÑA DEL NORTE?", [150, 220, 240, 220, 150], measure, "es")
     assert lines[0] == "ESPERA."
+
+
+def test_chapter_size_is_measured_in_the_balloons(monkeypatch):
+    from PIL import Image, ImageDraw, ImageFont
+    import core.export_manager as export
+    # Scalable font everywhere (the CI images may lack Windows fonts).
+    monkeypatch.setattr(export, "_font", lambda size, *_args: ImageFont.load_default(size=max(1, size)))
+    from core.chapter_font_size import measure_chapter_font_size
+    image = Image.new("RGB", (900, 1600), (90, 100, 110))
+    draw = ImageDraw.Draw(image)
+    regions = []
+    texts = ["HOLA, ¿CÓMO ESTÁS?", "NO PUEDO CREER QUE ESTÉS AQUÍ DE NUEVO", "¡CORRE!",
+             "ESA ESPADA ES DEMASIADO PESADA PARA TI"]
+    for index, text in enumerate(texts):
+        top = 50 + index * 380
+        draw.ellipse((200, top, 680, top + 330), fill="white", outline="black", width=4)
+        regions.append({"x": 290, "y": top + 90, "width": 300, "height": 150, "applied_text": text,
+                        "text": text, "style": {"font_size": 150, "auto_fit": True, "balloon_fit": True}})
+    size = measure_chapter_font_size([("page", regions)], lambda _page: image)
+    assert size is not None and 6 < size < 150
+    # A capped box is measured from the size chosen before unifying.
+    unify_chapter_font_size({"page": regions}, 12)
+    assert regions[0]["style"]["font_size"] == 12
+    assert measure_chapter_font_size([("page", regions)], lambda _page: image) == size

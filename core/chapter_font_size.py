@@ -9,12 +9,17 @@ smaller size to fit still shrink; no box becomes larger than it was asked to be.
 from __future__ import annotations
 
 from statistics import median
+from typing import Callable
+
+MEASURE_SAMPLE = 40
 
 
 def _dialogue(region: dict) -> bool:
     style = region.get("style") if isinstance(region.get("style"), dict) else {}
     text = str(region.get("applied_text") or region.get("translation") or region.get("text") or "")
-    return bool(text.strip()) and not style.get("sfx_enabled", False) and style.get("auto_fit", True)
+    # Shouts, captions and SFX keep their own sizes; only speech is unified.
+    return (bool(text.strip()) and not style.get("sfx_enabled", False) and style.get("auto_fit", True)
+            and str(region.get("balloon_kind") or "dialogue") in {"dialogue", "thought"})
 
 
 def fitted_size(region: dict) -> int | None:
@@ -47,10 +52,43 @@ def unify_chapter_font_size(pages: dict[str, list[dict]], size: int) -> int:
             current = int(style.get("font_size", size) or size)
             if current <= size and style.get("chapter_font_size") == size:
                 continue
-            style["font_size"] = min(current, size) if style.get("chapter_font_size") is None else size
+            # Remember the size chosen before the first unification, so a
+            # later measurement starts from it instead of the capped value.
+            style.setdefault("font_size_requested", current)
+            style["font_size"] = min(int(style["font_size_requested"]), size)
             style["chapter_font_size"] = size
             style["auto_fit"] = True
             region["style"] = style
             region.pop("balloon_layout_snapshot", None)
             changed += 1
     return changed
+
+
+def measure_chapter_font_size(pages: list[tuple[object, list[dict]]], load_image: Callable,
+                              default_style: dict | None = None, cancelled: Callable[[], bool] = lambda: False,
+                              progress: Callable[[int], None] = lambda _value: None,
+                              sample: int = MEASURE_SAMPLE) -> int | None:
+    """Fit a spread sample of the chapter's dialogue, as exported, and take the median.
+
+    ``pages`` holds (page, regions) in reading order; ``load_image(page)``
+    returns its image. Up to ``sample`` boxes are measured, evenly spread.
+    """
+    from core.export_manager import fit_region_in_balloon
+    boxes = [(page, region) for page, regions in pages for region in regions if _dialogue(region)]
+    if len(boxes) > sample:
+        step = len(boxes) / sample
+        boxes = [boxes[int(index * step)] for index in range(sample)]
+    sizes, image, image_page = [], None, None
+    for number, (page, region) in enumerate(boxes, 1):
+        if cancelled():
+            return None
+        if page is not image_page:
+            image, image_page = load_image(page), page
+        style = dict(region.get("style") or {})
+        if "font_size_requested" in style:
+            style["font_size"] = style["font_size_requested"]
+        layout = fit_region_in_balloon(image, {**region, "style": style}, default_style)
+        if layout is not None:
+            sizes.append(int(layout["font_size"]))
+        progress(int(number * 100 / max(1, len(boxes))))
+    return int(round(median(sizes))) if len(sizes) >= 3 else None

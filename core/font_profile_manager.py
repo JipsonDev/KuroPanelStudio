@@ -167,6 +167,8 @@ class FontProfileManager:
         names = {
             "dialogue": {"dialogo", "dialogue"},
             "shout": {"grito", "gritos", "shout", "shouts"},
+            "thought": {"pensamiento", "pensamientos", "thought", "thoughts"},
+            "sfx": {"sfx", "onomatopeya", "onomatopeyas", "efecto", "efectos", "efectos de sonido"},
             "caption": {"cuadro", "cuadros", "narracion", "narrador", "caption", "narration", "narrator"},
         }.get(kind, set())
         for alias, entry in self.font_entries(project_type, project).items():

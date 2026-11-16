@@ -516,7 +516,7 @@ class TextRegionItem(QGraphicsRectItem):
         current = str(self.region.get("balloon_kind", "dialogue")) if self.region.get("balloon_kind_manual") else "auto"
         for kind, label in (
             ("auto", "Automático"), ("dialogue", "Diálogo"),
-            ("shout", "Grito"), ("caption", "Cuadro"),
+            ("shout", "Grito"), ("thought", "Pensamiento"), ("caption", "Cuadro"), ("sfx", "SFX"),
         ):
             action = kind_menu.addAction(translate_text(label, language))
             action.setCheckable(True)

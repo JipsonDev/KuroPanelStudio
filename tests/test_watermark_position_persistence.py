@@ -127,6 +127,8 @@ def test_chapter_export_keeps_exact_dragged_canvas_positions(tmp_path, monkeypat
     monkeypatch.setattr("ui.main_window.QFileDialog.getExistingDirectory", lambda *_: str(output))
     # Replace only task scheduling, not chapter planning or actual image export.
     window._start_task = lambda work, *_: work(lambda *_: None, lambda: False)
+    window._export_folder = lambda: tmp_path
+    window._remember_export_folder = lambda _folder: None
 
     MainWindow.save_all(window)
 
