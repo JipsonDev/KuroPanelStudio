@@ -12,9 +12,9 @@ from pathlib import Path
 
 import numpy as np
 
-from PySide6.QtCore import QFileSystemWatcher, QPoint, QThreadPool, QTimer, Qt
+from PySide6.QtCore import QFile, QFileSystemWatcher, QPoint, QThreadPool, QTimer, Qt
 from PySide6.QtGui import QAction, QGuiApplication
-from PySide6.QtWidgets import QApplication, QFileDialog, QDialog, QHBoxLayout, QMainWindow, QMessageBox, QProgressDialog, QScrollArea, QSplitter, QStackedWidget, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QApplication, QCheckBox, QFileDialog, QDialog, QHBoxLayout, QMainWindow, QMessageBox, QProgressDialog, QScrollArea, QSplitter, QStackedWidget, QVBoxLayout, QWidget
 
 from core.cleaning_process_manager import CleaningProcessManager
 from core.app_updater import ReleaseUpdater, UpdateInfo, check_available_update
@@ -526,6 +526,7 @@ class MainWindow(QMainWindow):
         self.topbar.action_requested.connect(self._handle_action)
         self.canvas_shell.welcome.action_requested.connect(self._handle_action)
         self.images_panel.page_selected.connect(self._set_page)
+        self.images_panel.page_remove_requested.connect(self.remove_page)
         self.canvas_shell.previous_button.clicked.connect(self.previous_page)
         self.canvas_shell.next_button.clicked.connect(self.next_page)
         self.topbar.export_format_changed.connect(self.inspector.format_choice.setCurrentText)
@@ -5181,6 +5182,72 @@ class MainWindow(QMainWindow):
 
     def _remember_export_folder(self, folder: Path) -> None:
         self._last_export_folder = (self._export_owner(), str(folder))
+
+    def remove_page(self, index: int) -> None:
+        """Take one image out of the chapter, optionally sending its file to the Recycle Bin."""
+        if self.current_task is not None:
+            self._toast("Proceso en curso", "Espera a que termine la tarea antes de quitar páginas.")
+            return
+        if not 0 <= index < len(self.project.pages):
+            return
+        page = self.project.pages[index]
+        box = QMessageBox(self)
+        box.setIcon(QMessageBox.Question)
+        box.setWindowTitle("Quitar imagen del capítulo")
+        box.setText(f"¿Quitar «{page.name}» del capítulo?")
+        box.setInformativeText(
+            "Se quitan sus cajas, textos y limpieza del proyecto. Esto no se puede deshacer. "
+            "La imagen original se conserva salvo que marques la casilla."
+        )
+        trash = QCheckBox("Enviar también el archivo a la Papelera de reciclaje")
+        box.setCheckBox(trash)
+        remove_button = box.addButton("Quitar", QMessageBox.DestructiveRole)
+        box.addButton("Cancelar", QMessageBox.RejectRole)
+        box.exec()
+        if box.clickedButton() is not remove_button:
+            return
+        self.cancel_clean_mask_preview(silent=True)
+        if self.canvas_shell.strip_button.isChecked():
+            self.canvas_shell.set_strip_mode(False)
+            self.canvas_shell.strip_view.dispose()
+        key = page_key(page)
+        for store in (self.page_regions, self.clean_results, self.page_texts, self.page_styles,
+                      self._page_view_states, self._page_failures):
+            store.pop(key, None)
+        for name in ("enabled_pages",):
+            values = self.watermark_settings.get(name)
+            if isinstance(values, list) and page.name in values:
+                values.remove(page.name)
+        positions = self.watermark_settings.get("page_positions")
+        if isinstance(positions, dict):
+            positions.pop(page.name, None)
+        del self.project.pages[index]
+        trashed = None
+        if trash.isChecked() and page.path:
+            trashed = QFile.moveToTrash(str(page.path))
+            trashed = bool(trashed[0] if isinstance(trashed, tuple) else trashed)
+        self._displayed_page_path = None
+        self.images_panel.refresh_pages(self.project.pages)
+        if not self.project.pages:
+            self.project.active_index = 0
+            self.regions = []
+            self._set_empty_canvas()
+        else:
+            new_index = min(index, len(self.project.pages) - 1)
+            self.project.active_index = new_index
+            self._refresh_page_statuses()
+            self.images_panel.list.blockSignals(True)
+            self.images_panel.list.setCurrentRow(new_index)
+            self.images_panel.list.blockSignals(False)
+            self._set_page(new_index)
+        self.history.reset(self._snapshot())
+        self._dirty = True
+        self._update_history_actions()
+        if trash.isChecked() and trashed is False:
+            self._toast("Página quitada", f"«{page.name}» salió del capítulo, pero no se pudo enviar a la Papelera.")
+        else:
+            self._toast("Página quitada", f"«{page.name}» salió del capítulo"
+                        + (" y está en la Papelera." if trashed else "; el archivo original sigue en su carpeta."))
 
     def save_for_upload(self) -> None:
         """Export the chapter as numbered slices of one height, plus a .zip."""

@@ -17,6 +17,7 @@ from ui.widgets.icons import icon
 class ProjectImageList(QListWidget):
     folder_dropped = Signal(str)
     viewport_resized = Signal()
+    delete_pressed = Signal()
 
     def __init__(self) -> None:
         super().__init__()
@@ -30,6 +31,13 @@ class ProjectImageList(QListWidget):
     def resizeEvent(self, event) -> None:
         super().resizeEvent(event)
         self.viewport_resized.emit()
+
+    def keyPressEvent(self, event) -> None:
+        if event.key() == Qt.Key_Delete and self.currentRow() >= 0:
+            self.delete_pressed.emit()
+            event.accept()
+            return
+        super().keyPressEvent(event)
 
     def dragEnterEvent(self, event) -> None:
         if event.mimeData().hasUrls():
@@ -210,6 +218,7 @@ class ImageListItem(QWidget):
 
 class ImagesPanel(QFrame):
     page_selected = Signal(int)
+    page_remove_requested = Signal(int)
     folder_dropped = Signal(str)
     thumbnail_range_requested = Signal(int, int)
     thumbnail_decoded = Signal(int, int, object)
@@ -289,6 +298,9 @@ class ImagesPanel(QFrame):
         self.list.setDragDropMode(QAbstractItemView.NoDragDrop)
         self.list.setContextMenuPolicy(Qt.CustomContextMenu)
         self.list.customContextMenuRequested.connect(self._show_menu)
+        self.list.delete_pressed.connect(
+            lambda: self.page_remove_requested.emit(self._display_to_source[self.list.currentRow()])
+        )
         self.list.currentRowChanged.connect(
             lambda row: self.page_selected.emit(self._display_to_source[row]
                                               if 0 <= row < len(self._display_to_source) else -1)
@@ -485,6 +497,9 @@ class ImagesPanel(QFrame):
         widget = self.list.itemWidget(self.list.item(row))
         menu = QMenu(self)
         menu.addAction("Abrir página", lambda: self.list.setCurrentRow(index))
+        menu.addSeparator()
+        menu.addAction(icon("trash", "#FF7A7A"), "Quitar del capítulo…  (Supr)",
+                       lambda: self.page_remove_requested.emit(index))
         if widget is not None:
             menu.exec(widget.mapToGlobal(widget.rect().bottomRight()))
 
