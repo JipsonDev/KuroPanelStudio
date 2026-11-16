@@ -291,6 +291,66 @@ def _draw_sfx_text(image: Image.Image, region: dict, style: dict, text: str, *, 
         _paste_with_blend(image, layer, position, mode)
 
 
+def fit_region_in_balloon(image: Image.Image, region: dict, default_style: dict | None = None) -> dict | None:
+    """Fit a box's applied text in its balloon as the export would, without drawing.
+
+    Returns the balloon layout (``font_size`` in points) or None when the box
+    is not balloon-fitted dialogue or the text cannot fit.
+    """
+    text = str(region.get("applied_text", "")).strip()
+    style = TypographyManager.normalized({**dict(default_style or {}), **dict(region.get("style", {}))})
+    if not text or style.get("sfx_enabled", False) or not style.get("balloon_fit", False) \
+            or style.get("vertical_text", False):
+        return None
+    if style.get("text_case") == "upper":
+        text = text.upper()
+    elif style.get("text_case") == "lower":
+        text = text.lower()
+    x, y = int(region["x"]), int(region["y"])
+    width, height = max(1, int(region["width"])), max(1, int(region["height"]))
+    draw = ImageDraw.Draw(image)
+    requested = int(style.get("font_size", min(52, max(12, height // 3))))
+    weight, italic = int(style.get("font_weight", 400)), bool(style.get("italic", False))
+    stroke_width = max(0, int(style.get("stroke_width", 0)))
+    stroke2 = max(0, int(style.get("stroke2_width", 0))) if style.get("stroke2_enabled", False) else 0
+    render_stroke = max(stroke_width, stroke_width + stroke2 if stroke2 else 0)
+    spacing = max(-10, int(style.get("line_spacing", 3)))
+    scale_x = max(0.5, min(2.0, int(style.get("scale_x", 100)) / 100.0))
+    family = str(style.get("font_family", "Segoe UI"))
+    fonts: dict[int, object] = {}
+
+    def font_for_size(size: int):
+        if size not in fonts:
+            fonts[size] = _font(max(1, int(math.floor(size * 96.0 / 72.0 + .5))),
+                                family, style.get("font_file"), weight, italic)
+        return fonts[size]
+
+    padding = effective_balloon_padding(width, height, int(style.get("balloon_padding", 10)), render_stroke)
+    search_x, search_y, search_width, search_height = balloon_search_rect(image.width, image.height, (x, y, width, height))
+    search_rgb = np.asarray(image.crop((
+        search_x, search_y, search_x + search_width, search_y + search_height,
+    )).convert("RGB"))
+    _rect, mask = text_layout_geometry(
+        search_rgb, (x - search_x, y - search_y, width, height), padding,
+        bool(region.get("typeset_box_manual", False)),
+        page_edge_sides(image.width, image.height, (search_x, search_y, search_width, search_height)),
+    )
+    layout = fit_balanced_text(
+        text, mask, requested, 6, bool(style.get("auto_fit", False) or style.get("fit_once", False)),
+        lambda size: max(1, draw.textbbox((0, 0), "Ag", font=font_for_size(size), stroke_width=render_stroke)[3]
+                         - draw.textbbox((0, 0), "Ag", font=font_for_size(size), stroke_width=render_stroke)[1] + spacing),
+        lambda size, value: draw.textlength(value, font=font_for_size(size)) * scale_x,
+        language=str(style.get("language", "auto")),
+        hyphenate=bool(style.get("hyphenation", True)),
+        orphan_control=bool(style.get("orphan_control", True)),
+        hanging_punctuation=bool(style.get("hanging_punctuation", True)),
+        max_horizontal_compression=int(style.get("max_horizontal_compression", 12)),
+        auto_scale=bool(style.get("auto_scale", True)),
+        shape_type=str(style.get("balloon_shape", "auto")), padding=padding,
+    )
+    return None if layout["overflow"] else layout
+
+
 def _draw_region_text(image: Image.Image, region: dict, default_style: dict, *, layer_sink=None) -> None:
     text = str(region.get("applied_text", "")).strip()
     if not text:

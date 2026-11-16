@@ -29,9 +29,9 @@ from core.image_manager import ImageManager
 from core.failure_messages import describe_failure
 from core.ocr_manager import OCR_PROVIDERS, OCRManager
 from core.project_io import load_project_bundle, page_key, save_project_bundle
-from core.psd_manager import is_psd
+from core.psd_manager import is_psd, load_source_image
 from PIL import Image
-from core.chapter_font_size import chapter_font_size, unify_chapter_font_size
+from core.chapter_font_size import measure_chapter_font_size, unify_chapter_font_size
 from core.seam_balloons import SEAM_PARTNER_KEY, anchor_first, seam_pairs, stitched_file
 from core.project_manager import ProjectManager
 from core.psd_sync import file_signature, inspect_stable_source, reconcile_layer_states
@@ -4235,24 +4235,50 @@ class MainWindow(QMainWindow):
             f"{self.active_font_profile}.",
         )
 
-    def unify_chapter_font_size(self) -> None:
-        """Give the chapter's dialogue one typical font size."""
+    def unify_chapter_font_size(self, automatic: bool = False) -> None:
+        """Give the chapter's dialogue one typical font size.
+
+        A spread sample of the dialogue is fitted in its balloon exactly as
+        the export does, in the background; the median becomes the limit.
+        """
+        pages = [(page, copy.deepcopy(self.page_regions.get(page_key(page), [])))
+                 for page in self.project.pages if page.path]
+        if not any(regions for _page, regions in pages):
+            if not automatic:
+                self._toast("Sin texto colocado", "Traduce o escribe el texto de las páginas primero.")
+            return
+        states = {page_key(page): copy.deepcopy(self._source_layer_states(page_key(page))) for page, _ in pages}
+
+        def load(page):
+            return load_source_image(page.path, states.get(page_key(page)))
+
+        def measure(progress, cancelled):
+            return measure_chapter_font_size(pages, load, None, cancelled,
+                                             lambda value: progress(value, "Midiendo los globos del capítulo"))
+
+        self._start_task(
+            measure, "Tamaño de letra del capítulo",
+            "Se midió el diálogo del capítulo en sus globos.",
+            lambda size: self._apply_chapter_font_size(size, automatic),
+            stage="Igualando el tamaño de letra del capítulo…",
+        )
+
+    def _apply_chapter_font_size(self, size: int | None, automatic: bool) -> None:
         pages = {page_key(page): self.page_regions.get(page_key(page), []) for page in self.project.pages}
-        size = chapter_font_size(pages)
         if size is None:
-            self._toast(
-                "Faltan globos con texto colocado",
-                "Recorre algunas páginas con el texto ya colocado y vuelve a intentarlo.",
-            )
+            if not automatic:
+                self._toast("Pocos globos de diálogo", "Hacen falta al menos 3 globos de diálogo con texto.")
             return
         changed = unify_chapter_font_size(pages, size)
         if not changed:
-            self._toast("Tamaño ya igualado", f"El diálogo del capítulo ya usa {size} pt como máximo.")
+            if not automatic:
+                self._toast("Tamaño ya igualado", f"El diálogo del capítulo ya usa {size} pt como máximo.")
             return
         for key, regions in pages.items():
             if regions:
                 self._refresh_page_text(key)
         if self._active_key():
+            self.regions = self.page_regions.get(self._active_key(), [])
             self._render_page_layers(self._active_key())
         self._record_history()
         self._toast(
@@ -4554,6 +4580,9 @@ class MainWindow(QMainWindow):
             self.regions = self.page_regions[self._active_key()]
             self._render_page_layers(self._active_key())
         self._record_history()
+        if payload.get("pages"):
+            # After the progress bar of the translation has closed.
+            QTimer.singleShot(0, lambda: self.unify_chapter_font_size(automatic=True))
 
     def _recent_translation_context(self, limit: int = 5000) -> str:
         """Send a bounded sample of prior dialogue for chapter consistency."""
