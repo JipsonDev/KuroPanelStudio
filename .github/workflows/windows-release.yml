@@ -44,4 +44,19 @@ jobs:
           $tag = '${{ github.ref_name }}'
           $version = $tag.Substring(1)
           $folder = "github-release/KuroPanelStudio-v$version"
-          gh release create $tag "$folder/KuroPanelStudio-Setup-$version-Windows-x64.exe" "$folder/SHA256SUMS.txt" --verify-tag --title "KuroPanel Studio $tag" --notes-file "$folder/RELEASE_NOTES.md"
+          $assets = @("$folder/KuroPanelStudio-Setup-$version-Windows-x64.exe", "$folder/SHA256SUMS.txt")
+          # A release published from the GitHub page creates the tag itself.
+          # Attach the installer to it instead of failing on the duplicate.
+          # Actions runs pwsh with ErrorActionPreference=Stop: a missing
+          # release must be a normal exit code here, not an exception.
+          $ErrorActionPreference = 'Continue'
+          $PSNativeCommandUseErrorActionPreference = $false
+          gh release view $tag *> $null
+          if ($LASTEXITCODE -eq 0) {
+            gh release upload $tag @assets --clobber
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+            gh release edit $tag --title "KuroPanel Studio $tag" --notes-file "$folder/RELEASE_NOTES.md" --draft=false
+          } else {
+            gh release create $tag @assets --verify-tag --title "KuroPanel Studio $tag" --notes-file "$folder/RELEASE_NOTES.md"
+          }
+          exit $LASTEXITCODE
