@@ -27,7 +27,7 @@ from core.font_profile_manager import FontProfileManager
 from core.history_manager import HistoryManager
 from core.image_manager import ImageManager
 from core.failure_messages import describe_failure
-from core.ocr_manager import OCRManager
+from core.ocr_manager import OCR_PROVIDERS, OCRManager
 from core.project_io import load_project_bundle, page_key, save_project_bundle
 from core.project_manager import ProjectManager
 from core.psd_sync import file_signature, inspect_stable_source, reconcile_layer_states
@@ -2624,16 +2624,20 @@ class MainWindow(QMainWindow):
         provider, model = self.ai_panel.ocr_configuration()
         endpoint = self.settings.data["ocr"].get("base_url", "")
         signature = (provider, model.strip(), endpoint)
-        key = self.credentials.get("Alibaba Cloud") or os.environ.get("DASHSCOPE_API_KEY", "")
+        environment = ("GEMINI_API_KEY", "GOOGLE_API_KEY") if provider == "Gemini" else ("DASHSCOPE_API_KEY",)
+        key = self.credentials.get(provider) or next(
+            (os.environ[name] for name in environment if os.environ.get(name)), ""
+        )
         try:
-            OCRManager.normalize_endpoint(endpoint)
+            if provider != "Gemini":  # the regional URL only applies to Alibaba
+                OCRManager.normalize_endpoint(endpoint)
             endpoint_error = ""
         except ValueError as error:
             endpoint_error = str(error)
-        if provider != "Alibaba Cloud":
+        if provider not in OCR_PROVIDERS:
             ocr_reason = f"Proveedor OCR no disponible: {provider}"
         elif not str(key).strip():
-            ocr_reason = "Agrega la API key de Alibaba Cloud en Configuración"
+            ocr_reason = f"Agrega la API key de {provider} en Configuración"
         elif not model.strip():
             ocr_reason = "Escribe un modelo OCR en Configuración"
         elif endpoint_error:

@@ -33,6 +33,51 @@ requests = _LazyRequests()
 
 
 ALIBABA_COMPATIBLE_URL = "https://dashscope-intl.aliyuncs.com/compatible-mode/v1/chat/completions"
+GEMINI_COMPATIBLE_URL = "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions"
+OCR_PROVIDERS = ("Alibaba Cloud", "Gemini")
+OCR_DEFAULT_MODELS = {"Alibaba Cloud": "qwen-vl-ocr", "Gemini": "gemini-3.1-flash-lite"}
+OCR_PROVIDER_MODELS = {
+    "Alibaba Cloud": (
+        "qwen-vl-ocr", "qwen-vl-ocr-latest", "qwen3.8-flash", "qwen3.8-27b",
+        "qwen2.5-vl-72b-instruct", "qwen2.5-vl-7b-instruct", "qwen-vl-max", "qwen-vl-plus",
+        "qwen-vl-ocr-2025-11-20",
+    ),
+    "Gemini": ("gemini-3.1-flash-lite", "gemini-2.5-flash-lite", "gemini-3.8-flash", "gemini-2.5-flash"),
+}
+_OCR_KEY_ENVIRONMENT = {"Alibaba Cloud": ("DASHSCOPE_API_KEY",), "Gemini": ("GEMINI_API_KEY", "GOOGLE_API_KEY")}
+
+
+def thinking_options(provider: str, model: str) -> dict:
+    """Request fields that turn off (or minimise) a model's hidden reasoning.
+
+    Reading text needs no reasoning, and thinking tokens are billed as
+    output: on the hybrid Qwen 3.x models they are most of the cost of an
+    OCR request. Models that cannot think, or can only think, get nothing.
+    """
+    name = str(model or "").strip().casefold()
+    if not name or "thinking" in name:
+        return {}
+    if provider == "Alibaba Cloud":
+        if name.startswith(("qwen-vl-ocr", "qwen-mt", "qwen2", "qwen-vl-", "qvq", "qwq")):
+            return {}
+        if name.startswith(("qwen3", "qwen-plus", "qwen-flash", "qwen-turbo", "qwen-max")):
+            return {"enable_thinking": False}
+        return {}
+    if provider == "Gemini":
+        if "pro" in name.split("-") or "image" in name:
+            return {}
+        if name.startswith("gemini-2.5"):
+            return {"reasoning_effort": "none"}
+        if name.startswith("gemini-"):
+            # Gemini 3 cannot disable thinking; «low» is its cheapest level
+            # accepted by every 3.x Flash model.
+            return {"reasoning_effort": "low"}
+    return {}
+
+
+def _rejects_thinking_option(error: Exception) -> bool:
+    text = str(error).casefold()
+    return any(term in text for term in ("enable_thinking", "reasoning_effort", "thinking_level", "thinking budget", "thinking_budget"))
 OCR_PROMPT = (
     "Transcribe all visible text, including vertical/color text and punctuation. "
     "Read vertical columns top to bottom, starting with the rightmost column. "
@@ -113,6 +158,7 @@ class OCRManager:
         self._connect_timeout = 6
         self._read_timeout = 38
         self.endpoint = ALIBABA_COMPATIBLE_URL
+        self._no_thinking_options: set[tuple[str, str]] = set()
         self._disk_cache = None
         if cache_path is not None:
             from core.ocr_cache import OCRCache
@@ -470,12 +516,82 @@ class OCRManager:
         return [str(value) for value in values]
 
     def validate(self, provider: str, configured_key: str = "") -> str:
-        key = str(configured_key or os.environ.get("DASHSCOPE_API_KEY", "")).strip()
-        if provider != "Alibaba Cloud":
-            raise OCRConfigurationError(f"El adaptador de {provider} aún no está instalado.")
+        if provider not in OCR_PROVIDERS:
+            raise OCRConfigurationError(f"El OCR con {provider} no está disponible.")
+        key = str(configured_key or "").strip()
+        for variable in _OCR_KEY_ENVIRONMENT[provider]:
+            key = key or str(os.environ.get(variable, "")).strip()
         if not key:
-            raise OCRConfigurationError("Agrega tu API key de Alibaba Cloud en Configuración.")
+            raise OCRConfigurationError(f"Agrega tu API key de {provider} en Configuración.")
         return key
+
+    def endpoint_for(self, provider: str) -> str:
+        return GEMINI_COMPATIBLE_URL if provider == "Gemini" else self.endpoint
+
+    def test_connection(self, provider: str, model: str, configured_key: str, timeout: float = 30.0) -> str:
+        """Read one small rendered word; returns the text the model gave back.
+
+        Used by «Probar conexión»: it checks key, region, model and image
+        support with a single tiny request instead of a chapter's worth.
+        """
+        api_key = self.validate(provider, configured_key)
+        model = str(model or "").strip()
+        if not model:
+            raise OCRConfigurationError("Escribe el nombre del modelo OCR que deseas utilizar.")
+        image = Image.new("RGB", (220, 72), "white")
+        draw = ImageDraw.Draw(image)
+        try:
+            from PIL import ImageFont
+            font = ImageFont.load_default(size=40)
+        except (TypeError, OSError):
+            font = None
+        draw.text((14, 12), "KURO 42", fill="black", font=font)
+        buffer = io.BytesIO()
+        image.save(buffer, format="JPEG", quality=90)
+        session = requests.Session()
+        try:
+            return self._post_ocr(
+                session, provider, self.endpoint_for(provider), model, api_key,
+                base64.b64encode(buffer.getvalue()).decode("ascii"), timeout=(10.0, timeout),
+            )
+        except requests.RequestException as error:
+            raise OCRNetworkError(f"No se pudo conectar con {provider}: {error}") from error
+        finally:
+            session.close()
+
+    def _post_ocr(self, session, provider: str, endpoint: str, model: str, api_key: str,
+                  encoded: str, timeout) -> str:
+        options = {} if (provider, model) in self._no_thinking_options else thinking_options(provider, model)
+        while True:
+            body = {
+                "model": model,
+                "max_tokens": 4096,
+                "messages": [{
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": OCR_PROMPT},
+                        {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{encoded}"}},
+                    ],
+                }],
+                **options,
+            }
+            response = session.post(
+                endpoint,
+                headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+                json=body, timeout=timeout, allow_redirects=False,
+            )
+            self._record_usage(response)
+            try:
+                return self._response_text(response, provider)
+            except OCRConfigurationError as error:
+                if options and _rejects_thinking_option(error):
+                    # A model that does not accept the switch: send it as before.
+                    self._no_thinking_options.add((provider, model))
+                    options = {}
+                    continue
+                raise OCRConfigurationError(
+                    f"{error}\nModelo: {model}\nServidor: {urlsplit(endpoint).hostname}"
+                ) from error
 
     def run_regions(
         self,
@@ -509,7 +625,7 @@ class OCRManager:
         # Alibaba aliases are valid model names. Respect exactly what the user
         # selected instead of silently replacing it with a dated release.
         qwen_model = requested_model
-        endpoint = self.endpoint
+        endpoint = self.endpoint_for(provider)
         stat = image_path.stat()
         cache_prefix = (
             str(image_path.resolve()).casefold(), stat.st_mtime_ns, stat.st_size,
@@ -568,38 +684,10 @@ class OCRManager:
                         session = self._get_session()
                         with self._usage_lock:
                             self._usage["requests"] += 1
-                        response = session.post(
-                            endpoint,
-                            headers={
-                                "Authorization": f"Bearer {api_key}",
-                                "Content-Type": "application/json",
-                            },
-                            json={
-                                "model": qwen_model,
-                                "max_tokens": 4096,
-                                "messages": [{
-                                    "role": "user",
-                                    "content": [
-                                        {"type": "text", "text": OCR_PROMPT},
-                                        {
-                                            "type": "image_url",
-                                            "image_url": {
-                                                "url": f"data:image/jpeg;base64,{encoded}",
-                                            },
-                                        },
-                                    ],
-                                }],
-                            },
+                        return self._post_ocr(
+                            session, provider, endpoint, qwen_model, api_key, encoded,
                             timeout=(self._connect_timeout, self._read_timeout),
-                            allow_redirects=False,
                         )
-                        self._record_usage(response)
-                        try:
-                            return self._response_text(response)
-                        except OCRConfigurationError as error:
-                            raise OCRConfigurationError(
-                                f"{error}\nModelo: {qwen_model}\nServidor: {urlsplit(endpoint).hostname}"
-                            ) from error
 
                     if attempt:
                         with self._retry_lock:
@@ -620,7 +708,7 @@ class OCRManager:
             self._observe_latency(time.perf_counter() - started, failed=True)
             detail = "10054" if self._has_winerror(last_error, 10054) else "conexión temporal"
             raise OCRNetworkError(
-                f"Alibaba Cloud interrumpió la {detail}. Intentos: {self._max_attempts}. "
+                f"{provider} interrumpió la {detail}. Intentos: {self._max_attempts}. "
                 "No se repite automáticamente para evitar posibles cargos duplicados. "
                 "Revisa tu conexión y vuelve a ejecutar OCR; las cajas completadas quedaron en caché."
             ) from last_error
@@ -845,12 +933,14 @@ class OCRManager:
         return crop.crop((left, top, right, bottom))
 
     @staticmethod
-    def _response_content(response) -> str:
+    def _response_content(response, provider: str = "Alibaba Cloud") -> str:
         status = getattr(response, "status_code", 200)
         if status not in (None, 200):
             detail, payload = "", None
             try:
                 payload = response.json()
+                if isinstance(payload, list) and payload and isinstance(payload[0], dict):
+                    payload = payload[0]  # Gemini wraps its error in a list
                 api_error = payload.get("error", {}) if isinstance(payload, dict) else {}
                 detail = str(
                     api_error.get("message", payload.get("message", "")) if isinstance(api_error, dict) else api_error
@@ -866,8 +956,10 @@ class OCRManager:
                 pass
             # Alibaba's own reason, kept for «Ver detalle»; the generic texts
             # below used to hide it, so every 401/403 looked like a bad key.
-            reason = f"\nRespuesta de Alibaba: {code + ': ' if code else ''}{detail}" if detail or code else ""
-            if "good standing" in lower or code.casefold() == "arrearage":
+            reason = f"\nRespuesta de {provider}: {code + ': ' if code else ''}{detail}" if detail or code else ""
+            if provider == "Gemini":
+                message = OCRManager._gemini_failure(status, lower, reason)
+            elif "good standing" in lower or code.casefold() == "arrearage":
                 message = (
                     "Alibaba Cloud: la cuenta tiene un pago pendiente o está restringida. "
                     "Revisa Gastos y costos en la consola de Alibaba Cloud." + reason
@@ -920,8 +1012,29 @@ class OCRManager:
             raise OCRConfigurationError("La API OCR devolvió una respuesta sin texto reconocible.") from error
 
     @staticmethod
-    def _response_text(response) -> str:
-        return OCRManager.normalize_cjk_text(OCRManager._response_content(response))
+    def _response_text(response, provider: str = "Alibaba Cloud") -> str:
+        return OCRManager.normalize_cjk_text(OCRManager._response_content(response, provider))
+
+    @staticmethod
+    def _gemini_failure(status: int, lower: str, reason: str) -> str:
+        if status == 429 or "resource_exhausted" in lower or "quota" in lower:
+            return (
+                "Gemini: se alcanzó el límite de solicitudes o la cuota gratuita del día. "
+                "Espera un minuto o continúa mañana; con facturación activa el límite es mayor." + reason
+            )
+        if status in (401, 403) or "api key not valid" in lower or "permission" in lower:
+            return (
+                f"Gemini (HTTP {status}): la clave no es válida o no tiene acceso a este modelo. "
+                "Crea la clave en Google AI Studio y pégala en Configuración → Credenciales." + reason
+            )
+        if status == 404 or "not found" in lower:
+            return (
+                f"Gemini (HTTP {status}): el modelo no existe o ya no está disponible. "
+                "Prueba gemini-3.1-flash-lite o gemini-2.5-flash-lite." + reason
+            )
+        if status == 400 and ("location" in lower or "region" in lower or "country" in lower):
+            return "Gemini: la API no está disponible desde tu país o región." + reason
+        return f"Gemini respondió HTTP {status}." + reason
 
     @staticmethod
     def normalize_cjk_text(value: str) -> str:

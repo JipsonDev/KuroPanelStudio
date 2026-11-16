@@ -13,6 +13,8 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import requests
 
+from core.ocr_manager import _rejects_thinking_option, thinking_options
+
 
 ALIBABA_TRANSLATION_URL = "https://dashscope-intl.aliyuncs.com/compatible-mode/v1/chat/completions"
 DEEPSEEK_TRANSLATION_URL = "https://api.deepseek.com/chat/completions"
@@ -47,6 +49,17 @@ DEFAULT_TRANSLATION_PROMPT = (
     "personajes, lugares, organizaciones, objetos, técnicas y términos recurrentes nuevos que "
     "deban conservarse en capítulos posteriores."
 )
+
+
+def _gemini_thinking_config(model: str) -> dict:
+    name = str(model or "").casefold()
+    if "pro" in name.split("-") or "thinking" in name:
+        return {}
+    if name.startswith("gemini-2.5"):
+        return {"thinkingBudget": 0}
+    if name.startswith("gemini-"):
+        return {"thinkingLevel": "low"}
+    return {}
 
 
 def upgrade_translation_prompt(value: str | None) -> str:
@@ -329,6 +342,16 @@ class TranslationManager:
                 ) from error
         raise TranslationConfigurationError(f"{provider} no respondió.")
 
+    def _request_with_thinking(self, url: str, payload: dict, headers: dict, overrides: dict) -> dict:
+        """Ask without hidden reasoning; resend unchanged if the model refuses that."""
+        if overrides:
+            try:
+                return self._request(url, {**payload, **overrides}, headers, timeout=32.0)
+            except TranslationConfigurationError as error:
+                if not _rejects_thinking_option(error):
+                    raise
+        return self._request(url, payload, headers, timeout=32.0)
+
     def _translate_structured_batch(
         self, texts: list[str], provider: str, model: str, api_key: str,
         source: str, target: str, glossary, prompt: str, context: str,
@@ -339,16 +362,16 @@ class TranslationManager:
         parse_error: TranslationConfigurationError | None = None
         for format_attempt in range(2):
             if provider == "Gemini":
-                data = self._request(
+                generation = {"responseMimeType": "application/json", "temperature": 0.2}
+                thinking = _gemini_thinking_config(model or "gemini-2.5-flash")
+                data = self._request_with_thinking(
                     f"https://generativelanguage.googleapis.com/v1beta/models/{model or 'gemini-2.5-flash'}:generateContent",
                     {
                         "contents": [{"role": "user", "parts": [{"text": instruction}]}],
-                        "generationConfig": {
-                            "responseMimeType": "application/json",
-                            "temperature": 0.2,
-                        },
+                        "generationConfig": generation,
                     },
-                    {"x-goog-api-key": api_key}, timeout=32.0,
+                    {"x-goog-api-key": api_key},
+                    {"generationConfig": {**generation, "thinkingConfig": thinking}} if thinking else {},
                 )
                 try:
                     content = str(data["candidates"][0]["content"]["parts"][0]["text"])
@@ -393,14 +416,15 @@ class TranslationManager:
                 except (KeyError, IndexError, TypeError) as error:
                     raise TranslationConfigurationError("DeepSeek devolvió una respuesta sin contenido.") from error
             else:
-                data = self._request(
+                data = self._request_with_thinking(
                     ALIBABA_TRANSLATION_URL,
                     {
                         "model": model or "qwen-plus",
                         "messages": [{"role": "user", "content": instruction}],
                         "response_format": {"type": "json_object"},
                     },
-                    {"Authorization": f"Bearer {api_key}"}, timeout=32.0,
+                    {"Authorization": f"Bearer {api_key}"},
+                    thinking_options("Alibaba Cloud", model or "qwen-plus"),
                 )
                 try:
                     content = str(data["choices"][0]["message"]["content"])

@@ -108,6 +108,8 @@ class SettingsManager:
     def update_workflow(self, values: dict) -> None:
         if "ocr_base_url" in values:
             self.data["ocr"]["base_url"] = str(values["ocr_base_url"]).strip()
+        if values.get("ocr_provider") in {"Alibaba Cloud", "Gemini"}:
+            self.data["ocr"]["platform"] = values["ocr_provider"]
         if "ocr_model" in values:
             self.data["ocr"]["model"] = str(values["ocr_model"]).strip()
             self.remember_model("ocr", self.data["ocr"]["model"])
