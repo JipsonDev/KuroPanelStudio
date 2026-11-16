@@ -54,7 +54,8 @@ class TopBar(QFrame):
         self.export_button.setToolTip("Exportar página, capítulo o tira continua")
         self.export_menu = QMenu(self.export_button)
         self.export_actions = {}
-        for label, command in (("Página actual…", "save_current"), ("Capítulo en páginas…", "save_all"), ("Tira continua en PNG…", "save_strip")):
+        for label, command in (("Página actual…", "save_current"), ("Capítulo en páginas…", "save_all"), ("Tira continua en PNG…", "save_strip"),
+                               ("Listo para subir (cortado y .zip)…", "save_upload")):
             action = self.export_menu.addAction(label)
             action.triggered.connect(lambda _, value=command: self.action_requested.emit(value))
             self.export_actions[command] = action

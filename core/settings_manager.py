@@ -35,6 +35,7 @@ DEFAULT_SETTINGS = {
     },
     "profiles": {"active_type": "", "active_project": ""},
     "watermark": dict(BALANCED_WATERMARK),
+    "upload": {"slice_height": 2000, "width": 0, "format": "JPG", "quality": 90, "zip": True},
 }
 
 

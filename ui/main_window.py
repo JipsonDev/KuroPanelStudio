@@ -29,6 +29,7 @@ from core.image_manager import ImageManager
 from core.failure_messages import describe_failure
 from core.ocr_manager import OCR_PROVIDERS, OCRManager
 from core.project_io import load_project_bundle, page_key, save_project_bundle
+from core.upload_export import safe_export_folder
 from core.psd_manager import is_psd, load_source_image
 from PIL import Image
 from core.chapter_font_size import measure_chapter_font_size, unify_chapter_font_size
@@ -759,7 +760,7 @@ class MainWindow(QMainWindow):
 
     def _handle_action(self, action: str) -> None:
         if self.canvas_shell.strip_button.isChecked() and action not in {
-            "watermark", "toggle_focus", "save_strip", "save_all", "save_project",
+            "watermark", "toggle_focus", "save_strip", "save_all", "save_project", "save_upload",
         }:
             self._edit_strip_page(self.canvas_shell.strip_view.visible_page())
         if action == "toggle_focus":
@@ -875,6 +876,8 @@ class MainWindow(QMainWindow):
             self.save_all()
         elif action == "save_strip":
             self.save_strip()
+        elif action == "save_upload":
+            self.save_for_upload()
         elif action == "save_project":
             self.save_project()
         elif action == "open_project":
@@ -5155,6 +5158,90 @@ class MainWindow(QMainWindow):
         self.images_panel.list.setCurrentRow(index)
         self._set_page(index)
 
+    def _export_folder(self) -> Path:
+        """Where exports go by default: the open project's or chapter's folder.
+
+        The dialogs used to open without a folder and land in the program's
+        own directory. The last folder chosen for this chapter is reused.
+        """
+        last = getattr(self, "_last_export_folder", None)
+        if last and last[0] == self._export_owner() and Path(last[1]).is_dir():
+            return Path(last[1])
+        if self.project_file is not None and Path(self.project_file).parent.is_dir():
+            return Path(self.project_file).parent
+        for page in self.project.pages:
+            if page.path and Path(page.path).parent.is_dir():
+                return Path(page.path).parent
+        return Path.home()
+
+    def _export_owner(self) -> str:
+        if self.project_file is not None:
+            return str(self.project_file)
+        return str(self.project.pages[0].path.parent) if self.project.pages and self.project.pages[0].path else ""
+
+    def _remember_export_folder(self, folder: Path) -> None:
+        self._last_export_folder = (self._export_owner(), str(folder))
+
+    def save_for_upload(self) -> None:
+        """Export the chapter as numbered slices of one height, plus a .zip."""
+        from ui.upload_export_dialog import UploadExportDialog
+        if not self.project.pages:
+            self._toast("Sin capítulo", "Abre un capítulo antes de exportar.")
+            return
+        if self.current_task is not None:
+            self._toast("Proceso en curso", "Espera a que termine el proceso antes de exportar.")
+            return
+        base = self._export_folder()
+        chapter = (self.project_file.stem if self.project_file is not None
+                   else (self.project.pages[0].path.parent.name if self.project.pages[0].path else "capitulo"))
+        dialog = UploadExportDialog(self.settings.data.get("upload", {}), base / f"{chapter} - subir", self)
+        if dialog.exec() != QDialog.Accepted:
+            return
+        self.settings.data["upload"] = dialog.settings()
+        self.settings.save()
+        options, destination = dialog.options(), dialog.destination()
+        self._remember_export_folder(destination.parent)
+        pages = [page for page in self.project.pages if page.path]
+        regions_by_page = copy.deepcopy(self.page_regions)
+        clean_by_page = dict(self.clean_results)
+        styles_by_page = copy.deepcopy(self.page_styles)
+        watermark_plan = chapter_watermark_settings([
+            dict(name=page.name, width=page.width, height=page.height,
+                 regions=regions_by_page.get(page_key(page), [])) for page in pages
+        ], copy.deepcopy(self.watermark_settings))
+
+        def export(progress, cancelled):
+            from core.export_manager import compose_page
+            from core.upload_export import export_for_upload
+
+            def composed():
+                for index, page in enumerate(pages, 1):
+                    progress(int((index - 1) * 95 / len(pages)), f"Página {index} de {len(pages)} · composición",
+                             page_key(page))
+                    key = page_key(page)
+                    styles = copy.deepcopy(styles_by_page.get(key, {}))
+                    if page.name in watermark_plan:
+                        styles["watermark"] = watermark_plan[page.name]
+                    regions = regions_by_page.get(key, [])
+                    text_rows = [(int(region["y"]), int(region["y"]) + int(region["height"]))
+                                 for region in regions if bool(region.get("visible", True))]
+                    yield compose_page(page, regions, clean_by_page.get(key), styles), text_rows
+
+            files = export_for_upload(composed(), destination, options, cancelled=cancelled, total=len(pages))
+            return [str(path) for path in files]
+
+        def finished(files):
+            images = [name for name in files or [] if not name.endswith(".zip")]
+            archive = next((name for name in files or [] if name.endswith(".zip")), "")
+            self._toast(
+                "Listo para subir",
+                f"{len(images)} imagen(es) en {destination.name}" + (f" y {Path(archive).name}" if archive else "") + ".",
+            )
+
+        self._start_task(export, "Exportación para subir",
+                         f"Se exportarán {len(pages)} páginas cortadas a {options.slice_height} px.",
+                         finished, stage="Preparando el capítulo para subir…")
+
     def save_strip(self) -> None:
         if not self.project.pages:
             self._toast("Sin capítulo", "Abre un capítulo antes de exportar.")
@@ -5162,13 +5249,13 @@ class MainWindow(QMainWindow):
         if self.current_task is not None:
             self._toast("Proceso en curso", "Espera a que termine el proceso antes de exportar la tira.")
             return
-        page = self.project.active_page
-        default = (page.path.parent if page.path else Path.cwd()) / "capitulo-tira.png"
+        default = self._export_folder() / "capitulo-tira.png"
         filename, _ = QFileDialog.getSaveFileName(self, "Exportar capítulo como tira", str(default), "PNG (*.png)")
         if not filename:
             return
         source = self._strip_source(include_watermarks=True)
         destination = Path(filename).with_suffix(".png")
+        self._remember_export_folder(destination.parent)
         def export(progress, cancelled):
             from core.chapter_strip import export_strip_png
             return str(export_strip_png(destination, source, progress, cancelled))
@@ -5182,13 +5269,15 @@ class MainWindow(QMainWindow):
         page = self.project.active_page
         format_name = self.inspector.export_format()
         extension = ".jpg" if format_name == "JPG" else f".{format_name.lower()}"
-        default_folder = page.path.parent / "Exportado" if page.path else Path.cwd()
-        default_path = default_folder / f"{Path(page.name).stem}{extension}"
+        default_path = self._export_folder() / f"{Path(page.name).stem}{extension}"
+        if page.path and default_path.resolve() == Path(page.path).resolve():
+            default_path = default_path.with_name(f"{default_path.stem}_final{extension}")
         filters = {"PNG": "PNG (*.png)", "JPG": "JPEG (*.jpg *.jpeg)", "WEBP": "WebP (*.webp)", "PSD": "Photoshop PSD (*.psd)"}
         filename, _ = QFileDialog.getSaveFileName(self, "Exportar página final", str(default_path), filters.get(format_name, "Todos (*.*)"))
         if not filename:
             return
         destination = Path(filename).with_suffix(extension)
+        self._remember_export_folder(destination.parent)
         key = page_key(page)
         regions = copy.deepcopy(self.page_regions.get(key, []))
         clean_result = self.clean_results.get(key)
@@ -5216,12 +5305,16 @@ class MainWindow(QMainWindow):
         if not self.project.pages:
             self._toast("Sin capítulo", "Abre un capítulo antes de exportar.")
             return
-        folder = QFileDialog.getExistingDirectory(self, "Directorio para exportar el capítulo")
+        folder = QFileDialog.getExistingDirectory(
+            self, "Directorio para exportar el capítulo", str(self._export_folder()),
+        )
         if not folder:
             return
+        self._remember_export_folder(Path(folder))
         format_name = self.inspector.export_format()
         extension = ".jpg" if format_name == "JPG" else f".{format_name.lower()}"
         pages = list(self.project.pages)
+        folder = str(safe_export_folder(Path(folder), pages, extension))
         active_index = self.project.active_index
         regions_by_page = copy.deepcopy(self.page_regions)
         clean_by_page = dict(self.clean_results)
