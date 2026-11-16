@@ -14,7 +14,7 @@ Comprobado con las tiras del capítulo 185.
 - Narraciones, globos con picos y SFX que el detector marcaba con poca confianza ya no se pierden: se aceptan si tienen letras sobre fondo plano o un relleno de color con borde blanco. En el capítulo 185 aparecen dos bloques de narración, un globo y un SFX que faltaban; las marcas de agua siguen ignoradas.
 
 **Traducción**
-- «Importar contexto de ChatGPT» (panel de traducción y Configuración → Perfiles): copia una petición ya preparada, pégala en el proyecto de ChatGPT de la obra y pega su respuesta. El glosario, el contexto de la historia y las reglas de estilo pasan al proyecto de traducción de KuroPanel y se usan en cada traducción con Qwen, Gemini, OpenAI o DeepSeek. Volver a importar actualiza los términos y reemplaza el contexto anterior sin tocar tus instrucciones propias.
+- «Importar contexto (.txt)» (panel de traducción y Configuración → Perfiles): la ventana incluye el prompt para obtener el contexto (copiar o guardar como .txt); se envía en el chat donde se traduce la obra y la respuesta, guardada en un .txt, se abre desde ahí. El glosario, el contexto de la historia y las reglas de estilo pasan al proyecto de traducción de KuroPanel y se usan en cada traducción con Qwen, Gemini, OpenAI o DeepSeek. Volver a importar actualiza los términos y reemplaza el contexto anterior sin tocar tus instrucciones propias.
 
 **Typeo**
 - Las líneas ya no terminan en «de», «la», «con», «que»…, se evita una palabra corta sola en medio del globo y se prefiere cortar donde termina una frase.

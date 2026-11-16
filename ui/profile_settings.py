@@ -281,9 +281,9 @@ class ProfileSettingsWidget(QWidget):
         copy_glossary.clicked.connect(self._copy_glossary)
         paste_glossary = QPushButton("Pegar y combinar")
         paste_glossary.clicked.connect(self._paste_glossary)
-        self.import_context_button = QPushButton("Importar desde ChatGPT…")
+        self.import_context_button = QPushButton("Importar contexto (.txt)…")
         self.import_context_button.setToolTip(
-            "Trae el glosario, el contexto y las reglas de estilo que tienes en un proyecto de ChatGPT"
+            "Importa el glosario, el contexto y las reglas de estilo de la obra desde un .txt"
         )
         self.import_context_button.clicked.connect(self._import_context)
         reset_prompt = QPushButton("Restaurar prompt")
@@ -634,7 +634,7 @@ class ProfileSettingsWidget(QWidget):
             return
         self._load_translation_profile(project_type, project)
         self.translation_status.setText(
-            f"Importado desde ChatGPT · {dialog.imported_terms} término(s) y el contexto de la obra."
+            f"Contexto importado · {dialog.imported_terms} término(s) y el contexto de la obra."
         )
 
     def _reset_translation_prompt(self) -> None:

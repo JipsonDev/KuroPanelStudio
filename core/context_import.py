@@ -1,9 +1,9 @@
-"""Bring a series' glossary and context from a ChatGPT project into KuroPanel.
+"""Import a series' glossary and context from a .txt file into KuroPanel.
 
-ChatGPT has no API for its Projects, so the user asks each project for its
-glossary and context in the format below (``CHATGPT_REQUEST``), pastes the
-answer, and it becomes the glossary and permanent instructions of the
-matching translation project. The text is parsed leniently: headings may
+The user asks the AI chat where the series is translated for its glossary
+and context with the prompt below (``CONTEXT_REQUEST``), saves the answer as
+a .txt (or pastes it), and it becomes the glossary and permanent
+instructions of the matching translation project. The text is parsed leniently: headings may
 come as Markdown, bold or plain «GLOSARIO:», and a JSON answer works too.
 """
 from __future__ import annotations
@@ -15,7 +15,7 @@ from dataclasses import dataclass, field
 
 from core.translation_manager import normalize_glossary
 
-CHATGPT_REQUEST = """Con todo lo que sabes de esta obra en este proyecto (capítulos traducidos, nombres, decisiones de traducción), prepárame su ficha para mi programa de traducción. Responde SOLO con este formato, sin comentarios antes ni después:
+CONTEXT_REQUEST = """Con todo lo que sabes de esta obra en este proyecto (capítulos traducidos, nombres, decisiones de traducción), prepárame su ficha para mi programa de traducción. Responde SOLO con este formato, sin comentarios antes ni después:
 
 OBRA: <título de la obra>
 
