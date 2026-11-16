@@ -1,12 +1,16 @@
 from __future__ import annotations
 
-from PySide6.QtCore import Qt
+from concurrent.futures import Future, ThreadPoolExecutor
+
+from PySide6.QtCore import Qt, QTimer
 from PySide6.QtWidgets import (QCheckBox, QComboBox, QDialog, QDialogButtonBox, QFormLayout,
                                QGroupBox, QHBoxLayout, QLabel, QLineEdit, QTabWidget,
-                               QMessageBox, QScrollArea, QSpinBox, QVBoxLayout, QWidget)
+                               QMessageBox, QPushButton, QScrollArea, QSpinBox, QVBoxLayout, QWidget)
 from ui.profile_settings import ProfileSettingsWidget
 from core.performance_manager import resource_policy
-from core.ocr_manager import OCRManager, OCRConfigurationError, ALIBABA_COMPATIBLE_URL
+from core.ocr_manager import (OCRManager, OCRConfigurationError, ALIBABA_COMPATIBLE_URL,
+                              OCR_DEFAULT_MODELS, OCR_PROVIDERS)
+from core.failure_messages import describe_failure
 
 
 class SettingsDialog(QDialog):
@@ -66,6 +70,9 @@ class SettingsDialog(QDialog):
         tabs.addTab(providers, "Credenciales")
 
         workflow = QWidget(); workflow_form = QFormLayout(workflow)
+        self.ocr_provider = QComboBox(); self.ocr_provider.addItems(list(OCR_PROVIDERS))
+        self.ocr_provider.setCurrentText(settings.get("ocr", {}).get("platform", "Alibaba Cloud"))
+        workflow_form.addRow("Proveedor OCR", self.ocr_provider)
         self.ocr_model = QLineEdit(settings.get("ocr", {}).get("model", "qwen-vl-ocr"))
         self.ocr_base_url = QLineEdit(settings.get("ocr", {}).get("base_url", ""))
         self.ocr_base_url.setPlaceholderText(ALIBABA_COMPATIBLE_URL.removesuffix("/chat/completions"))
@@ -78,6 +85,23 @@ class SettingsDialog(QDialog):
         ocr_hint.setWordWrap(True)
         ocr_hint.setObjectName("Muted")
         workflow_form.addRow(ocr_hint)
+        test_row = QHBoxLayout()
+        self.test_ocr_button = QPushButton("Probar conexión")
+        self.test_ocr_button.setToolTip(
+            "Envía una imagen pequeña con la clave, el modelo y la URL escritos aquí, sin guardarlos"
+        )
+        self.test_ocr_button.clicked.connect(self._test_ocr_connection)
+        self.test_ocr_result = QLabel("Comprueba la clave, la región y el modelo con una sola solicitud.")
+        self.test_ocr_result.setWordWrap(True); self.test_ocr_result.setObjectName("Muted")
+        self.test_ocr_result.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        test_row.addWidget(self.test_ocr_button); test_row.addWidget(self.test_ocr_result, 1)
+        workflow_form.addRow(test_row)
+        self._test_executor = ThreadPoolExecutor(max_workers=1)
+        self._test_future: Future | None = None
+        self._test_timer = QTimer(self); self._test_timer.setInterval(150)
+        self._test_timer.timeout.connect(self._poll_ocr_test)
+        self._ocr_provider_changed(self.ocr_provider.currentText(), initial=True)
+        self.ocr_provider.currentTextChanged.connect(self._ocr_provider_changed)
         self.translation_provider = QComboBox(); self.translation_provider.addItems(list(self.PROVIDERS))
         self.translation_provider.setCurrentText(settings["translate"].get("platform", "Gemini"))
         self.translation_model = QLineEdit(settings["translate"].get("model", "gemini-2.5-flash"))
@@ -166,6 +190,67 @@ class SettingsDialog(QDialog):
         buttons.accepted.connect(self.accept); buttons.rejected.connect(self.reject)
         layout.addWidget(buttons)
 
+    def _ocr_provider_changed(self, provider: str, initial: bool = False) -> None:
+        alibaba = provider == "Alibaba Cloud"
+        self.ocr_base_url.setEnabled(alibaba)
+        self.ocr_base_url.setToolTip("" if alibaba else "Gemini usa un servidor global; no necesita URL")
+        if not initial:
+            model = self.ocr_model.text().strip().casefold()
+            if alibaba == model.startswith(("gemini", "gemma")) or not model:
+                self.ocr_model.setText(OCR_DEFAULT_MODELS.get(provider, ""))
+            self.test_ocr_result.setText("Comprueba la clave, la región y el modelo con una sola solicitud.")
+
+    def _test_ocr_connection(self) -> None:
+        if self._test_future is not None:
+            return
+        provider = self.ocr_provider.currentText()
+        model = self.ocr_model.text().strip()
+        key = self.key_fields[provider].text().strip()
+        manager = OCRManager()
+        try:
+            if provider == "Alibaba Cloud":
+                manager.set_endpoint(self.ocr_base_url.text())
+            manager.validate(provider, key)
+        except (OCRConfigurationError, ValueError) as error:
+            self._show_test_result(False, str(error))
+            return
+        self.test_ocr_button.setEnabled(False)
+        self.test_ocr_result.setStyleSheet("")
+        self.test_ocr_result.setText(f"Probando {model} en {provider}…")
+        self._test_future = self._test_executor.submit(manager.test_connection, provider, model, key)
+        self._test_timer.start()
+
+    def _poll_ocr_test(self) -> None:
+        future = self._test_future
+        if future is None or not future.done():
+            return
+        self._test_timer.stop()
+        self._test_future = None
+        self.test_ocr_button.setEnabled(True)
+        try:
+            text = future.result()
+        except Exception as error:  # every failure is shown, never raised in the UI
+            self._show_test_result(False, str(error))
+            return
+        read = " ".join(str(text).split())[:60]
+        self._show_test_result(True, f"Funciona: el modelo leyó «{read}»." if read else "Funciona: el servidor respondió.")
+
+    def _show_test_result(self, ok: bool, message: str) -> None:
+        if ok:
+            self.test_ocr_result.setStyleSheet("color:#43D98A;")
+            self.test_ocr_result.setText(message)
+            self.test_ocr_result.setToolTip("")
+            return
+        failure = describe_failure("ocr", message)
+        self.test_ocr_result.setStyleSheet("color:#FF7A7A;")
+        self.test_ocr_result.setText(f"{failure.title}. {failure.action}")
+        self.test_ocr_result.setToolTip(message)
+
+    def done(self, result: int) -> None:
+        self._test_timer.stop()
+        self._test_executor.shutdown(wait=False, cancel_futures=True)
+        super().done(result)
+
     def _set_keys_visible(self, visible: bool) -> None:
         mode = QLineEdit.Normal if visible else QLineEdit.Password
         for field in self.key_fields.values():
@@ -193,6 +278,7 @@ class SettingsDialog(QDialog):
 
     def values(self) -> dict:
         values = {
+            "ocr_provider": self.ocr_provider.currentText(),
             "ocr_model": self.ocr_model.text().strip(),
             "ocr_base_url": self.ocr_base_url.text().strip(),
             "keys": {name: field.text().strip() for name, field in self.key_fields.items()},
@@ -215,7 +301,8 @@ class SettingsDialog(QDialog):
 
     def accept(self) -> None:
         try:
-            OCRManager.normalize_endpoint(self.ocr_base_url.text())
+            if self.ocr_provider.currentText() == "Alibaba Cloud":
+                OCRManager.normalize_endpoint(self.ocr_base_url.text())
             if not self.ocr_model.text().strip():
                 raise OCRConfigurationError("Escribe el identificador del modelo OCR.")
         except (OCRConfigurationError, ValueError) as error:

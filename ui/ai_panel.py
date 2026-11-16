@@ -8,6 +8,7 @@ from PySide6.QtWidgets import (QButtonGroup, QComboBox, QFrame, QGridLayout, QGr
                                QSizePolicy, QSpinBox, QStackedWidget, QToolButton,
                                QVBoxLayout, QWidget)
 
+from core.ocr_manager import OCR_DEFAULT_MODELS, OCR_PROVIDER_MODELS, OCR_PROVIDERS
 from ui.widgets.controls import ModernButton, SectionTitle, Toggle, CollapsibleSection
 from ui.widgets.icons import icon
 
@@ -225,7 +226,9 @@ class AIOptionsPanel(QScrollArea):
                   self.translate_model, self.clean_provider, self.clean_model)
         blocked = [combo.blockSignals(True) for combo in combos]
         try:
-            self._add_models(self.ocr_model, [*settings["ocr"].get("saved_models", []), settings["ocr"]["model"]])
+            self._saved_ocr_models = [str(value) for value in settings["ocr"].get("saved_models", [])]
+            self._fill_ocr_models(settings["ocr"]["platform"])
+            self._add_models(self.ocr_model, [settings["ocr"]["model"]])
             self._add_models(self.translate_model, [
                 *settings["translate"].get("saved_models", []), settings["translate"]["model"],
             ])
@@ -239,9 +242,35 @@ class AIOptionsPanel(QScrollArea):
             for combo, was_blocked in zip(combos, blocked):
                 combo.blockSignals(was_blocked)
 
+    @staticmethod
+    def _model_family(model: str) -> str:
+        return "Gemini" if str(model).strip().casefold().startswith(("gemini", "gemma")) else "Alibaba Cloud"
+
+    def _fill_ocr_models(self, provider: str) -> None:
+        """List the provider's models plus the ones the user typed for it."""
+        current = self.ocr_model.currentText()
+        blocked = self.ocr_model.blockSignals(True)
+        self.ocr_model.clear()
+        self.ocr_model.addItems(list(OCR_PROVIDER_MODELS.get(provider, ())))
+        self._add_models(self.ocr_model, [
+            model for model in self._saved_ocr_models if self._model_family(model) == provider
+        ])
+        self.ocr_model.setEditText(current)
+        self.ocr_model.blockSignals(blocked)
+
+    def _sync_ocr_model(self, provider: str) -> None:
+        self._fill_ocr_models(provider)
+        if self._model_family(self.ocr_model.currentText()) != provider:
+            blocked = self.ocr_model.blockSignals(True)
+            self._select(self.ocr_model, OCR_DEFAULT_MODELS.get(provider, ""))
+            self.ocr_model.blockSignals(blocked)
+        self.provider_changed.emit("ocr", *self.ocr_configuration())
+
     def _commit_model(self, mode: str, combo: QComboBox, provider: QComboBox) -> None:
         """Add a typed model to its list and report the selection once."""
         model = combo.currentText().strip()
+        if mode == "ocr" and model and model not in self._saved_ocr_models:
+            self._saved_ocr_models.insert(0, model)
         if model and combo.findText(model) < 0:
             blocked = combo.blockSignals(True)
             combo.addItem(model)
@@ -457,26 +486,19 @@ class AIOptionsPanel(QScrollArea):
         self._heading(layout, "Reconocer texto · OCR", "Lee las cajas detectadas y reutiliza el OCR guardado.")
         self.ocr_settings = ActionCard("Proveedor y modelo", "Configura el motor de OCR", "chip")
         config = self.ocr_settings.body_layout
-        self.ocr_provider = self._combo(["Alibaba Cloud"])
+        self.ocr_provider = self._combo(list(OCR_PROVIDERS))
         config.addWidget(QLabel("Proveedor"))
         config.addWidget(self.ocr_provider)
         config.addWidget(QLabel("Modelo"))
-        self.ocr_model = self._combo([
-            "qwen-vl-ocr",
-            "qwen-vl-ocr-latest",
-            "qwen2.5-vl-72b-instruct",
-            "qwen2.5-vl-7b-instruct",
-            "qwen-vl-max",
-            "qwen-vl-plus",
-            "qwen-vl-ocr-2025-11-20",
-        ])
+        self._saved_ocr_models: list[str] = []
+        self.ocr_model = self._combo(list(OCR_PROVIDER_MODELS["Alibaba Cloud"]))
         self.ocr_model.setEditable(True)
         self.ocr_model.setInsertPolicy(QComboBox.NoInsert)
         self.ocr_model.lineEdit().setPlaceholderText("Escribe el identificador del modelo")
         self.ocr_model.setToolTip(
             "Selecciona un modelo o escribe su identificador exacto de Alibaba Cloud"
         )
-        self.ocr_provider.currentTextChanged.connect(lambda: self.provider_changed.emit("ocr", *self.ocr_configuration()))
+        self.ocr_provider.currentTextChanged.connect(self._sync_ocr_model)
         self.ocr_model.activated.connect(
             lambda _index: self._commit_model("ocr", self.ocr_model, self.ocr_provider)
         )
@@ -558,6 +580,15 @@ class AIOptionsPanel(QScrollArea):
         self.translation_context.setWordWrap(True)
         layout.addWidget(self.translation_context)
         self.translation_scope = self._scope_action(layout, "translation", "Traducir texto", ("run_translation_one", "run_translation", "run_translation_all"))
+        self.unify_font_button = ModernButton("Igualar tamaño de letra del capítulo", icon_name="text")
+        self.unify_font_button.setMinimumWidth(0)
+        self.unify_font_button.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Fixed)
+        self.unify_font_button.setToolTip(
+            "Usa en todos los globos de diálogo el tamaño habitual del capítulo; "
+            "los globos donde el texto no cabe siguen reduciéndolo"
+        )
+        self.unify_font_button.clicked.connect(lambda: self.action_requested.emit("unify_font_size"))
+        layout.addWidget(self.unify_font_button)
         layout.addWidget(self.translation_settings)
         self._add_text_options(layout, mode="translation", include_mask=False, include_manga=True)
         layout.addStretch()

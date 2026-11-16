@@ -1,5 +1,22 @@
 # Historial de cambios
 
+## 0.2.27 — Gemini para OCR, menos gasto y mejor typeo
+
+Comprobado con las tiras del capítulo 185.
+
+**OCR**
+- Gemini se puede usar como proveedor de OCR (modelo predeterminado `gemini-3.1-flash-lite`, con capa gratuita). Sirve de respaldo si Alibaba bloquea la cuenta o se acaba el saldo.
+- Los modelos Qwen generales (`qwen3.8-flash`, `qwen3.8-27b`, `qwen-plus`…) ya no «piensan» antes de responder en OCR ni en traducción: el razonamiento oculto se cobraba como salida y no mejora la lectura. Gemini usa su nivel de razonamiento más bajo. Si un modelo no acepta esa opción, se reenvía como antes.
+- Configuración → OCR y traducción tiene «Probar conexión»: envía una imagen pequeña con la clave, el modelo y la URL escritos y dice en segundos si funcionan, sin guardar nada.
+- En el OCR del capítulo, un globo cortado entre dos páginas se une y se lee una sola vez. El texto va a la mitad más alta; la otra mitad se sigue limpiando.
+
+**Detección**
+- Narraciones, globos con picos y SFX que el detector marcaba con poca confianza ya no se pierden: se aceptan si tienen letras sobre fondo plano o un relleno de color con borde blanco. En el capítulo 185 aparecen dos bloques de narración, un globo y un SFX que faltaban; las marcas de agua siguen ignoradas.
+
+**Typeo**
+- Las líneas ya no terminan en «de», «la», «con», «que»…, se evita una palabra corta sola en medio del globo y se prefiere cortar donde termina una frase.
+- «Igualar tamaño de letra del capítulo» (panel de traducción) usa en todo el diálogo el tamaño habitual del capítulo; los globos donde no cabe siguen reduciéndolo.
+
 ## 0.2.26 — motivo real del rechazo y lista de modelos que se conserva
 
 - Cuando Alibaba Cloud rechazaba una solicitud con HTTP 401 o 403, la app indicaba siempre «clave no válida» y ocultaba el motivo que da Alibaba (modelo sin activar, permisos de la región, cuenta restringida…). Ahora ese motivo aparece en «Ver detalle», en OCR y en traducción.

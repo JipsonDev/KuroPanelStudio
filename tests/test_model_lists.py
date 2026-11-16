@@ -85,3 +85,15 @@ def test_translation_model_is_saved_once_and_with_its_provider(panel):
     assert saved[-1] == ("translate", panel.translate_provider.currentText(), "qwen3.8-flash")
     panel.translate_provider.setCurrentText("DeepSeek")
     assert saved[-1] == ("translate", "DeepSeek", "deepseek-chat")
+
+
+def test_ocr_provider_switch_lists_that_providers_models(panel):
+    saved = []
+    panel.provider_changed.connect(lambda *values: saved.append(values))
+    panel.set_configuration(configuration("qwen3.8-flash", saved=["gemini-mio", "qwen-mio"]))
+    panel.ocr_provider.setCurrentText("Gemini")
+    assert saved[-1] == ("ocr", "Gemini", "gemini-3.1-flash-lite")
+    items = [panel.ocr_model.itemText(i) for i in range(panel.ocr_model.count())]
+    assert "gemini-mio" in items and "qwen-mio" not in items and "qwen-vl-ocr" not in items
+    panel.ocr_provider.setCurrentText("Alibaba Cloud")
+    assert saved[-1] == ("ocr", "Alibaba Cloud", "qwen-vl-ocr")

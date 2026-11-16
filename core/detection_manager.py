@@ -355,11 +355,14 @@ class DetectionManager:
                 if isinstance(model, _OnnxTextDetector):
                     # Ultralytics first performs per-tile NMS at its default
                     # IoU 0.70.  Cross-tile suppression is applied below.
-                    predictions = model.predict_boxes(strips, self.confidence, 0.70)
+                    predictions = model.predict_boxes(strips, min(self.confidence, self.WEAK_CONFIDENCE), 0.70)
                     for top, strip, boxes in zip(batch_starts, strips, predictions):
                         for box, score in boxes:
                             x1, y1, x2, y2 = (int(value) for value in box)
-                            regions.append(TextRegion(x1, y1 + top, x2 - x1, y2 - y1, float(score)))
+                            candidate = TextRegion(x1, y1 + top, x2 - x1, y2 - y1, float(score))
+                            if score < self.confidence and not self._weak_text_evidence(image, candidate):
+                                continue
+                            regions.append(candidate)
                             if ((top > 0 and y1 <= 2)
                                     or (top + strip.shape[0] < height and y2 >= strip.shape[0] - 2)):
                                 cut_by_seam.add(id(regions[-1]))
@@ -367,7 +370,7 @@ class DetectionManager:
                     predictions = model.predict(
                         # Ultralytics accepts OpenCV-style BGR numpy arrays.
                         [np.ascontiguousarray(strip[:, :, ::-1]) for strip in strips],
-                        conf=self.confidence,
+                        conf=min(self.confidence, self.WEAK_CONFIDENCE),
                         iou=0.35,
                         verbose=False,
                         device=self._device,
@@ -377,7 +380,10 @@ class DetectionManager:
                         if result.boxes is not None:
                             for box, score in zip(result.boxes.xyxy.cpu().numpy(), result.boxes.conf.cpu().numpy()):
                                 x1, y1, x2, y2 = (int(value) for value in box)
-                                regions.append(TextRegion(x1, y1 + top, x2 - x1, y2 - y1, float(score)))
+                                candidate = TextRegion(x1, y1 + top, x2 - x1, y2 - y1, float(score))
+                                if score < self.confidence and not self._weak_text_evidence(image, candidate):
+                                    continue
+                                regions.append(candidate)
                 for top, candidates in zip(batch_starts, geometry):
                     for bx, by, bw, bh, tx, ty, tw, th in candidates.result():
                         ty += top
@@ -480,6 +486,44 @@ class DetectionManager:
             if not covered:
                 kept.append(region)
         return kept
+
+    # Below the normal threshold YOLO still finds narration boxes, spiky
+    # balloons and sound effects, mixed with artwork and watermarks. Those
+    # weaker boxes are kept only with evidence of their own (chapter 185:
+    # two text blocks and one SFX recovered, both watermarks still ignored).
+    WEAK_CONFIDENCE = 0.15
+
+    @classmethod
+    def _weak_text_evidence(cls, image, candidate) -> bool:
+        if cls._lettering_evidence(image, candidate):
+            return True
+        return min(candidate.width, candidate.height) >= 64 and cls._outlined_lettering(image, candidate)
+
+    @staticmethod
+    def _outlined_lettering(image, candidate) -> bool:
+        """A sound effect: one saturated fill colour bordered by a white outline.
+
+        Artwork rarely has a single hue that a white rim follows along most
+        of its edge; a thin watermark line is excluded by the minimum size.
+        """
+        import cv2
+        rgb = np.asarray(image.crop((
+            candidate.x, candidate.y, candidate.x + candidate.width, candidate.y + candidate.height,
+        )).convert("RGB"))
+        scale = 320 / max(rgb.shape[:2])
+        if scale < 1:
+            rgb = cv2.resize(rgb, (max(1, round(rgb.shape[1] * scale)), max(1, round(rgb.shape[0] * scale))),
+                             interpolation=cv2.INTER_AREA)
+        hsv = cv2.cvtColor(rgb, cv2.COLOR_RGB2HSV)
+        white = rgb.min(axis=2) > 220
+        fill = (hsv[..., 1] > 110) & (hsv[..., 2] > 50)
+        if fill.mean() < .10 or not .04 <= white.mean() <= .5:
+            return False
+        hues = hsv[..., 0][fill]
+        dominant = np.bincount(hues // 10, minlength=19).max() / max(1, hues.size)
+        ring = cv2.dilate(fill.astype(np.uint8), np.ones((5, 5), np.uint8)).astype(bool) & ~fill
+        bordered = np.count_nonzero(white & ring) / max(1, np.count_nonzero(ring))
+        return bool(dominant >= .6 and bordered >= .35)
 
     @staticmethod
     def _lettering_evidence(image, candidate) -> bool:
