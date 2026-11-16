@@ -29,6 +29,9 @@ from core.image_manager import ImageManager
 from core.failure_messages import describe_failure
 from core.ocr_manager import OCR_PROVIDERS, OCRManager
 from core.project_io import load_project_bundle, page_key, save_project_bundle
+from core.psd_manager import is_psd
+from PIL import Image
+from core.seam_balloons import SEAM_PARTNER_KEY, anchor_first, seam_pairs, stitched_file
 from core.project_manager import ProjectManager
 from core.psd_sync import file_signature, inspect_stable_source, reconcile_layer_states
 from core.performance_manager import (
@@ -4125,6 +4128,8 @@ class MainWindow(QMainWindow):
             self._toast("OCR mediante API", str(error))
             return
 
+        seam_jobs = self._chapter_seam_jobs(work)
+
         def recognize_chapter(progress, cancelled):
             # Two pages share the connection budget. A page with fewer boxes
             # than connections no longer leaves the others idle while its
@@ -4151,6 +4156,9 @@ class MainWindow(QMainWindow):
                     return page_id, None
                 label = f"Página {page_index + 1} de {len(work)} · OCR"
                 report(page_index, 0, label, page_id)
+                if not ordered:  # every box of this page is half of a cut balloon
+                    report(page_index, 100, label, page_id)
+                    return page_id, []
                 try:
                     recognized = self.ocr.run_regions(
                         page.path, ordered, provider, model, key,
@@ -4176,6 +4184,13 @@ class MainWindow(QMainWindow):
                 for page_id, recognized in pool.map(recognize_page, range(len(work))):
                     if recognized is not None:
                         results[page_id] = recognized
+            for number, (upper_page, upper, lower_page, lower) in enumerate(seam_jobs, 1):
+                if stop.is_set() or cancelled():
+                    break
+                progress(99, f"Globos cortados entre páginas · {number} de {len(seam_jobs)}", page_key(upper_page))
+                self._read_seam_balloon(upper_page, upper, lower_page, lower, provider, model, key, cancelled)
+                results.setdefault(page_key(upper_page), []).append(upper)
+                results.setdefault(page_key(lower_page), []).append(lower)
             if cancelled():
                 return {}
             return results
@@ -4190,6 +4205,57 @@ class MainWindow(QMainWindow):
             lambda results: self._show_chapter_ocr(results, chapter_targets),
             stage="Procesando OCR del capítulo…",
         )
+
+    def _chapter_seam_jobs(self, work: list[tuple]) -> list[tuple]:
+        """Take balloons cut by a page join out of the per-page requests.
+
+        Both halves must still need OCR; they are read later as one image.
+        """
+        requested = {page_key(page): (page, boxes) for page, boxes in work}
+        jobs = []
+        for upper_page, lower_page in zip(self.project.pages, self.project.pages[1:]):
+            upper_entry = requested.get(page_key(upper_page))
+            lower_entry = requested.get(page_key(lower_page))
+            if not upper_entry or not lower_entry or is_psd(upper_page.path) or is_psd(lower_page.path):
+                continue
+            try:
+                with Image.open(upper_page.path) as top, Image.open(lower_page.path) as bottom:
+                    sizes = top.size, bottom.size
+            except (OSError, ValueError):
+                continue
+            pairs = seam_pairs([
+                (page_key(upper_page), sizes[0], upper_entry[1]),
+                (page_key(lower_page), sizes[1], lower_entry[1]),
+            ])
+            for (_upper_key, upper), (_lower_key, lower) in pairs:
+                upper_entry[1].remove(upper)
+                lower_entry[1].remove(lower)
+                jobs.append((upper_page, upper, lower_page, lower))
+        return jobs
+
+    def _read_seam_balloon(self, upper_page, upper: dict, lower_page, lower: dict,
+                           provider: str, model: str, key: str, cancelled) -> None:
+        """OCR both halves as one image; the text goes to the larger half."""
+        joined = stitched_file(upper_page.path, upper, lower_page.path, lower)
+        with Image.open(joined) as image:
+            width, height = image.size
+        probe = {"id": "seam", "x": 0, "y": 0, "width": width, "height": height}
+        read = self.ocr.run_regions(
+            joined, [probe], provider, model, key, lambda _value: None, cancelled,
+            None, keep_going=True, max_workers=1,
+        )
+        item = read[0] if read else {OCRManager.FAILED_KEY: "Operación cancelada"}
+        if item.get(OCRManager.FAILED_KEY):
+            for part in (upper, lower):
+                part[OCRManager.FAILED_KEY] = item[OCRManager.FAILED_KEY]
+                if item.get(OCRManager.ABORTED_KEY):
+                    part[OCRManager.ABORTED_KEY] = True
+            return
+        anchor, other = anchor_first(upper, lower)
+        anchor["text"] = str(item.get("text", ""))
+        other["text"] = ""
+        anchor[SEAM_PARTNER_KEY] = other.get("id")
+        other[SEAM_PARTNER_KEY] = anchor.get("id")
 
     def _show_chapter_ocr(
         self, results: dict[str, list[dict]],
