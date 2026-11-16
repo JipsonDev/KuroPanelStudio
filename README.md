@@ -3,7 +3,7 @@
 Editor de escritorio para OCR, traducción, limpieza y typpeo de manhua, manhwa
 y manga. Está construido con Python, PySide6, OpenCV y ONNX Runtime.
 
-**Versión 0.2.27** añade Gemini como proveedor de OCR, gasta menos en los modelos Qwen generales, prueba la conexión desde Configuración, lee como uno solo los globos cortados entre páginas, detecta más narraciones y SFX, y mejora los saltos de línea y el tamaño de letra del capítulo.
+**Versión 0.2.27** añade Gemini para OCR, menos gasto en Qwen, prueba de conexión, importación de contexto por .txt, estilos por tipo de caja, tamaño de letra igualado al traducir, limpieza automática según el fondo, exportación lista para subir y quitar imágenes del capítulo.
 
 [Descargar instalador para Windows x64](https://github.com/JipsonDev/KuroPanelStudio/releases/download/v0.2.27/KuroPanelStudio-Setup-0.2.27-Windows-x64.exe)
 · [Última versión](https://github.com/JipsonDev/KuroPanelStudio/releases/latest)

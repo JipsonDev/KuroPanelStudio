@@ -160,7 +160,7 @@ def test_cleaning_model_choice_survives_panel_and_settings_roundtrip(tmp_path):
     settings = SettingsManager(tmp_path / "settings.json")
     panel = AIOptionsPanel()
     panel.set_configuration(settings.data)
-    assert panel.clean_configuration()[1].startswith("MI-GAN")
+    assert panel.clean_configuration()[1].startswith("Automático")
     panel.clean_model.setCurrentText("LaMa · lama.onnx")
     settings.update_provider("clean", *panel.clean_configuration())
     reloaded = SettingsManager(settings.path)
