@@ -1,7 +1,10 @@
 # KuroPanel Studio @VERSION@
 
-- Cuando Alibaba Cloud rechaza una solicitud de OCR o traducción, «Ver detalle» muestra el motivo exacto que da Alibaba, en vez de indicar siempre que la clave no es válida.
-- Una cuenta con pago pendiente o restringida se identifica como tal.
-- El selector de modelo muestra el modelo que realmente se usa, y los modelos que escribes se guardan en la lista.
+- Gemini como proveedor de OCR, con capa gratuita, como respaldo de Alibaba Cloud.
+- Los modelos Qwen generales ya no gastan tokens «pensando» antes de leer o traducir.
+- «Probar conexión» en Configuración comprueba la clave, el modelo y la región con una sola solicitud.
+- Los globos cortados entre dos páginas se leen como uno solo.
+- Se detectan más narraciones, globos con picos y SFX.
+- Saltos de línea más naturales y botón para igualar el tamaño de letra del capítulo.
 
 Descarga `KuroPanelStudio-Setup-@VERSION@-Windows-x64.exe` y verifica `SHA256SUMS.txt`.

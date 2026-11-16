@@ -3,9 +3,9 @@
 Editor de escritorio para OCR, traducción, limpieza y typpeo de manhua, manhwa
 y manga. Está construido con Python, PySide6, OpenCV y ONNX Runtime.
 
-**Versión 0.2.26** muestra el motivo exacto cuando Alibaba Cloud rechaza una solicitud de OCR o traducción en vez de indicar siempre que la clave no es válida, y el selector de modelo muestra el modelo en uso y conserva los que escribes.
+**Versión 0.2.27** añade Gemini como proveedor de OCR, gasta menos en los modelos Qwen generales, prueba la conexión desde Configuración, lee como uno solo los globos cortados entre páginas, detecta más narraciones y SFX, y mejora los saltos de línea y el tamaño de letra del capítulo.
 
-[Descargar instalador para Windows x64](https://github.com/JipsonDev/KuroPanelStudio/releases/download/v0.2.26/KuroPanelStudio-Setup-0.2.26-Windows-x64.exe)
+[Descargar instalador para Windows x64](https://github.com/JipsonDev/KuroPanelStudio/releases/download/v0.2.27/KuroPanelStudio-Setup-0.2.27-Windows-x64.exe)
 · [Última versión](https://github.com/JipsonDev/KuroPanelStudio/releases/latest)
 · [Historial de cambios](CHANGELOG.md)
 
@@ -289,7 +289,7 @@ que puedas compartir legalmente.
 La aplicación instalable se construye con:
 
 ```powershell
-.\build_windows.ps1 -Version 0.2.26
+.\build_windows.ps1 -Version 0.2.27
 ```
 
 La edición compacta CPU-first se construye con:
@@ -301,12 +301,12 @@ La edición compacta CPU-first se construye con:
 Para crear el instalador x64 con Inno Setup 6:
 
 ```powershell
-.\build_installer.ps1 -Version 0.2.26
+.\build_installer.ps1 -Version 0.2.27
 ```
 
-El instalador para GitHub se genera en `github-release/KuroPanelStudio-v0.2.26/`.
+El instalador para GitHub se genera en `github-release/KuroPanelStudio-v0.2.27/`.
 Usa `-LocalOnly` en ambos comandos para generar un instalador local registrado en
-`local-builds/KuroPanelStudio-v0.2.26/`.
+`local-builds/KuroPanelStudio-v0.2.27/`.
 En GitHub, una etiqueta `vX.Y.Z` inicia el flujo de Windows que compila,
 prueba y adjunta el instalador y las notas de cambios a la Release sin subirlos manualmente.
 Consulta [la guía de publicación](docs/actualizaciones.md).
