@@ -579,6 +579,14 @@ class AIOptionsPanel(QScrollArea):
         self.translation_context.setObjectName("Muted")
         self.translation_context.setWordWrap(True)
         layout.addWidget(self.translation_context)
+        self.import_context_button = ModernButton("Importar contexto de ChatGPT", icon_name="download")
+        self.import_context_button.setMinimumWidth(0)
+        self.import_context_button.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Fixed)
+        self.import_context_button.setToolTip(
+            "Trae el glosario, el contexto y el estilo del proyecto de ChatGPT de esta obra"
+        )
+        self.import_context_button.clicked.connect(lambda: self.action_requested.emit("import_context"))
+        layout.addWidget(self.import_context_button)
         self.translation_scope = self._scope_action(layout, "translation", "Traducir texto", ("run_translation_one", "run_translation", "run_translation_all"))
         self.unify_font_button = ModernButton("Igualar tamaño de letra del capítulo", icon_name="text")
         self.unify_font_button.setMinimumWidth(0)

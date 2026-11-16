@@ -5,7 +5,7 @@ from pathlib import Path
 from PySide6.QtCore import QTimer, Qt
 from PySide6.QtGui import QColor, QFont, QFontDatabase, QIcon, QPixmap
 from PySide6.QtWidgets import (
-    QApplication, QCheckBox, QColorDialog, QComboBox, QFileDialog, QFormLayout, QGroupBox, QHBoxLayout,
+    QApplication, QCheckBox, QColorDialog, QComboBox, QDialog, QFileDialog, QFormLayout, QGroupBox, QHBoxLayout,
     QInputDialog, QLabel, QLineEdit, QListWidget, QMessageBox, QPlainTextEdit,
     QPushButton, QSpinBox, QVBoxLayout, QWidget, QSizePolicy,
 )
@@ -281,11 +281,17 @@ class ProfileSettingsWidget(QWidget):
         copy_glossary.clicked.connect(self._copy_glossary)
         paste_glossary = QPushButton("Pegar y combinar")
         paste_glossary.clicked.connect(self._paste_glossary)
+        self.import_context_button = QPushButton("Importar desde ChatGPT…")
+        self.import_context_button.setToolTip(
+            "Trae el glosario, el contexto y las reglas de estilo que tienes en un proyecto de ChatGPT"
+        )
+        self.import_context_button.clicked.connect(self._import_context)
         reset_prompt = QPushButton("Restaurar prompt")
         reset_prompt.clicked.connect(self._reset_translation_prompt)
         glossary_actions.addWidget(self.save_translation_button)
         glossary_actions.addWidget(copy_glossary)
         glossary_actions.addWidget(paste_glossary)
+        glossary_actions.addWidget(self.import_context_button)
         glossary_actions.addWidget(reset_prompt)
         translation_layout.addLayout(glossary_actions)
         self.translation_status = QLabel("Selecciona un proyecto para editar su contexto.")
@@ -579,6 +585,7 @@ class ProfileSettingsWidget(QWidget):
             self.translation_prompt.setEnabled(enabled)
             self.glossary_editor.setEnabled(enabled)
             self.save_translation_button.setEnabled(enabled)
+            self.import_context_button.setEnabled(enabled)
         finally:
             self._updating_translation = False
 
@@ -615,6 +622,20 @@ class ProfileSettingsWidget(QWidget):
         ])
         self.glossary_editor.setPlainText(glossary_to_text(combined))
         self._save_translation_profile()
+
+    def _import_context(self) -> None:
+        from ui.context_import_dialog import ContextImportDialog
+        project_type, project = self._current_type(), self._current_project()
+        if not project_type or not project:
+            return
+        self._save_translation_profile()  # keep edits typed before importing
+        dialog = ContextImportDialog(self.manager, project_type, project, self)
+        if dialog.exec() != QDialog.Accepted:
+            return
+        self._load_translation_profile(project_type, project)
+        self.translation_status.setText(
+            f"Importado desde ChatGPT · {dialog.imported_terms} término(s) y el contexto de la obra."
+        )
 
     def _reset_translation_prompt(self) -> None:
         self.translation_prompt.setPlainText(DEFAULT_TRANSLATION_PROMPT)

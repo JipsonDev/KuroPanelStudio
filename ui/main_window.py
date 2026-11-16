@@ -834,6 +834,8 @@ class MainWindow(QMainWindow):
             self.run_translation_chapter()
         elif action == "unify_font_size":
             self.unify_chapter_font_size()
+        elif action == "import_context":
+            self.import_translation_context()
         elif action == "edit_typography":
             self.edit_typography()
         elif action == "settings":
@@ -4207,6 +4209,26 @@ class MainWindow(QMainWindow):
             f"Se procesaron {len(work)} páginas pendientes en orden de lectura.",
             lambda results: self._show_chapter_ocr(results, chapter_targets),
             stage="Procesando OCR del capítulo…",
+        )
+
+    def import_translation_context(self) -> None:
+        """Bring the active series' glossary and context from a ChatGPT project."""
+        from ui.context_import_dialog import ContextImportDialog
+        if not self.font_profiles.has_project(self.active_font_type, self.active_font_profile):
+            self._toast(
+                "Elige el proyecto de la obra",
+                "Asigna primero un proyecto de traducción al capítulo; el contexto se guarda en él.",
+            )
+            self.switch_active_project()
+            return
+        dialog = ContextImportDialog(self.font_profiles, self.active_font_type, self.active_font_profile, self)
+        if dialog.exec() != QDialog.Accepted:
+            return
+        self._refresh_font_profiles()
+        self._toast(
+            "Contexto importado",
+            f"{dialog.imported_terms} término(s) y el contexto de la obra se usarán en cada traducción de "
+            f"{self.active_font_profile}.",
         )
 
     def unify_chapter_font_size(self) -> None:
