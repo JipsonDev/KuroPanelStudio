@@ -117,7 +117,7 @@ def test_settings_exposes_interface_language_separately_from_ocr(tmp_path):
     try:
         translator.set_language("en")
         translator.refresh(dialog)
-        assert dialog.windowTitle() == "Settings · Providers and security"
+        assert dialog.windowTitle() == "Settings"
         assert dialog.ui_language.currentData() == "en"
         assert dialog.ui_language.itemText(0) == "Español"
         assert dialog.values()["target_language"] == "ES"
