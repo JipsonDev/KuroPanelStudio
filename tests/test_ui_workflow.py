@@ -2255,7 +2255,7 @@ class UIWorkflowTests(unittest.TestCase):
         menu = menus[0]
         kind_menu = menu.actions()[0].menu()
         labels = [action.text() for action in kind_menu.actions()]
-        self.assertEqual(labels, ["Automático", "Diálogo", "Grito", "Cuadro"])
+        self.assertEqual(labels, ["Automático", "Diálogo", "Grito", "Pensamiento", "Cuadro", "SFX"])
         self.assertTrue(kind_menu.actions()[0].isChecked())
         kind_menu.actions()[2].trigger()
         self.assertEqual(kinds, [("second", "shout")])
