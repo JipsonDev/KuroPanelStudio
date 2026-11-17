@@ -199,8 +199,8 @@ class OCRManager:
 
     @staticmethod
     def needs_recognition(region: dict) -> bool:
-        if region.get("seam_child") and not region.get("ocr_stale"):
-            return False  # its text was read with the other half of the balloon
+        if (region.get("seam_child") or region.get("repeated_caption")) and not region.get("ocr_stale"):
+            return False  # read with its other half, or a repeated watermark caption
         return bool(region.get("ocr_stale")) or not (
             region.get("ocr_checked") or region.get("ocr_completed") or str(region.get("text", "")).strip()
         )

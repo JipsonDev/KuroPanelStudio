@@ -22,7 +22,7 @@ from core.app_version import APP_UPDATE_CHANNEL, APP_VERSION
 from core.balloon_classifier import BALLOON_KINDS, KIND_LOOK_KEYS, KIND_LOOKS, classify_balloon
 from core.credential_store import CredentialStore
 from core.detection_manager import DetectionManager
-from core.chapter_detection import detect_chapter
+from core.chapter_detection import mark_repeated_captions, detect_chapter
 from core.font_profile_manager import FontProfileManager
 from core.history_manager import HistoryManager
 from core.image_manager import ImageManager
@@ -3987,6 +3987,7 @@ class MainWindow(QMainWindow):
                 self.page_regions[key] = regions
                 self._refresh_page_text(key)
                 applied += 1
+            self._note_repeated_captions(mark_repeated_captions(self.page_regions))
             if self._active_key() in results:
                 self.regions = self.page_regions.get(self._active_key(), [])
                 self._render_page_layers(self._active_key())
@@ -4021,6 +4022,9 @@ class MainWindow(QMainWindow):
         if not target_regions:
             self._toast("Sin cajas de texto", "Primero ejecuta Autodetectar texto (YOLO).")
             return
+        if force:
+            for region in target_regions:
+                region.pop("repeated_caption", None)
         seamed = [region for region in target_regions if region.get(SEAM_PARTNER_KEY)
                   and (force or OCRManager.needs_recognition(region))]
         if seamed:
@@ -4659,16 +4663,27 @@ class MainWindow(QMainWindow):
                 offset, span = page_index * 100 / len(pages), 100 / len(pages)
                 page_stage = f"Página {page_index + 1} de {len(pages)} · traducción"
                 progress(int(offset), page_stage, key)
-                result = self.translator.translate_with_context(
-                    texts, provider, model, api_key,
-                    configuration.get("source_language", "ZH"), configuration.get("target_language", "ES"),
-                    translation_profile.get("glossary", []), translation_profile.get("prompt", ""),
-                    "\n".join(context_blocks)[-5000:],
-                    lambda value, base=offset, amount=span, label=page_stage, current=key: progress(
-                        int(base + value * amount / 100), label, current,
-                    ),
-                    cancelled,
-                )
+                try:
+                    result = self.translator.translate_with_context(
+                        texts, provider, model, api_key,
+                        configuration.get("source_language", "ZH"), configuration.get("target_language", "ES"),
+                        translation_profile.get("glossary", []), translation_profile.get("prompt", ""),
+                        "\n".join(context_blocks)[-5000:],
+                        lambda value, base=offset, amount=span, label=page_stage, current=key: progress(
+                            int(base + value * amount / 100), label, current,
+                        ),
+                        cancelled,
+                    )
+                except Exception as error:
+                    if not translated_pages:
+                        raise
+                    # The pages already translated were paid for: keep them
+                    # and report where it stopped.
+                    return {
+                        "pages": translated_pages, "terms": learned_terms,
+                        "profile_type": profile_type, "profile_name": profile_name,
+                        "stopped": (page.name, str(error), len(pages) - len(translated_pages)),
+                    }
                 values = list(result.get("translations", []))
                 translated_pages[key] = [(region.get("id"), value) for region, value in zip(ordered, values)]
                 learned_terms.extend(result.get("terms", []))
@@ -4705,6 +4720,16 @@ class MainWindow(QMainWindow):
             self.regions = self.page_regions[self._active_key()]
             self._render_page_layers(self._active_key())
         self._record_history()
+        if payload.get("stopped"):
+            name, detail, pending = payload["stopped"]
+            failure = describe_failure("translation", detail)
+            self._task_warning = (
+                f"La traducción se detuvo en «{name}»",
+                f"{failure.title}. {failure.action}\n\n{len(payload.get('pages', {}))} página(s) ya quedaron "
+                f"traducidas y {pending} siguen pendientes. Vuelve a traducir el capítulo: solo se enviará "
+                f"lo que falta.\n\nDetalle técnico:\n{detail}",
+                {},
+            )
         if payload.get("pages"):
             # After the progress bar of the translation has closed.
             QTimer.singleShot(0, lambda: self.unify_chapter_font_size(automatic=True))
@@ -4753,6 +4778,14 @@ class MainWindow(QMainWindow):
                 f"{len(new_terms)} término(s) revisados · {len(combined)} guardados en {profile_name}.",
             )
 
+    def _note_repeated_captions(self, count: int) -> None:
+        if count:
+            self._toast(
+                "Rótulos repetidos sin leer",
+                f"{count} caja(s) iguales que se repiten (marca de agua) no se enviarán a OCR ni a traducción. "
+                "Para leer una, selecciónala y usa «Releer caja».", kind="info",
+            )
+
     def _show_regions(self, regions: list[dict]) -> None:
         key = self._active_key()
         manga_mode = self._manga_mode_for_key(key)
@@ -4763,6 +4796,7 @@ class MainWindow(QMainWindow):
             self._consume_pending_text(key, regions)
         self.regions = regions
         self._store_active_regions(regions)
+        self._note_repeated_captions(mark_repeated_captions(self.page_regions))
         self.canvas_shell.canvas.set_regions(regions, manga_mode=manga_mode)
         self.canvas_shell.canvas.add_text(
             [region.get("applied_text") or region.get("translation") or region.get("text", "") for region in regions],

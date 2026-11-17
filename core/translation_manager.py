@@ -62,6 +62,44 @@ def _gemini_thinking_config(model: str) -> dict:
     return {}
 
 
+REFERENCE_TERM_LIMIT = 40
+
+
+def relevant_glossary(glossary, texts: list[str]) -> list[dict]:
+    """The glossary terms a batch needs, instead of the whole glossary.
+
+    A term is sent when its original appears in the batch. Terms whose
+    original is written in another script than the batch (a name noted in
+    Spanish for a Chinese raw) can never match, so up to
+    ``REFERENCE_TERM_LIMIT`` of them still go as reference.
+    """
+    terms = normalize_glossary(glossary)
+    joined = "\n".join(str(text) for text in texts).casefold()
+    batch_is_cjk = any(_is_cjk(char) for char in joined)
+    matched, reference = [], []
+    for term in terms:
+        source = str(term.get("source", "")).strip()
+        if not source:
+            continue
+        if source.casefold() in joined:
+            matched.append(term)
+        elif batch_is_cjk and not any(_is_cjk(char) for char in source) and len(reference) < REFERENCE_TERM_LIMIT:
+            reference.append(term)
+    return matched + reference
+
+
+def relevant_glossary_text(glossary, texts: list[str]) -> str:
+    lines = []
+    for term in relevant_glossary(glossary, texts):
+        note = str(term.get("note", "")).strip()
+        lines.append(f"{term['source']} = {term['target']}" + (f" ({note})" if note else ""))
+    return "\n".join(lines) or "(ningún término del glosario aparece en estas entradas)"
+
+
+def _is_cjk(char: str) -> bool:
+    return "\u3040" <= char <= "\u30ff" or "\u3400" <= char <= "\u9fff" or "\uac00" <= char <= "\ud7af"
+
+
 def upgrade_translation_prompt(value: str | None) -> str:
     """Upgrade only the old built-in prompt; never overwrite user-authored instructions."""
     prompt = str(value or "").strip()
@@ -329,6 +367,13 @@ class TranslationManager:
                         message = f"{provider} respondió HTTP {response.status_code}: {detail}"
                     raise TranslationConfigurationError(message)
                 return response.json()
+            except requests.exceptions.ReadTimeout as error:
+                # The request arrived and was probably generated and billed:
+                # sending it again would pay for the same batch twice.
+                raise TranslationConfigurationError(
+                    f"{provider} tardó demasiado en responder. Vuelve a intentarlo; "
+                    "lo ya traducido se conserva."
+                ) from error
             except requests.RequestException as error:
                 if attempt + 1 < attempts:
                     sleep(0.5 * (attempt + 1))
@@ -452,9 +497,11 @@ class TranslationManager:
             "translations debe tener el mismo número y orden de entradas. terms incluye solamente "
             "entidades o vocabulario recurrente nuevo que no figure en el glosario; no incluyas "
             "palabras comunes. Conserva signos y saltos internos.\n"
-            f"Glosario obligatorio:\n{json.dumps(normalize_glossary(glossary), ensure_ascii=False)}\n"
-            f"Contexto reciente:\n{context or '(sin contexto anterior)'}\n"
+            # Stable text first and what changes per batch last: providers
+            # bill a repeated prefix at their cached-input rate.
             f"Instrucciones permanentes del proyecto:\n{custom or DEFAULT_TRANSLATION_PROMPT}\n"
+            f"Glosario obligatorio (original = traducción):\n{relevant_glossary_text(glossary, texts)}\n"
+            f"Contexto reciente:\n{context or '(sin contexto anterior)'}\n"
             f"Entradas:\n{json.dumps(texts, ensure_ascii=False)}"
         )
 

@@ -17,7 +17,7 @@ def test_seam_child_counts_as_done_and_is_not_read_alone():
               "applied_text": "x", "style": {"a": 1}, "seam_partner": "b"}
     child = {"id": "b", "text": "", "seam_partner": "a", "seam_child": True, "ocr_checked": True}
     status = page_workflow_status([child])
-    assert not status["detected"]  # nothing of its own left to do on that page
+    assert status["detected"] and status["ocr"]  # nothing of its own left to do on that page
     status = page_workflow_status([anchor, child])
     assert status["ocr"] and status["translated"] and status["typeset"]
     assert not OCRManager.needs_recognition(child)
@@ -99,3 +99,48 @@ def test_unsaved_work_is_kept_unless_discarded():
     assert MainWindow._may_replace_work(window, "abrir otro capítulo") and saved
     window._dirty, window.current_task = True, object()
     assert not MainWindow._may_replace_work(window, "abrir otro capítulo")
+
+
+def test_only_the_terms_a_batch_needs_are_sent():
+    from core.translation_manager import TranslationManager, relevant_glossary
+    glossary = [
+        {"source": "林枫", "target": "Lin Feng", "category": "personaje", "note": "protagonista"},
+        {"source": "小灵", "target": "Xiao Ling"},
+        {"source": "Tianyun Clan", "target": "Clan Tianyun"},
+    ]
+    assert [term["source"] for term in relevant_glossary(glossary, ["林枫来了"])] == ["林枫", "Tianyun Clan"]
+    prompt = TranslationManager._prompt(["林枫来了"], "ZH", "ES", glossary, "", "")
+    assert "林枫 = Lin Feng (protagonista)" in prompt and "小灵" not in prompt
+    # What changes per batch comes last, after the project's fixed instructions.
+    assert prompt.index("Instrucciones permanentes") < prompt.index("Glosario obligatorio") < prompt.index("Entradas:")
+
+
+def test_a_read_timeout_is_not_sent_again(monkeypatch):
+    import requests
+    from core.translation_manager import TranslationConfigurationError, TranslationManager
+    calls = []
+
+    class Session:
+        def post(self, *args, **kwargs):
+            calls.append(1)
+            raise requests.exceptions.ReadTimeout("slow")
+
+    monkeypatch.setattr(TranslationManager, "_get_http_session", classmethod(lambda cls: Session()))
+    with pytest.raises(TranslationConfigurationError):
+        TranslationManager._request("https://dashscope-intl.aliyuncs.com/x", {}, {})
+    assert len(calls) == 1
+
+
+def test_repeated_watermark_captions_are_flagged_but_dialogue_is_not():
+    from core.chapter_detection import mark_repeated_captions
+    def box(w, h, confidence=.3, **extra):
+        return {"x": 0, "y": 0, "width": w, "height": h, "confidence": confidence, **extra}
+    captions = [box(300, 32), box(304, 33), box(298, 31)]
+    dialogue = [box(300, 32, confidence=.8), box(200, 150), box(202, 151), box(199, 149)]
+    read = box(301, 32, text="ya leído")
+    pages = {"1": captions[:2] + dialogue, "2": [captions[2], read]}
+    assert mark_repeated_captions(pages) == 3
+    assert all(item.get("repeated_caption") for item in captions)
+    assert not any(item.get("repeated_caption") for item in dialogue + [read])
+    assert not OCRManager.needs_recognition(captions[0])
+    assert page_workflow_status([captions[0]])["detected"]
