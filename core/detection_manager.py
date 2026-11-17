@@ -652,6 +652,14 @@ class DetectionManager:
                         evidence = evidence_cache[key]
                         if evidence is False or (evidence is None and not adjacent):
                             continue
+                        # Without a balloon outline around both, a block taller
+                        # than the page is wide is several paragraphs of
+                        # narration: joined, they became one 2450 px box that
+                        # the OCR received at a third of its size.
+                        tall = (max(first.y + first.height, second.y + second.height)
+                                - min(first.y, second.y)) > image.width * 1.2
+                        if evidence is not True and tall:
+                            continue
                     elif not adjacent:
                         continue
                     x1 = min(first.x, second.x)

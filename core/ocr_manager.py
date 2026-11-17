@@ -895,6 +895,11 @@ class OCRManager:
             max_side = max(max_side, 1536)
         if crop.width > max_side or crop.height > max_side or crop.width * crop.height > max_pixels:
             scale = min(max_side / crop.width, max_side / crop.height, (max_pixels / (crop.width * crop.height)) ** 0.5)
+            # Never shrink below half size: a tall narration block reduced to
+            # 0.29x left 7 px glyphs nobody could read. Four times the pixel
+            # budget is the hard limit for those exceptional crops.
+            pixels = crop.width * crop.height
+            scale = max(scale, min(0.5, (4 * max_pixels / pixels) ** 0.5))
             crop = crop.resize(
                 (max(1, int(crop.width * scale)), max(1, int(crop.height * scale))),
                 Image.Resampling.LANCZOS,
