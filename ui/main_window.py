@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import copy
 import os
+import re
 import subprocess
 import sys
 import threading
@@ -13,8 +14,8 @@ from pathlib import Path
 import numpy as np
 
 from PySide6.QtCore import QFile, QFileSystemWatcher, QPoint, QThreadPool, QTimer, Qt
-from PySide6.QtGui import QAction, QGuiApplication
-from PySide6.QtWidgets import QApplication, QCheckBox, QFileDialog, QDialog, QHBoxLayout, QMainWindow, QMessageBox, QProgressDialog, QScrollArea, QSplitter, QStackedWidget, QVBoxLayout, QWidget
+from PySide6.QtGui import QAction, QGuiApplication, QKeySequence
+from PySide6.QtWidgets import QApplication, QCheckBox, QFileDialog, QLineEdit, QPlainTextEdit, QTextEdit, QDialog, QHBoxLayout, QMainWindow, QMessageBox, QProgressDialog, QScrollArea, QSplitter, QStackedWidget, QVBoxLayout, QWidget
 
 from core.cleaning_process_manager import CleaningProcessManager
 from core.app_updater import ReleaseUpdater, UpdateInfo, check_available_update
@@ -438,6 +439,8 @@ class MainWindow(QMainWindow):
         self.ai_panel = AIOptionsPanel()
         self.ai_panel.setMinimumWidth(280)
         self.ai_panel.set_configuration(self.settings.data)
+        self.ai_panel.set_scope(int(self.settings.data.get("general", {}).get("scope", 1)))
+        self.ai_panel.scope_changed.connect(self._remember_scope)
         self.script_panel = ScriptPanel()
         self.text_panel = TextOptionsPanel()
         self.text_panel.set_presets(self.style_presets)
@@ -674,22 +677,32 @@ class MainWindow(QMainWindow):
         remove_retouch.triggered.connect(self.remove_last_retouch)
         self.addAction(remove_retouch)
         brush_p = QAction("Pincel de color", self)
-        brush_p.setShortcut("Ctrl+P")
+        brush_p.setShortcuts([QKeySequence("P"), QKeySequence("Ctrl+P")])
         brush_p.triggered.connect(lambda: self._toggle_brush_mode("paint"))
         self.addAction(brush_p)
         brush_s = QAction("Tampón de clonar", self)
         brush_s.triggered.connect(lambda: self._toggle_brush_mode("clone"))
+        brush_s.setShortcut("S")  # single keys do not fire while a text field has the focus
         self.addAction(brush_s)
         brush_h = QAction("Pincel corrector puntual", self)
         brush_h.triggered.connect(lambda: self._toggle_brush_mode("heal"))
+        brush_h.setShortcut("H")  # single keys do not fire while a text field has the focus
         self.addAction(brush_h)
         brush_r = QAction("Restaurar original", self)
         brush_r.triggered.connect(lambda: self._toggle_brush_mode("restore"))
+        brush_r.setShortcut("R")  # single keys do not fire while a text field has the focus
         self.addAction(brush_r)
         brush_m = QAction("Pincel de máscara", self)
         brush_m.triggered.connect(lambda: self._toggle_brush_mode("mask"))
+        brush_m.setShortcut("M")  # single keys do not fire while a text field has the focus
         self.addAction(brush_m)
-        delete_region = QAction("Eliminar cuadro", self)
+        for label, keys, handler in (("Página anterior", "PgUp", self.previous_page),
+                                     ("Página siguiente", "PgDown", self.next_page)):
+            page_action = QAction(label, self)
+            page_action.setShortcut(keys)
+            page_action.triggered.connect(handler)
+            self.addAction(page_action)
+        delete_region = QAction("Eliminar caja", self)
         delete_region.setShortcut("Delete")
         delete_region.triggered.connect(self._delete_active_region_action)
         self.addAction(delete_region)
@@ -840,6 +853,10 @@ class MainWindow(QMainWindow):
             self.import_translation_context()
         elif action == "edit_typography":
             self.edit_typography()
+        elif action in {"settings_ocr", "settings_translation"}:
+            self.open_settings("credentials")
+        elif action == "process_chapter":
+            self.process_chapter()
         elif action == "settings":
             self.open_settings()
         elif action == "check_updates":
@@ -867,10 +884,22 @@ class MainWindow(QMainWindow):
         elif action == "delete_last":
             self.canvas_shell.canvas.delete_last_region()
         elif action == "delete_all":
+            count = len(self.regions)
+            if count and self.ASK_BEFORE_DISCARD:
+                box = QMessageBox(self)
+                box.setIcon(QMessageBox.Warning)
+                box.setWindowTitle("Eliminar cajas")
+                box.setText(f"¿Eliminar las {count} cajas de esta página?")
+                box.setInformativeText("Se quitan también su texto y su traducción. Puedes deshacerlo con Ctrl+Z.")
+                confirm = box.addButton("Eliminar cajas", QMessageBox.DestructiveRole)
+                box.addButton("Cancelar", QMessageBox.RejectRole)
+                box.exec()
+                if box.clickedButton() is not confirm:
+                    return
             self.canvas_shell.canvas.delete_all_regions()
         elif action == "delete_selected":
             self.canvas_shell.canvas.delete_selected_regions()
-            self._toast("Selecciones eliminadas", "Se quitaron las regiones seleccionadas.")
+            self._toast("Cajas eliminadas", "Se quitaron las cajas seleccionadas.")
         elif action == "save_current":
             self.save_current()
         elif action == "save_all":
@@ -888,7 +917,7 @@ class MainWindow(QMainWindow):
         elif action == "redo":
             self.redo()
         else:
-            self._toast("Función sin backend", f"{action}: requiere un modelo o flujo adicional.")
+            self._toast("Función no disponible", f"Esta acción todavía no está disponible ({action}).")
 
     def _set_retouch_mode(self, enabled: bool) -> None:
         self._set_brush_mode("paint" if enabled else None)
@@ -1106,6 +1135,69 @@ class MainWindow(QMainWindow):
         task.signals.completed.connect(lambda result: self._task_completed(result, title, message, finished))
         task.signals.failed.connect(self._task_failed)
         self.thread_pool.start(task)
+
+    PIPELINE_STEPS = (
+        ("Detectar cajas", "run_detection_chapter"), ("Leer texto (OCR)", "run_ocr_api_all"),
+        ("Limpiar", "_pipeline_clean"), ("Traducir", "run_translation_chapter"),
+    )
+
+    def _pipeline_clean(self) -> None:
+        """Clean the chapter unless every page with boxes is already clean."""
+        pending = [page for page in self.project.pages
+                   if self.page_regions.get(page_key(page))
+                   and not self.clean_results.get(page_key(page), {}).get("patches")]
+        if pending:
+            self.clean_chapter()
+
+    def _remember_scope(self, index: int) -> None:
+        general = self.settings.data.setdefault("general", {})
+        if general.get("scope") != index:
+            general["scope"] = index
+            self.settings.save()
+
+    def process_chapter(self) -> None:
+        """Detect, read, clean and translate the whole chapter, one step after another.
+
+        Each step is the same one its own button runs, so pages already done
+        are skipped and nothing is paid twice. The chain stops at the first
+        failure or warning; translation goes last because it ends by
+        unifying the font size.
+        """
+        if self.current_task is not None:
+            self._toast("Proceso en curso", "Espera a que termine la tarea actual.")
+            return
+        if not self.project.pages:
+            self._toast("Abre un capítulo", "Carga las imágenes antes de procesar el capítulo.")
+            return
+        self._update_provider_statuses()
+        if not self.ai_panel.is_ready("ocr"):
+            self._toast("Configura el OCR", "Falta la clave del proveedor de OCR para procesar el capítulo.")
+            self.open_settings("credentials")
+            return
+        self._pipeline = [name for _label, name in self.PIPELINE_STEPS]
+        self._advance_pipeline()
+
+    def _advance_pipeline(self) -> None:
+        while getattr(self, "_pipeline", None) and self.current_task is None:
+            step = self._pipeline.pop(0)
+            label = next(text for text, name in self.PIPELINE_STEPS if name == step)
+            remaining = len(self._pipeline)
+            self.inspector.set_stage(f"Procesar capítulo · {label}" + (f" · faltan {remaining} paso(s)" if remaining else ""))
+            getattr(self, step)()
+            # A step with nothing to do returns without starting a task:
+            # the loop goes straight to the next one.
+
+    def _pipeline_step_finished(self, ok: bool) -> None:
+        if not getattr(self, "_pipeline", None):
+            return
+        if not ok:
+            pending = len(self._pipeline)
+            self._pipeline = []
+            self._toast("Proceso del capítulo detenido",
+                        f"Quedaron {pending} paso(s) sin hacer. Corrige el problema y vuelve a pulsar "
+                        "«Procesar capítulo completo»: lo ya hecho no se repite.", kind="warning")
+            return
+        QTimer.singleShot(0, self._advance_pipeline)
 
     def _return_to_task_page(self) -> None:
         """Show the page a page-scoped task was launched on before applying its result.
@@ -2700,7 +2792,7 @@ class MainWindow(QMainWindow):
         """Open the project & profile chooser anytime to switch library/project."""
         project_types = self.font_profiles.project_types()
         if not any(self.font_profiles.projects(pt) for pt in project_types):
-            self._toast("Sin proyectos", "Abre Ajustes para crear tu primer proyecto de traducción.")
+            self._toast("Sin proyectos", "Abre Configuración → Perfiles de fuentes para crear tu primer proyecto.")
             return
         selector = ProjectSelectionDialog(
             self.font_profiles, self.active_font_type, self.active_font_profile, self,
@@ -2827,7 +2919,7 @@ class MainWindow(QMainWindow):
             self._toast("No se pudo abrir el instalador", str(error), "error")
             self.show()
 
-    def open_settings(self) -> None:
+    def open_settings(self, tab: str = "") -> None:
         # Existing imported project fonts must be registered before the profile
         # editor builds its picker and preview.
         register_profile_fonts(self.font_profiles)
@@ -2835,6 +2927,8 @@ class MainWindow(QMainWindow):
             self.settings.data, self.credentials, self.font_profiles,
             False, self,
         )
+        if tab:
+            dialog.select_tab(tab)
         if dialog.exec() != QDialog.Accepted:
             return
         if dialog.profile_settings is not None:
@@ -3354,6 +3448,7 @@ class MainWindow(QMainWindow):
                 self.task_progress.finish(warning=warning[0], warning_detail=warning[1])
             else:
                 self.task_progress.finish()
+            self._pipeline_step_finished(ok=not warning)
         category = self._operation_category(title)
         if category:
             completed = {page_id} if page_id and "capítulo" not in title.casefold() else set()
@@ -3391,6 +3486,7 @@ class MainWindow(QMainWindow):
         return ""
 
     def _task_failed(self, message: str) -> None:
+        self._pipeline_step_finished(ok=False)
         self.ai_panel.set_ocr_usage(self.ocr.usage_stats())
         operation_name = self._active_operation_name
         page_id = self._active_task_page_key
@@ -4020,7 +4116,7 @@ class MainWindow(QMainWindow):
             self._toast("Abre un capítulo", "Selecciona una carpeta con imágenes antes de ejecutar OCR.")
             return
         if not target_regions:
-            self._toast("Sin cajas de texto", "Primero ejecuta Autodetectar texto (YOLO).")
+            self._toast("Sin cajas de texto", "Primero pulsa Detectar cajas o dibuja una a mano.")
             return
         if force:
             for region in target_regions:
@@ -4054,7 +4150,7 @@ class MainWindow(QMainWindow):
             self.ocr.set_endpoint(self.settings.data["ocr"].get("base_url", ""))
             self.ocr.validate(provider, key)
         except (RuntimeError, ValueError) as error:
-            self._toast("OCR mediante API", str(error))
+            self._toast("No se pudo leer el texto", str(error), kind="error")
             return
         page = self.project.active_page
         source_states = copy.deepcopy(self._source_layer_states(self._active_key()))
@@ -4090,8 +4186,7 @@ class MainWindow(QMainWindow):
         if failed:
             self._report_ocr_failures({self._active_key(): failed})
         if request_targets:
-            self._merge_ocr_results(regions, request_targets, self.page_regions.get(self._active_key()))
-            self.regions = self.page_regions.get(self._active_key(), self.regions)
+            self._merge_ocr_results(regions, request_targets, self.regions)
         else:
             # Compatibility for restored tasks created before request tokens.
             recognized = {region.get("id"): region for region in regions}
@@ -4225,7 +4320,7 @@ class MainWindow(QMainWindow):
             self.ocr.set_endpoint(self.settings.data["ocr"].get("base_url", ""))
             self.ocr.validate(provider, key)
         except (RuntimeError, ValueError) as error:
-            self._toast("OCR mediante API", str(error))
+            self._toast("No se pudo leer el texto", str(error), kind="error")
             return
 
         seam_jobs = self._chapter_seam_jobs(work)
@@ -4578,7 +4673,7 @@ class MainWindow(QMainWindow):
         try:
             self.translator.validate(provider, api_key)
         except RuntimeError as error:
-            self._toast("Traducción", str(error))
+            self._toast("No se pudo traducir", str(error), kind="error")
             return
         texts = [str(region["text"]) for region in ordered]
         context = self._recent_translation_context(limit=5000)
@@ -4632,7 +4727,7 @@ class MainWindow(QMainWindow):
         try:
             self.translator.validate(provider, api_key)
         except RuntimeError as error:
-            self._toast("Traducción", str(error))
+            self._toast("No se pudo traducir", str(error), kind="error")
             return
         configuration = self.settings.data["translate"]
         profile_type, profile_name = self.active_font_type, self.active_font_profile
@@ -4914,7 +5009,7 @@ class MainWindow(QMainWindow):
 
     def clean_text(self) -> None:
         if not self.project.pages or not self.regions:
-            self._toast("No hay regiones", "Ejecuta la detección antes de limpiar.")
+            self._toast("Sin cajas de texto", "Primero pulsa Detectar cajas o dibuja una a mano.")
             return
         if self._retouch_layer_state(self._active_key())["automatic"].get("locked", False):
             self._toast("Limpieza bloqueada", "Desbloquea la capa Limpieza automática.")
@@ -4930,7 +5025,7 @@ class MainWindow(QMainWindow):
             return
         selected = [item.region for item in self.canvas_shell.canvas._regions if item.isSelected()]
         if not selected:
-            self._toast("Selecciona una capa", "Haz clic en una caja del lienzo y pulsa Una capa.")
+            self._toast("Selecciona una caja", "Haz clic en una caja del lienzo y elige Caja seleccionada.")
             return
         self._prepare_clean_mask(selected)
 
@@ -5348,10 +5443,11 @@ class MainWindow(QMainWindow):
         page = self.project.pages[index]
         box = QMessageBox(self)
         box.setIcon(QMessageBox.Question)
-        box.setWindowTitle("Quitar imagen del capítulo")
+        box.setWindowTitle("Quitar página del capítulo")
         box.setText(f"¿Quitar «{page.name}» del capítulo?")
         box.setInformativeText(
-            "Se quitan sus cajas, textos y limpieza del proyecto. Esto no se puede deshacer. "
+            "Se quitan sus cajas, textos y limpieza del proyecto, y se borra el historial de deshacer. "
+            "Esto no se puede deshacer. "
             "La imagen original se conserva salvo que marques la casilla."
         )
         trash = QCheckBox("Enviar también el archivo a la Papelera de reciclaje")
@@ -5852,5 +5948,7 @@ class MainWindow(QMainWindow):
         self._layout_toasts()
         toast.raise_()
         toast.show()
-        duration = 5200 if semantic_kind == "error" else (3800 if semantic_kind == "warning" else 2800)
+        # Long enough to read: an error used to vanish in about five seconds
+        # and a two-sentence hint in under three.
+        duration = {"error": 9000, "warning": 6000, "info": 5000}.get(semantic_kind, 3200)
         QTimer.singleShot(duration, lambda current=toast: self._remove_toast(current))

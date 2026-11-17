@@ -533,7 +533,7 @@ class TextRegionItem(QGraphicsRectItem):
             if self._on_hyphenation_change is not None else None
         )
         menu.addSeparator()
-        del_action = menu.addAction(translate_text("Eliminar cuadro de texto (Supr / Delete)", language))
+        del_action = menu.addAction(translate_text("Eliminar caja (Supr)", language))
         del_action.triggered.connect(lambda: self._on_deleted(self))
         menu.exec(event.screenPos())
         event.accept()

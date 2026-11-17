@@ -8,7 +8,6 @@ def page_workflow_status(regions: list[dict], clean_result: dict | None = None) 
     everything = bool(regions)
     regions = [region for region in regions
                if not region.get("seam_child") and not region.get("repeated_caption")]
-    has_regions = bool(regions)
     ocr_done = everything and all(str(region.get("text", "")).strip() for region in regions)
     translated = everything and all(
         bool(region.get("translation_completed", False))

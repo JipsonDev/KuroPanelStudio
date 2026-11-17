@@ -144,3 +144,19 @@ def test_repeated_watermark_captions_are_flagged_but_dialogue_is_not():
     assert not any(item.get("repeated_caption") for item in dialogue + [read])
     assert not OCRManager.needs_recognition(captions[0])
     assert page_workflow_status([captions[0]])["detected"]
+
+
+def test_process_chapter_runs_each_step_and_stops_on_a_problem():
+    pytest.importorskip("PySide6")
+    from ui.main_window import MainWindow
+    ran = []
+    window = window_stub(current_task=None, _toast=lambda *a, **k: None,
+                         inspector=SimpleNamespace(set_stage=lambda *a: None), PIPELINE_STEPS=MainWindow.PIPELINE_STEPS)
+    for _label, name in MainWindow.PIPELINE_STEPS:
+        setattr(window, name, lambda step=name: ran.append(step))
+    window._pipeline = [name for _label, name in MainWindow.PIPELINE_STEPS]
+    MainWindow._advance_pipeline(window)  # no step starts a task: all four run in order
+    assert ran == [name for _label, name in MainWindow.PIPELINE_STEPS] and not window._pipeline
+    window._pipeline = ["run_translation_chapter"]
+    MainWindow._pipeline_step_finished(window, ok=False)
+    assert window._pipeline == []

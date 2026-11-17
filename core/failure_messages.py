@@ -39,7 +39,8 @@ _RULES = (
      ("saldo insuficiente", "insufficient balance", "cuota gratuita", "free quota", "http 402",
       "good standing", "arrearage", "pago pendiente")),
     ("credentials", "El proveedor rechazó la clave",
-     "Revisa la clave y la región en Configuración → OCR y traducción; el motivo exacto está en «Ver detalle».", False,
+     "Revisa la clave en Configuración → Credenciales y la región en Configuración → OCR y traducción; "
+     "el motivo exacto está en «Ver detalle».", False,
      ("clave no válida", "invalid_api_key", "incorrect api key", "http 401", "http 403", "agrega tu api key",
       "la clave no es válida")),
     ("model", "Modelo o dirección del proveedor no disponible",

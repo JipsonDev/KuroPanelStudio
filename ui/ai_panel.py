@@ -90,6 +90,7 @@ class AIOptionsPanel(QScrollArea):
     action_requested = Signal(str)
     mode_changed = Signal(str)
     provider_changed = Signal(str, str, str)
+    scope_changed = Signal(int)
     # NEW: thickness / margin / opacity / manga-mode now actually reach the rest
     # of the app instead of living only inside the widgets that display them.
     style_options_changed = Signal(str, dict)  # mode, {"thickness", "margin", "opacity", "manga_mode"?}
@@ -386,6 +387,7 @@ class AIOptionsPanel(QScrollArea):
             scope.setItemData(index, index)
         scope.setAccessibleName(f"Alcance de {title}")
         scope.setCurrentIndex(1)
+        scope.currentIndexChanged.connect(self.set_scope)
         footer_layout.addWidget(scope)
         button = ModernButton(title, "Primary", icon_name={
             "ocr": "script", "translation": "languages", "clean": "eraser",
@@ -408,7 +410,29 @@ class AIOptionsPanel(QScrollArea):
         if self._ready.get(mode, True):
             self.action_requested.emit(self._primary_actions[mode][scope_index])
         else:
-            self.action_requested.emit("settings")
+            # Straight to the tab with the keys, not to «Interfaz».
+            self.action_requested.emit("settings_ocr" if mode == "ocr" else
+                                       "settings_translation" if mode == "translation" else "settings")
+
+    def set_scope(self, index: int) -> None:
+        """One scope for every step: choosing «Todo el capítulo» once is enough.
+
+        «Caja seleccionada» stays local to the step where it was chosen.
+        """
+        if getattr(self, "_syncing_scope", False) or index not in (1, 2):
+            return
+        self._syncing_scope = True
+        try:
+            for name in ("ocr_scope", "translation_scope", "clean_scope"):
+                combo = getattr(self, name, None)
+                if combo is not None and combo.currentIndex() != index and combo.currentIndex() != 0:
+                    combo.setCurrentIndex(index)
+            detect = getattr(self, "detect_scope", None)
+            if detect is not None and detect.currentIndex() != index - 1:
+                detect.setCurrentIndex(index - 1)
+        finally:
+            self._syncing_scope = False
+        self.scope_changed.emit(index)
 
     @classmethod
     def _combo(cls, values: list[str]) -> QComboBox:
@@ -464,7 +488,16 @@ class AIOptionsPanel(QScrollArea):
     # ------------------------------------------------------------------ #
     def _ocr_page(self) -> QWidget:
         page, layout = self._page_layout()
-        self._heading(layout, "Detectar cajas · YOLO", "Detección local de texto, sin usar la API.")
+        self.process_chapter_button = ModernButton("Procesar capítulo completo", "Primary", icon_name="sparkles")
+        self.process_chapter_button.setMinimumHeight(36)
+        self.process_chapter_button.setToolTip(
+            "Detecta las cajas, lee el texto, limpia y traduce todo el capítulo, en ese orden. "
+            "Se detiene en el primer problema y no repite lo que ya está hecho"
+        )
+        self.process_chapter_button.clicked.connect(lambda: self.action_requested.emit("process_chapter"))
+        layout.addWidget(self.process_chapter_button)
+        layout.addWidget(self._divider())
+        self._heading(layout, "Detectar cajas", "Detección local de texto, sin usar la API.")
         self.detect_scope = self._combo(["Página actual", "Todo el capítulo"])
         self.detect_scope.setProperty("kuro_i18n_choices", True)
         self.detect_scope.setItemData(0, "page")
@@ -477,6 +510,7 @@ class AIOptionsPanel(QScrollArea):
             "run_yolo_all" if self.detect_scope.currentIndex() == 1 else "run_yolo"))
         self.detect_scope.currentIndexChanged.connect(lambda index: self.detect_button.setText(
             "Detectar cajas del capítulo" if index == 1 else "Detectar cajas de la página"))
+        self.detect_scope.currentIndexChanged.connect(lambda index: self.set_scope(index + 1))
         layout.addWidget(self.detect_button)
         self.detection_status = QLabel("En lote se conservan las páginas que ya tienen cajas.")
         self.detection_status.setObjectName("Muted")

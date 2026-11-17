@@ -18,10 +18,11 @@ class SettingsDialog(QDialog):
 
     def __init__(self, settings: dict, credentials, profile_manager=None, profile_locked: bool = False, parent=None) -> None:
         super().__init__(parent)
-        self.setWindowTitle("Configuración · Proveedores y seguridad")
+        self.setWindowTitle("Configuración")
         self.setMinimumSize(680, 520)
         layout = QVBoxLayout(self)
         tabs = QTabWidget()
+        self._tabs = tabs
         tabs.setElideMode(Qt.ElideRight)
         tabs.tabBar().setUsesScrollButtons(True)
         layout.addWidget(tabs)
@@ -67,6 +68,11 @@ class SettingsDialog(QDialog):
             "DPAPI; si vacías un campo, esa clave se elimina."
         )
         note.setWordWrap(True); note.setObjectName("Muted"); form.addRow(note)
+        test_note = QLabel(
+            "Para comprobar una clave de OCR, pégala aquí y pulsa «Probar conexión» "
+            "en la pestaña «OCR y traducción»; no hace falta guardar antes."
+        )
+        test_note.setWordWrap(True); test_note.setObjectName("Muted"); form.addRow(test_note)
         tabs.addTab(providers, "Credenciales")
 
         workflow = QWidget(); workflow_form = QFormLayout(workflow)
@@ -112,6 +118,7 @@ class SettingsDialog(QDialog):
         workflow_form.addRow("Idioma origen", self.source_language)
         workflow_form.addRow("Idioma destino", self.target_language)
         tabs.addTab(workflow, "OCR y traducción")
+        self._tab_pages = {"credentials": providers, "ocr": workflow}
 
         recovery = QWidget(); recovery_form = QFormLayout(recovery)
         self.autosave_interval = QComboBox(); self.autosave_interval.addItems(["1", "2", "5", "10"])
@@ -189,6 +196,13 @@ class SettingsDialog(QDialog):
         buttons = QDialogButtonBox(QDialogButtonBox.Save | QDialogButtonBox.Cancel)
         buttons.accepted.connect(self.accept); buttons.rejected.connect(self.reject)
         layout.addWidget(buttons)
+
+    def select_tab(self, name: str) -> None:
+        """Open on a tab by purpose: "credentials" or "ocr"."""
+        page = self._tab_pages.get(name)
+        index = self._tabs.indexOf(page) if page is not None else -1
+        if index >= 0:
+            self._tabs.setCurrentIndex(index)
 
     def _ocr_provider_changed(self, provider: str, initial: bool = False) -> None:
         alibaba = provider == "Alibaba Cloud"

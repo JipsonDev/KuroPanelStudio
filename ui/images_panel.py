@@ -147,7 +147,7 @@ class ImageListItem(QWidget):
             badge.setObjectName("PageStatusBadge")
             badge.setProperty("done", False)
             badge.setAlignment(Qt.AlignCenter)
-            badge.setFixedSize(17, 15)
+            badge.setFixedSize(22, 18)
             badge.setToolTip(tooltip)
             state_row.addWidget(badge)
             self.status_badges[key] = badge
@@ -241,7 +241,6 @@ class ImagesPanel(QFrame):
         self.legend.setObjectName("Caption")
         self.legend.setWordWrap(True)
         self.legend.setToolTip("Estados del flujo de cada página")
-        self.legend.hide()
         layout.addWidget(self.legend)
         filters = QHBoxLayout(); filters.setSpacing(5)
         self.grid_button = ModernButton("", icon_name="grid")
