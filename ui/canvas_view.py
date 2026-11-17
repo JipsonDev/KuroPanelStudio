@@ -1128,9 +1128,7 @@ class CanvasView(QGraphicsView):
         used_ids: set[str] = set()
         for index, region in enumerate(regions):
             region_id = str(region.get("id", "")).strip()
-            if not region_id:
-                region_id = f"region-{index}"
-            if region_id in used_ids:
+            if not region_id or region_id in used_ids:
                 region_id = f"region-{uuid.uuid4().hex}"
             region["id"] = region_id
             used_ids.add(region_id)

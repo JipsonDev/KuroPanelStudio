@@ -127,6 +127,21 @@ def save_project_bundle(
             temporary.unlink()
 
 
+def _local_file(path: Path) -> bool:
+    """An existing image on a local drive.
+
+    A project received from someone else must not make the app contact a
+    network share: opening ``\\\\host\\share\\x.png`` sends the Windows login.
+    """
+    text = str(path)
+    if text.startswith(("\\\\", "//")):
+        return False
+    try:
+        return path.is_file()
+    except OSError:
+        return False
+
+
 def load_project_bundle(source: Path) -> dict:
     with zipfile.ZipFile(source, "r") as bundle:
         manifest = json.loads(bundle.read("project.json").decode("utf-8"))
@@ -151,7 +166,7 @@ def load_project_bundle(source: Path) -> dict:
                 candidates.append(source.parent / page_data["relative_path"])
             if page_data.get("path"):
                 candidates.append(Path(page_data["path"]))
-            image_path = next((candidate for candidate in candidates if candidate.is_file()), None)
+            image_path = next((candidate for candidate in candidates if _local_file(candidate)), None)
             if image_path is None:
                 missing.append(page_data.get("name", "imagen"))
                 continue

@@ -49,6 +49,7 @@ def window(pages, regions, ocr):
         credentials=SimpleNamespace(get=lambda _: "key"), ocr=ocr,
         settings=SimpleNamespace(data={"ocr": {}}), _toast=Mock(), open_settings=Mock(),
         _source_layer_states=lambda _: {}, _chapter_seam_jobs=lambda _work: [],
+        _release_broken_seams=lambda *_: None,
         _start_task=lambda operation, *args, **kwargs: started.setdefault("operation", operation),
     )
     MainWindow.run_ocr_api_all(stub)

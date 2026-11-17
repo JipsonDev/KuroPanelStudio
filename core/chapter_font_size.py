@@ -22,6 +22,17 @@ def _dialogue(region: dict) -> bool:
             and str(region.get("balloon_kind") or "dialogue") in {"dialogue", "thought"})
 
 
+def _refresh_requested(style: dict) -> None:
+    """Forget the remembered size when the size was changed since unifying.
+
+    A font role, a box kind or the text panel may have set another size: that
+    newer choice is the one to start from, not the one remembered before.
+    """
+    if "font_size_requested" in style and style.get("font_size") != style.get("chapter_font_applied"):
+        for name in ("font_size_requested", "chapter_font_size", "chapter_font_applied"):
+            style.pop(name, None)
+
+
 def fitted_size(region: dict) -> int | None:
     snapshot = region.get("balloon_layout_snapshot")
     if isinstance(snapshot, dict) and not region.get("text_overflow"):
@@ -54,8 +65,10 @@ def unify_chapter_font_size(pages: dict[str, list[dict]], size: int) -> int:
                 continue
             # Remember the size chosen before the first unification, so a
             # later measurement starts from it instead of the capped value.
+            _refresh_requested(style)
             style.setdefault("font_size_requested", current)
             style["font_size"] = min(int(style["font_size_requested"]), size)
+            style["chapter_font_applied"] = style["font_size"]
             style["chapter_font_size"] = size
             style["auto_fit"] = True
             region["style"] = style
@@ -85,6 +98,7 @@ def measure_chapter_font_size(pages: list[tuple[object, list[dict]]], load_image
         if page is not image_page:
             image, image_page = load_image(page), page
         style = dict(region.get("style") or {})
+        _refresh_requested(style)
         if "font_size_requested" in style:
             style["font_size"] = style["font_size_requested"]
         layout = fit_region_in_balloon(image, {**region, "style": style}, default_style)

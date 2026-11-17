@@ -301,8 +301,9 @@ class SettingsDialog(QDialog):
 
     def accept(self) -> None:
         try:
-            if self.ocr_provider.currentText() == "Alibaba Cloud":
-                OCRManager.normalize_endpoint(self.ocr_base_url.text())
+            # Checked for every provider: the URL is saved either way and an
+            # invalid one failed later, silently, when returning to Alibaba.
+            OCRManager.normalize_endpoint(self.ocr_base_url.text())
             if not self.ocr_model.text().strip():
                 raise OCRConfigurationError("Escribe el identificador del modelo OCR.")
         except (OCRConfigurationError, ValueError) as error:

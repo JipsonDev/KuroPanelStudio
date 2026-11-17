@@ -33,7 +33,7 @@ from core.upload_export import safe_export_folder
 from core.psd_manager import is_psd, load_source_image
 from PIL import Image
 from core.chapter_font_size import measure_chapter_font_size, unify_chapter_font_size
-from core.seam_balloons import SEAM_PARTNER_KEY, anchor_first, seam_pairs, stitched_file
+from core.seam_balloons import SEAM_CHILD_KEY, SEAM_PARTNER_KEY, purge_stitched_files, anchor_first, seam_pairs, stitched_file
 from core.project_manager import ProjectManager
 from core.psd_sync import file_signature, inspect_stable_source, reconcile_layer_states
 from core.performance_manager import (
@@ -1091,6 +1091,8 @@ class MainWindow(QMainWindow):
         self._active_operation_key = f"foreground:{id(task)}"
         self._active_operation_name = title
         self._active_task_page_key = None if "capítulo" in title.casefold() else self._active_key()
+        page_bound = "capítulo" not in title.casefold() and not title.startswith("Exportación")
+        self._task_origin_key = self._active_key() if page_bound else None
         self.performance.start(self._active_operation_key)
         self.task_progress.start(title, stage)
         task.signals.progress.connect(self.task_progress.update_progress)
@@ -1104,6 +1106,24 @@ class MainWindow(QMainWindow):
         task.signals.completed.connect(lambda result: self._task_completed(result, title, message, finished))
         task.signals.failed.connect(self._task_failed)
         self.thread_pool.start(task)
+
+    def _return_to_task_page(self) -> None:
+        """Show the page a page-scoped task was launched on before applying its result.
+
+        The result handlers work on the visible page; without this, changing
+        page while detection or translation ran wrote the result over the
+        page being viewed.
+        """
+        origin, self._task_origin_key = getattr(self, "_task_origin_key", None), None
+        if not origin or origin == self._active_key():
+            return
+        for index, page in enumerate(self.project.pages):
+            if page_key(page) == origin:
+                self.images_panel.select_page(index)
+                if self._active_key() != origin:
+                    self._set_page(index)
+                self._toast("Resultado en su página", f"Se volvió a «{page.name}», donde se inició el proceso.")
+                return
 
     def _task_stage(self, stage: str, page_id: str) -> None:
         self.task_progress.set_stage(stage)
@@ -2648,7 +2668,7 @@ class MainWindow(QMainWindow):
             if provider != "Gemini":  # the regional URL only applies to Alibaba
                 OCRManager.normalize_endpoint(endpoint)
             endpoint_error = ""
-        except ValueError as error:
+        except (RuntimeError, ValueError) as error:
             endpoint_error = str(error)
         if provider not in OCR_PROVIDERS:
             ocr_reason = f"Proveedor OCR no disponible: {provider}"
@@ -2836,7 +2856,10 @@ class MainWindow(QMainWindow):
         previous_resource_profile = self.resource_policy.name
         self.settings.update_workflow(values)
         self.ui_translator.set_language(self.settings.data["general"]["ui_language"])
-        self.ocr.set_endpoint(values.get("ocr_base_url", ""))
+        try:
+            self.ocr.set_endpoint(values.get("ocr_base_url", ""))
+        except (RuntimeError, ValueError) as error:
+            self._toast("URL de OCR no válida", str(error), kind="error")
         # Show what was just saved: the panel kept the previous translation
         # provider/model, so the app used one model and displayed another.
         self.ai_panel.set_configuration(self.settings.data)
@@ -3263,7 +3286,7 @@ class MainWindow(QMainWindow):
             if self.project.pages:
                 index = min(max(0, int(snapshot.get("active_index", 0))), len(self.project.pages) - 1)
                 self.images_panel.list.blockSignals(True)
-                self.images_panel.list.setCurrentRow(index)
+                self.images_panel.select_page(index)
                 self.images_panel.list.blockSignals(False)
                 self._set_page(index)
                 self.canvas_shell.canvas.restore_view_state(view_state)
@@ -3321,6 +3344,7 @@ class MainWindow(QMainWindow):
             self.status.set_operation_time(metric.name, metric.seconds)
             self._refresh_performance_monitor()
         self._task_warning = None
+        self._return_to_task_page()
         try:
             if finished:
                 finished(result)
@@ -3702,14 +3726,14 @@ class MainWindow(QMainWindow):
             if self.canvas_shell.strip_button.isChecked():
                 self.canvas_shell.strip_view.jump_to_page(self.canvas_shell.strip_view.visible_page() - 1)
             else:
-                self.images_panel.list.setCurrentRow(max(0, self.project.active_index - 1))
+                self.images_panel.select_page(max(0, self.project.active_index - 1))
 
     def next_page(self) -> None:
         if self.project.pages:
             if self.canvas_shell.strip_button.isChecked():
                 self.canvas_shell.strip_view.jump_to_page(self.canvas_shell.strip_view.visible_page() + 1)
             else:
-                self.images_panel.list.setCurrentRow(min(len(self.project.pages) - 1, self.project.active_index + 1))
+                self.images_panel.select_page(min(len(self.project.pages) - 1, self.project.active_index + 1))
 
     def _adjust_zoom(self, delta: int) -> None:
         view = self.canvas_shell.active_view()
@@ -3754,9 +3778,45 @@ class MainWindow(QMainWindow):
         if paths:
             self.load_chapter_folder(paths[0].parent, paths)
 
+    # Modal questions would block an automated run; tests exercise the
+    # decision through _unsaved_choice instead.
+    ASK_BEFORE_DISCARD = "pytest" not in sys.modules
+
+    def _unsaved_choice(self, action: str) -> str:
+        """Ask what to do with unsaved work: "save", "discard" or "cancel"."""
+        if not self.ASK_BEFORE_DISCARD:
+            return "discard"
+        box = QMessageBox(self)
+        box.setIcon(QMessageBox.Warning)
+        box.setWindowTitle("Cambios sin guardar")
+        box.setText("Este capítulo tiene cambios sin guardar.")
+        box.setInformativeText(f"Si continúas sin guardar, se perderán al {action}.")
+        save = box.addButton("Guardar proyecto", QMessageBox.AcceptRole)
+        discard = box.addButton("No guardar", QMessageBox.DestructiveRole)
+        box.addButton("Cancelar", QMessageBox.RejectRole)
+        box.setDefaultButton(save)
+        box.exec()
+        clicked = box.clickedButton()
+        return "save" if clicked is save else "discard" if clicked is discard else "cancel"
+
+    def _may_replace_work(self, action: str) -> bool:
+        """True when the open chapter can be replaced or closed."""
+        if self.current_task is not None:
+            self._toast("Proceso en curso", f"Espera a que termine la tarea antes de {action}.")
+            return False
+        if not (self.project.pages and self._dirty):
+            return True
+        choice = self._unsaved_choice(action)
+        if choice == "save":
+            self.save_project()
+            return not self._dirty  # the save dialog may have been cancelled
+        return choice == "discard"
+
     def load_chapter_folder(self, folder: Path, selected_paths: list[Path] | None = None) -> None:
         if not folder.is_dir():
             self._toast("Carpeta no válida", "Arrastra una carpeta local que contenga imágenes.")
+            return
+        if not self._may_replace_work("abrir otro capítulo"):
             return
         project_types = self.font_profiles.project_types()
         has_profiles = any(self.font_profiles.projects(project_type) for project_type in project_types)
@@ -3961,6 +4021,16 @@ class MainWindow(QMainWindow):
         if not target_regions:
             self._toast("Sin cajas de texto", "Primero ejecuta Autodetectar texto (YOLO).")
             return
+        seamed = [region for region in target_regions if region.get(SEAM_PARTNER_KEY)
+                  and (force or OCRManager.needs_recognition(region))]
+        if seamed:
+            # Half of a balloon cut between two pages: both halves are read
+            # together by the chapter OCR, never one alone.
+            self._release_broken_seams(seamed)
+            self._toast("Globo cortado entre páginas",
+                        "Se leerá junto con su otra mitad, en la página contigua.")
+            self.run_ocr_api_all()
+            return
         if not force:
             target_regions = [
                 region for region in target_regions
@@ -4016,7 +4086,8 @@ class MainWindow(QMainWindow):
         if failed:
             self._report_ocr_failures({self._active_key(): failed})
         if request_targets:
-            self._merge_ocr_results(regions, request_targets)
+            self._merge_ocr_results(regions, request_targets, self.page_regions.get(self._active_key()))
+            self.regions = self.page_regions.get(self._active_key(), self.regions)
         else:
             # Compatibility for restored tasks created before request tokens.
             recognized = {region.get("id"): region for region in regions}
@@ -4067,6 +4138,7 @@ class MainWindow(QMainWindow):
 
     def _merge_ocr_results(
         self, recognized_regions: list[dict], request_targets: dict[str, dict],
+        live: list[dict] | None = None,
     ) -> None:
         """Apply OCR by an opaque request token, never by a visible layer ID."""
         for recognized in recognized_regions:
@@ -4074,14 +4146,24 @@ class MainWindow(QMainWindow):
             target = request_targets.get(token)
             if target is None:
                 continue
+            if live is not None and not any(region is target for region in live):
+                # The box was edited while the request ran and its dict was
+                # replaced: write to the box that now has that id, or drop
+                # the reading if the box was deleted (it stays in the cache).
+                target = next((region for region in live if region.get("id") == target.get("id")), None)
+                if target is None:
+                    continue
             old_source = str(target.get("text", ""))
             old_translation = str(target.get("translation", ""))
             old_applied = str(target.get("applied_text", ""))
-            payload = {
-                key: value for key, value in recognized.items()
-                if key != "_ocr_request_token"
-            }
-            target.update(payload)
+            # Only what the OCR produced: the request carried a copy of the
+            # box, and writing it all back undid edits made meanwhile.
+            target.update({
+                key: recognized[key] for key in ("text", SEAM_PARTNER_KEY, SEAM_CHILD_KEY) if key in recognized
+            })
+            if SEAM_PARTNER_KEY not in recognized:
+                target.pop(SEAM_PARTNER_KEY, None)
+                target.pop(SEAM_CHILD_KEY, None)
             source = OCRManager.normalize_cjk_text(str(target.get("text", "")))
             target["text"] = source
             target["ocr_stale"] = False
@@ -4102,6 +4184,7 @@ class MainWindow(QMainWindow):
         if not self.project.pages:
             self._toast("Abre un capítulo", "Carga imágenes antes de ejecutar OCR por lote.")
             return
+        self._release_broken_seams()
         work = []
         chapter_targets: dict[str, dict[str, dict]] = {}
         for page in self.project.pages:
@@ -4142,6 +4225,9 @@ class MainWindow(QMainWindow):
             return
 
         seam_jobs = self._chapter_seam_jobs(work)
+        # Read on the interface thread: the worker lanes must not touch page_styles.
+        layer_states = {page_key(page): copy.deepcopy(self._source_layer_states(page_key(page)))
+                        for page, _boxes in work}
 
         def recognize_chapter(progress, cancelled):
             # Two pages share the connection budget. A page with fewer boxes
@@ -4181,7 +4267,7 @@ class MainWindow(QMainWindow):
                         # Another page's failure only stops new pages: this
                         # page keeps the readings it already paid for.
                         cancelled,
-                        copy.deepcopy(self._source_layer_states(page_id)),
+                        layer_states[page_id],
                         keep_going=True, max_workers=connections,
                     )
                 except Exception:
@@ -4201,7 +4287,11 @@ class MainWindow(QMainWindow):
                 if stop.is_set() or cancelled():
                     break
                 progress(99, f"Globos cortados entre páginas · {number} de {len(seam_jobs)}", page_key(upper_page))
-                self._read_seam_balloon(upper_page, upper, lower_page, lower, provider, model, key, cancelled)
+                try:
+                    self._read_seam_balloon(upper_page, upper, lower_page, lower, provider, model, key, cancelled)
+                except Exception as error:  # one cut balloon must not discard the pages already read
+                    for part in (upper, lower):
+                        part[OCRManager.FAILED_KEY] = f"No se pudo unir el globo cortado: {error}"
                 results.setdefault(page_key(upper_page), []).append(upper)
                 results.setdefault(page_key(lower_page), []).append(lower)
             if cancelled():
@@ -4290,6 +4380,35 @@ class MainWindow(QMainWindow):
             f"{changed} globo(s) ajustado(s). Los que no tienen espacio usan un tamaño menor.",
         )
 
+    def _release_broken_seams(self, reread: list[dict] | None = None) -> None:
+        """Undo cut-balloon pairs that can no longer be read as one.
+
+        A pair is released when one half was deleted, or when either half is
+        about to be read again (``reread``): both halves then need OCR and
+        the chapter OCR joins them again. Reading the half that holds the
+        text on its own replaced the whole balloon with half of it.
+        """
+        by_id = {str(region.get("id")): region
+                 for regions in self.page_regions.values() for region in regions}
+        again = {id(region) for region in reread or ()}
+        for regions in self.page_regions.values():
+            for region in regions:
+                partner_id = region.get(SEAM_PARTNER_KEY)
+                if not partner_id:
+                    continue
+                partner = by_id.get(str(partner_id))
+                if partner is not None and id(region) not in again and id(partner) not in again \
+                        and partner.get(SEAM_PARTNER_KEY) == region.get("id"):
+                    continue
+                for part in (region, partner):
+                    if part is None:
+                        continue
+                    part.pop(SEAM_PARTNER_KEY, None)
+                    part.pop(SEAM_CHILD_KEY, None)
+                    part["ocr_checked"] = False
+                    part["ocr_completed"] = False
+                    part["ocr_stale"] = True
+
     def _chapter_seam_jobs(self, work: list[tuple]) -> list[tuple]:
         """Take balloons cut by a page join out of the per-page requests.
 
@@ -4340,6 +4459,8 @@ class MainWindow(QMainWindow):
         other["text"] = ""
         anchor[SEAM_PARTNER_KEY] = other.get("id")
         other[SEAM_PARTNER_KEY] = anchor.get("id")
+        anchor.pop(SEAM_CHILD_KEY, None)
+        other[SEAM_CHILD_KEY] = True
 
     def _show_chapter_ocr(
         self, results: dict[str, list[dict]],
@@ -4358,7 +4479,7 @@ class MainWindow(QMainWindow):
             self._report_ocr_failures(failures)
         for key, recognized_regions in results.items():
             if chapter_targets and key in chapter_targets:
-                self._merge_ocr_results(recognized_regions, chapter_targets[key])
+                self._merge_ocr_results(recognized_regions, chapter_targets[key], self.page_regions.get(key))
                 merged = self.page_regions.get(key, [])
             else:
                 recognized = {region.get("id"): region for region in recognized_regions}
@@ -5156,7 +5277,7 @@ class MainWindow(QMainWindow):
     def _edit_strip_page(self, index: int) -> None:
         self.canvas_shell.set_strip_mode(False)
         self.canvas_shell.strip_view.dispose()
-        self.images_panel.list.setCurrentRow(index)
+        self.images_panel.select_page(index)
         self._set_page(index)
 
     def _export_folder(self) -> Path:
@@ -5237,7 +5358,7 @@ class MainWindow(QMainWindow):
             self.project.active_index = new_index
             self._refresh_page_statuses()
             self.images_panel.list.blockSignals(True)
-            self.images_panel.list.setCurrentRow(new_index)
+            self.images_panel.select_page(new_index)
             self.images_panel.list.blockSignals(False)
             self._set_page(new_index)
         self.history.reset(self._snapshot())
@@ -5450,6 +5571,8 @@ class MainWindow(QMainWindow):
         self._toast("Proyecto guardado", f"Cajas, textos, estilos y limpiezas: {destination.name}")
 
     def open_project(self) -> None:
+        if not self._may_replace_work("abrir otro proyecto"):
+            return
         filename, _ = QFileDialog.getOpenFileName(self, "Abrir proyecto editable", "", "Proyecto KuroPanel (*.mseproj)")
         if not filename:
             return
@@ -5518,7 +5641,7 @@ class MainWindow(QMainWindow):
             self.images_panel.refresh_pages(self.project.pages)
             self._refresh_page_statuses()
             self.images_panel.list.blockSignals(True)
-            self.images_panel.list.setCurrentRow(self.project.active_index)
+            self.images_panel.select_page(self.project.active_index)
             self.images_panel.list.blockSignals(False)
             self._set_page(self.project.active_index)
         finally:
@@ -5558,12 +5681,20 @@ class MainWindow(QMainWindow):
     def _offer_recovery(self) -> None:
         if not self.recovery.has_recovery() or self.project.pages:
             return
-        answer = QMessageBox.question(
-            self, "Recuperar trabajo", "Se encontró un autoguardado de una sesión anterior. ¿Deseas recuperarlo?",
-            QMessageBox.Yes | QMessageBox.No, QMessageBox.Yes,
-        )
-        if answer != QMessageBox.Yes:
+        box = QMessageBox(self)
+        box.setIcon(QMessageBox.Question)
+        box.setWindowTitle("Recuperar trabajo")
+        box.setText("Se encontró un autoguardado de una sesión anterior.")
+        box.setInformativeText("Si lo descartas, no se podrá recuperar. «Más tarde» lo conserva para la próxima vez.")
+        recover = box.addButton("Recuperar", QMessageBox.AcceptRole)
+        discard = box.addButton("Descartar autoguardado", QMessageBox.DestructiveRole)
+        box.addButton("Más tarde", QMessageBox.RejectRole)
+        box.setDefaultButton(recover)
+        box.exec()
+        if box.clickedButton() is discard:
             self.recovery.clear_recovery()
+            return
+        if box.clickedButton() is not recover:
             return
         try:
             state = load_project_bundle(self.recovery.autosave_path)
@@ -5579,6 +5710,20 @@ class MainWindow(QMainWindow):
             self._toast("No se pudo recuperar", str(error))
 
     def closeEvent(self, event) -> None:
+        if self.project.pages and self._dirty and self.ASK_BEFORE_DISCARD:
+            choice = self._unsaved_choice("cerrar el programa")
+            if choice == "save":
+                self.save_project()
+                if self._dirty:
+                    event.ignore()
+                    return
+            elif choice == "cancel":
+                event.ignore()
+                return
+        try:
+            purge_stitched_files()
+        except Exception:
+            pass
         # A closed window may remain alive while a worker finishes. Its timers
         # must not enqueue new page/model work after the process is disposed.
         for timer in self.findChildren(QTimer):

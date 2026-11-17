@@ -3,6 +3,8 @@ from __future__ import annotations
 
 
 def page_workflow_status(regions: list[dict], clean_result: dict | None = None) -> dict[str, bool]:
+    # The half of a cut balloon whose text lives in the other page counts as done.
+    regions = [region for region in regions if not region.get("seam_child")]
     has_regions = bool(regions)
     ocr_done = has_regions and all(str(region.get("text", "")).strip() for region in regions)
     translated = has_regions and all(

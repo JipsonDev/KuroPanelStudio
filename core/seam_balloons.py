@@ -16,6 +16,8 @@ from pathlib import Path
 from PIL import Image
 
 SEAM_PARTNER_KEY = "seam_partner"
+SEAM_CHILD_KEY = "seam_child"   # the half that holds no text of its own
+STITCHED_MAX_AGE_DAYS = 7
 EDGE_MARGIN = 6
 MIN_OVERLAP = 0.5
 
@@ -89,6 +91,25 @@ def stitched_file(upper_path: Path, upper: dict, lower_path: Path, lower: dict,
         joined.save(temporary)
         temporary.replace(target)
     return target
+
+
+def purge_stitched_files(directory: Path | None = None, max_age_days: int = STITCHED_MAX_AGE_DAYS) -> int:
+    """Delete joined crops older than ``max_age_days``; returns how many."""
+    import time
+    folder = Path(directory or Path(tempfile.gettempdir()) / "kuropanel-seams")
+    limit, removed = time.time() - max_age_days * 86400, 0
+    try:
+        files = list(folder.glob("*.png"))
+    except OSError:
+        return 0
+    for path in files:
+        try:
+            if path.stat().st_mtime < limit:
+                path.unlink()
+                removed += 1
+        except OSError:
+            continue
+    return removed
 
 
 def anchor_first(upper: dict, lower: dict) -> tuple[dict, dict]:
