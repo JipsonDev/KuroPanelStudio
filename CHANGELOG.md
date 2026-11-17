@@ -28,6 +28,8 @@ Resultado de una revisión del programa entero. Comprobado con las tiras del cap
 - Los errores se muestran como error y duran más en pantalla; «Eliminar todas» pide confirmación.
 - «Configurar OCR» abre la pestaña de claves; los mensajes indican la pestaña correcta.
 - Bordes de botones y campos más visibles, foco del teclado visible, letras de al menos 11 px y leyenda de los estados de página.
+- Los botones de los diálogos (Guardar, Cancelar, Eliminar, Cerrar) aparecen en español.
+- Cambiar el perfil de rendimiento ya no vuelve a cobrar el OCR de las cajas ya leídas.
 
 **Velocidad**
 - Exportar es más rápido: cada fuente se carga una vez por tamaño.

@@ -5,7 +5,6 @@ import base64
 import hashlib
 import importlib
 import io
-import json
 import os
 import re
 import threading
@@ -84,14 +83,6 @@ OCR_PROMPT = (
     "Omit furigana: the small reading glyphs beside kanji. "
     "Text only; no commentary or markdown. Join wrapped lines, keep real paragraphs "
     "and Korean word spaces; add no Chinese/Japanese spaces. Return empty if unreadable."
-)
-OCR_BATCH_PROMPT = (
-    "Recibirás {count} recortes como {count} imágenes independientes y ordenadas. "
-    "La primera imagen es el recorte 1, la segunda es el recorte 2 y así sucesivamente. "
-    "Transcribe cada imagen por separado: nunca copies ni desplaces el texto de una imagen a otro ID. "
-    "Devuelve ÚNICAMENTE un JSON con este formato: {{\"boxes\":[{{\"id\":1,\"text\":\"...\"}}]}} "
-    "con IDs del 1 al {count}. Une líneas de maquetación en párrafos reales. "
-    "Si un recorte no tiene texto legible, devuelve \"\". Sin comentarios, markdown ni etiquetas internas."
 )
 OCR_PIPELINE_VERSION = 9
 
@@ -317,123 +308,6 @@ class OCRManager:
                 maximum = {"low": 2, "balanced": 4, "high": 6}.get(self._resource_profile, 4)
                 self._parallelism = maximum if median < 9.0 else min(3, maximum)
 
-    def _batch_limits(self) -> tuple[int, int]:
-        """Maximum independent images and source pixels per OCR request."""
-        if self._resource_profile == "low":
-            return 12, 3_800_000
-        if self._resource_profile == "high":
-            return 28, 7_000_000
-        return 24, 5_500_000
-
-    @staticmethod
-    def _regions_overlap(first: dict, second: dict) -> bool:
-        """Return true when two OCR crops can contain the same glyphs.
-
-        Nested detections are particularly dangerous in a grouped visual OCR
-        request: a perfectly valid answer can be attached to the neighbouring
-        identifier. Those regions are sent as independent requests instead.
-        """
-        ax1, ay1 = int(first.get("x", 0)), int(first.get("y", 0))
-        bx1, by1 = int(second.get("x", 0)), int(second.get("y", 0))
-        ax2 = ax1 + max(0, int(first.get("width", 0)))
-        ay2 = ay1 + max(0, int(first.get("height", 0)))
-        bx2 = bx1 + max(0, int(second.get("width", 0)))
-        by2 = by1 + max(0, int(second.get("height", 0)))
-        return min(ax2, bx2) > max(ax1, bx1) and min(ay2, by2) > max(ay1, by1)
-
-    def _partition_batches(self, prepared: list[tuple]) -> list[list[tuple]]:
-        max_items, max_pixels = self._batch_limits()
-        batches: list[list[tuple]] = []
-        current: list[tuple] = []
-        current_pixels = 0
-        conflicted: set[int] = set()
-        for left in range(len(prepared)):
-            for right in range(left + 1, len(prepared)):
-                if self._regions_overlap(prepared[left][1], prepared[right][1]):
-                    conflicted.update((left, right))
-
-        def flush() -> None:
-            nonlocal current, current_pixels
-            if current:
-                batches.append(current)
-                current = []
-                current_pixels = 0
-
-        for index, item in enumerate(prepared):
-            if index in conflicted:
-                flush()
-                batches.append([item])
-                continue
-            width, height = item[4]
-            item_pixels = max(1, int(width)) * max(1, int(height))
-            if current and (len(current) >= max_items or current_pixels + item_pixels > max_pixels):
-                flush()
-            current.append(item)
-            current_pixels += item_pixels
-        flush()
-        return batches
-
-    @staticmethod
-    def _multi_image_content(batch: list[tuple]) -> list[dict]:
-        """Build an order-stable request with one API image per OCR region."""
-        content: list[dict] = []
-        for item in batch:
-            encoded = base64.b64encode(item[3]).decode("ascii")
-            content.append({
-                "type": "image_url",
-                "image_url": {
-                    "url": f"data:image/jpeg;base64,{encoded}",
-                },
-            })
-        content.append({
-            "type": "text",
-            "text": OCR_BATCH_PROMPT.format(count=len(batch)),
-        })
-        return content
-
-    @staticmethod
-    def _contact_sheet(batch: list[tuple], quality: int) -> bytes:
-        """Pack compact region crops into one token-efficient OCR image."""
-        crops: list[Image.Image] = []
-        max_col_width = 720
-        for item in batch:
-            with Image.open(io.BytesIO(item[3])) as source:
-                crop = source.convert("RGB").copy()
-                if crop.width > max_col_width:
-                    scale = max_col_width / crop.width
-                    crop = crop.resize(
-                        (max_col_width, max(1, int(round(crop.height * scale)))),
-                        Image.Resampling.LANCZOS,
-                    )
-                crops.append(crop)
-        header = 32
-        gutter = 10
-        separator = 8
-        width = max(max(image.width for image in crops) + gutter * 2, 280)
-        height = sum(image.height + header + separator for image in crops)
-        sheet = Image.new("RGB", (width, height), (255, 255, 255))
-        draw = ImageDraw.Draw(sheet)
-        y = 0
-        for slot, image in enumerate(crops, 1):
-            draw.rectangle((0, y, width - 1, y + header - 1), fill=(18, 25, 31))
-            draw.text((10, y + 8), f"{slot}", fill=(80, 230, 255))
-            crop_top = y + header
-            paste_x = gutter + max(0, (width - gutter * 2 - image.width) // 2)
-            sheet.paste(image, (paste_x, crop_top))
-            draw.rectangle(
-                (paste_x - 2, crop_top - 2, paste_x + image.width + 1, crop_top + image.height + 1),
-                outline=(0, 190, 220), width=2,
-            )
-            separator_top = crop_top + image.height + 2
-            draw.rectangle(
-                (0, separator_top, width - 1, separator_top + separator - 2),
-                fill=(18, 25, 31),
-            )
-            y += header + image.height + separator
-        stream = io.BytesIO()
-        sheet.save(stream, format="JPEG", quality=min(quality, 88), subsampling=0, optimize=False)
-        return stream.getvalue()
-
     @staticmethod
     def _enhanced_retry_payload(payload: bytes) -> bytes:
         """Make faint/coloured glyph edges explicit for one targeted retry."""
@@ -444,78 +318,6 @@ class OCRManager:
         stream = io.BytesIO()
         image.save(stream, format="JPEG", quality=97, subsampling=0, optimize=False)
         return stream.getvalue()
-
-    @staticmethod
-    def _likely_contains_foreground(payload: bytes) -> bool:
-        try:
-            with Image.open(io.BytesIO(payload)) as source:
-                preview = source.convert("RGB")
-                preview.thumbnail((320, 320))
-                pixels = np.asarray(preview, dtype=np.int16)
-        except (OSError, ValueError):
-            return False
-        if pixels.size == 0:
-            return False
-        background = np.percentile(pixels.reshape(-1, 3), 75, axis=0)
-        distance = np.linalg.norm(pixels - background.reshape(1, 1, 3), axis=2)
-        return int(np.count_nonzero(distance > 18.0)) >= max(8, int(distance.size * 0.001))
-
-    @staticmethod
-    def _normalize_batch_text(value: str, identifier: int) -> str:
-        text = OCRManager.normalize_cjk_text(value)
-        if not text:
-            return ""
-        compact = re.sub(r"[\s:：#\[\]\(\)（）._-]+", "", text).casefold()
-        numeric = str(int(identifier))
-        padded = f"{int(identifier):03d}"
-        marker_values = {
-            numeric,
-            padded,
-            f"box{numeric}",
-            f"box{padded}",
-            f"msebox{numeric}",
-            f"msebox{padded}",
-            f"cell{numeric}",
-            f"cell{padded}",
-        }
-        # A label echoed by the vision model is transport noise. Only remove it
-        # when it is the whole answer; real dialogue that merely contains a
-        # number remains untouched.
-        return "" if compact in marker_values else text
-
-    @staticmethod
-    def _batch_response_partial(response, expected: int) -> list[str | None]:
-        content = OCRManager._response_content(response).strip()
-        if content.startswith("```"):
-            content = content.split("\n", 1)[-1].rsplit("```", 1)[0].strip()
-        try:
-            start, end = content.index("{"), content.rindex("}") + 1
-            decoded = json.loads(content[start:end])
-            entries = decoded.get("boxes", []) if isinstance(decoded, dict) else []
-            mapped = {}
-            duplicates: set[int] = set()
-            for entry in entries:
-                if not isinstance(entry, dict):
-                    continue
-                identifier = int(entry.get("id", 0))
-                if 1 <= identifier <= expected:
-                    if identifier in mapped:
-                        duplicates.add(identifier)
-                    mapped[identifier] = OCRManager._normalize_batch_text(
-                        str(entry.get("text", "")), identifier
-                    )
-            for identifier in duplicates:
-                mapped[identifier] = None
-        except (ValueError, TypeError, json.JSONDecodeError) as error:
-            raise OCRBatchParseError("La respuesta OCR agrupada no conservó el formato.") from error
-        return [mapped.get(index) for index in range(1, expected + 1)]
-
-    @staticmethod
-    def _batch_response(response, expected: int) -> list[str]:
-        values = OCRManager._batch_response_partial(response, expected)
-        if any(value is None for value in values):
-            raise OCRBatchParseError("La respuesta OCR agrupada omitió una o más cajas.")
-        return [str(value) for value in values]
 
     def validate(self, provider: str, configured_key: str = "") -> str:
         if provider not in OCR_PROVIDERS:
@@ -631,8 +433,9 @@ class OCRManager:
         stat = image_path.stat()
         cache_prefix = (
             str(image_path.resolve()).casefold(), stat.st_mtime_ns, stat.st_size,
+            # The resource profile is not part of the key: it only changes
+            # the crop quality, and switching profile re-billed every box.
             provider, endpoint, qwen_model, OCR_PIPELINE_VERSION, state_signature(source_states),
-            self._resource_profile,
         )
         pending: list[tuple[int, dict, tuple]] = []
         results: list[dict | None] = [None] * len(regions)

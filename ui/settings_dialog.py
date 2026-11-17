@@ -194,6 +194,10 @@ class SettingsDialog(QDialog):
             tabs.setCurrentIndex(0)
 
         buttons = QDialogButtonBox(QDialogButtonBox.Save | QDialogButtonBox.Cancel)
+        # Qt's own labels stay in English without a Qt translation file.
+        buttons.button(QDialogButtonBox.Save).setText("Guardar")
+        buttons.button(QDialogButtonBox.Save).setObjectName("Primary")
+        buttons.button(QDialogButtonBox.Cancel).setText("Cancelar")
         buttons.accepted.connect(self.accept); buttons.rejected.connect(self.reject)
         layout.addWidget(buttons)
 

@@ -50,6 +50,7 @@ class TypographyDialog(QDialog):
         self.preset_name = QLineEdit(); self.preset_name.setPlaceholderText("Ej. Narrador, protagonista…"); form.addRow("Guardar como", self.preset_name)
         buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
         buttons.button(QDialogButtonBox.Ok).setText("Aplicar")
+        buttons.button(QDialogButtonBox.Cancel).setText("Cancelar")
         buttons.accepted.connect(self.accept); buttons.rejected.connect(self.reject); layout.addWidget(buttons)
         self.set_style(TypographyManager.normalized(style))
 
