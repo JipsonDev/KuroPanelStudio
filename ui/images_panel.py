@@ -492,9 +492,8 @@ class ImagesPanel(QFrame):
 
     def select_page(self, index: int) -> None:
         """Select a page by its position in the chapter, whatever the list order."""
-        row = self.list.source_to_row.get(index, -1) if hasattr(self.list, "source_to_row") else index
-        if row >= 0:
-            self.list.setCurrentRow(row)
+        # The list's setCurrentRow already maps chapter order to its row.
+        self.list.setCurrentRow(index)
 
     def _show_row_menu(self, index: int) -> None:
         if index not in self.list.source_to_row:

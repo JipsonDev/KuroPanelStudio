@@ -703,6 +703,7 @@ class OCRManager:
             # budget is the hard limit for those exceptional crops.
             pixels = crop.width * crop.height
             scale = max(scale, min(0.5, (4 * max_pixels / pixels) ** 0.5))
+            scale = min(scale, 1536 / max(crop.size))  # the longest side a request may carry
             crop = crop.resize(
                 (max(1, int(crop.width * scale)), max(1, int(crop.height * scale))),
                 Image.Resampling.LANCZOS,

@@ -160,3 +160,15 @@ def test_process_chapter_runs_each_step_and_stops_on_a_problem():
     window._pipeline = ["run_translation_chapter"]
     MainWindow._pipeline_step_finished(window, ok=False)
     assert window._pipeline == []
+
+
+def test_tall_narration_is_not_shrunk_below_half_and_sides_stay_bounded():
+    import io
+    from PIL import Image
+    page = Image.new("RGB", (12000, 12000), "white")
+    manager = OCRManager()
+    for size, smallest_scale in (((847, 2450), .5), ((10000, 70), 0)):
+        payload, dimensions = manager._prepare_crop(page, {"x": 0, "y": 0, "width": size[0], "height": size[1]})
+        with Image.open(io.BytesIO(payload)) as crop:
+            assert crop.size == dimensions and max(crop.size) <= 1536
+            assert crop.height >= size[1] * smallest_scale - 1
