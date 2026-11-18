@@ -3,9 +3,9 @@
 Editor de escritorio para OCR, traducción, limpieza y typpeo de manhua, manhwa
 y manga. Está construido con Python, PySide6, OpenCV y ONNX Runtime.
 
-**Versión 0.2.27** añade Gemini para OCR, menos gasto en Qwen, prueba de conexión, importación de contexto por .txt, estilos por tipo de caja, tamaño de letra igualado al traducir, limpieza automática según el fondo, exportación lista para subir y quitar imágenes del capítulo.
+**Versión 0.2.28** corrige los fallos encontrados en la revisión completa: ya no se pierde trabajo al abrir otro capítulo ni se aplica un resultado en la página equivocada, gasta menos en OCR y traducción, separa las narraciones largas y añade «Procesar capítulo completo».
 
-[Descargar instalador para Windows x64](https://github.com/JipsonDev/KuroPanelStudio/releases/download/v0.2.27/KuroPanelStudio-Setup-0.2.27-Windows-x64.exe)
+[Descargar instalador para Windows x64](https://github.com/JipsonDev/KuroPanelStudio/releases/download/v0.2.28/KuroPanelStudio-Setup-0.2.28-Windows-x64.exe)
 · [Última versión](https://github.com/JipsonDev/KuroPanelStudio/releases/latest)
 · [Historial de cambios](CHANGELOG.md)
 
@@ -289,7 +289,7 @@ que puedas compartir legalmente.
 La aplicación instalable se construye con:
 
 ```powershell
-.\build_windows.ps1 -Version 0.2.27
+.\build_windows.ps1 -Version 0.2.28
 ```
 
 La edición compacta CPU-first se construye con:
@@ -301,12 +301,12 @@ La edición compacta CPU-first se construye con:
 Para crear el instalador x64 con Inno Setup 6:
 
 ```powershell
-.\build_installer.ps1 -Version 0.2.27
+.\build_installer.ps1 -Version 0.2.28
 ```
 
-El instalador para GitHub se genera en `github-release/KuroPanelStudio-v0.2.27/`.
+El instalador para GitHub se genera en `github-release/KuroPanelStudio-v0.2.28/`.
 Usa `-LocalOnly` en ambos comandos para generar un instalador local registrado en
-`local-builds/KuroPanelStudio-v0.2.27/`.
+`local-builds/KuroPanelStudio-v0.2.28/`.
 En GitHub, una etiqueta `vX.Y.Z` inicia el flujo de Windows que compila,
 prueba y adjunta el instalador y las notas de cambios a la Release sin subirlos manualmente.
 Consulta [la guía de publicación](docs/actualizaciones.md).

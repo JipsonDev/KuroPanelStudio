@@ -87,3 +87,12 @@ def test_dialog_saves_into_the_project():
     assert prompt.startswith("Instrucciones propias.") and "Bosque" not in prompt and "champiñón" in prompt
     assert glossary[0]["target"] == "Lin Feng" and dialog.imported_terms == 3
     dialog.close(); app.processEvents()
+
+
+def test_a_rule_with_a_colon_does_not_open_another_section():
+    imported = parse_context(
+        "## ESTILO\nNombres: los nombres chinos se dejan en pinyin.\nLas técnicas van en mayúsculas.\n\n"
+        "## GLOSARIO\nRules | Reglas\n林枫 | Lin Feng\nesto no es un término\n"
+    )
+    assert "pinyin" in imported.style and "mayúsculas" in imported.style
+    assert [term["source"] for term in imported.glossary] == ["Rules", "林枫"]

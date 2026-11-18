@@ -62,10 +62,16 @@ def _plain(value: str) -> str:
     return "".join(char for char in value if not unicodedata.combining(char)).casefold()
 
 
-def _heading(line: str) -> tuple[str | None, str]:
-    """Section name of a heading line, and any text written after it."""
+def _heading(line: str, inside_section: bool = False) -> tuple[str | None, str]:
+    """Section name of a heading line, and any text written after it.
+
+    Inside a section only a marked heading (``##``, bold) or the section
+    word alone starts another one: a style rule such as «Nombres: se dejan
+    en pinyin» used to open the glossary and turn every later rule into a
+    term, and a glossary row «Rules | Reglas» used to open the style.
+    """
     raw = line.strip()
-    if not raw:
+    if not raw or "|" in raw or "\t" in raw:
         return None, ""
     marked = raw.startswith(("#", "**", "__"))
     body = raw.lstrip("#").strip()
@@ -78,7 +84,8 @@ def _heading(line: str) -> tuple[str | None, str]:
         return None, ""
     for section, names in _SECTIONS.items():
         if word in names or (words[0] in names and len(words) <= 3):
-            if marked or match or body.strip(" *_#") == head:
+            alone = not rest.strip(" *_")
+            if marked or alone or (match and not inside_section):
                 return section, rest.strip(" *_")
     return None, ""
 
@@ -129,7 +136,7 @@ def parse_context(text: str) -> ImportedContext:
         if title and current is None:
             result.title = title.group(1).strip(" *")
             continue
-        section, rest = _heading(line)
+        section, rest = _heading(line, inside_section=current is not None)
         if section:
             current = section
             if rest:
@@ -142,8 +149,10 @@ def parse_context(text: str) -> ImportedContext:
         buckets["glossary"] = text.splitlines()
     result.context = "\n".join(buckets["context"]).strip()
     result.style = "\n".join(buckets["style"]).strip()
+    # A glossary row pairs two things; a loose sentence is not a term.
     rows = [line for line in buckets["glossary"]
-            if line.strip() and not re.match(r"^\s*\|?\s*original\s*\|", line, re.IGNORECASE)]
+            if line.strip() and not re.match(r"^\s*\|?\s*original\s*\|", line, re.IGNORECASE)
+            and re.search(r"\t|\||=>|->|→|⟶|=|:|：", line)]
     result.glossary = normalize_glossary("\n".join(rows))
     return result
 

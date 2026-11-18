@@ -533,7 +533,7 @@ class TextRegionItem(QGraphicsRectItem):
             if self._on_hyphenation_change is not None else None
         )
         menu.addSeparator()
-        del_action = menu.addAction(translate_text("Eliminar cuadro de texto (Supr / Delete)", language))
+        del_action = menu.addAction(translate_text("Eliminar caja (Supr)", language))
         del_action.triggered.connect(lambda: self._on_deleted(self))
         menu.exec(event.screenPos())
         event.accept()
@@ -1128,9 +1128,7 @@ class CanvasView(QGraphicsView):
         used_ids: set[str] = set()
         for index, region in enumerate(regions):
             region_id = str(region.get("id", "")).strip()
-            if not region_id:
-                region_id = f"region-{index}"
-            if region_id in used_ids:
+            if not region_id or region_id in used_ids:
                 region_id = f"region-{uuid.uuid4().hex}"
             region["id"] = region_id
             used_ids.add(region_id)

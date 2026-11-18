@@ -39,6 +39,29 @@ def safe_export_folder(folder: Path, pages, extension: str) -> Path:
     return folder
 
 
+FEED_ROWS = 4000
+
+
+def remove_previous_slices(destination: Path, prefix: str = "") -> int:
+    """Delete the numbered images of an earlier export from the folder.
+
+    A second export with fewer images left the extra ones of the first in
+    place, and uploading the folder mixed both. Only files named like this
+    export's own output (``001.jpg``…) are removed.
+    """
+    import re
+    pattern = re.compile(re.escape(prefix) + r"\d{3}\.(?:jpg|webp|png)$", re.IGNORECASE)
+    removed = 0
+    for path in Path(destination).iterdir():
+        if path.is_file() and pattern.fullmatch(path.name):
+            try:
+                path.unlink()
+                removed += 1
+            except OSError:
+                pass
+    return removed
+
+
 def _row_quietness(rows: np.ndarray) -> np.ndarray:
     """Lower is quieter: spread of each row plus change from the row above."""
     gray = rows.astype(np.int16).mean(axis=2)
@@ -102,55 +125,59 @@ def export_for_upload(images: Iterable[Image.Image], destination: Path, options:
     """
     if options.format_name not in FORMATS:
         raise ValueError(f"Formato no compatible: {options.format_name}")
+    if str(destination).strip() in {"", "."}:
+        raise ValueError("Elige la carpeta donde guardar la exportación.")
     height = max(400, int(options.slice_height))
     search = max(0, int(height * options.search))
+    sliver = int(height * .25)  # a shorter tail joins the last slice
     extension = FORMATS[options.format_name][0]
     destination = Path(destination)
     destination.mkdir(parents=True, exist_ok=True)
+    remove_previous_slices(destination, options.prefix)
     written: list[Path] = []
-    buffer: np.ndarray | None = None
+    buffer = np.zeros((0, 0, 3), np.uint8)
     width = int(options.width) or 0
+    avoid: list[tuple[int, int]] = []  # text rows, in buffer coordinates
 
     def flush(rows: np.ndarray) -> None:
         path = destination / f"{options.prefix}{len(written) + 1:03d}.{extension}"
-        _save(Image.fromarray(rows), path, options)
+        _save(Image.fromarray(np.ascontiguousarray(rows)), path, options)
         written.append(path)
 
-    avoid: list[tuple[int, int]] = []  # text rows, in buffer coordinates
+    def cut_while(minimum: int) -> None:
+        nonlocal buffer, avoid
+        while len(buffer) >= minimum:
+            cut = best_cut(buffer, height, search, avoid)
+            if len(buffer) - cut < sliver:
+                return  # the rest is written whole, with no thin last image
+            flush(buffer[:cut])
+            buffer = buffer[cut:].copy()  # a view would keep the whole block alive
+            avoid = [(top - cut, bottom - cut) for top, bottom in avoid if bottom - cut > 0]
+
     for index, item in enumerate(images, 1):
         if cancelled():
             return written
         image, ranges = item if isinstance(item, tuple) else (item, ())
         page = image.convert("RGB")
+        del image
         width = width or page.width
         scale = 1.0
         if page.width != width:  # pages of another width are scaled to the strip
             scale = width / page.width
             page = page.resize((width, max(1, round(page.height * scale))), Image.LANCZOS)
-        rows = np.asarray(page)
-        offset = 0 if buffer is None else len(buffer)
-        avoid.extend((offset + int(top * scale), offset + int(bottom * scale)) for top, bottom in ranges)
-        buffer = rows if buffer is None else np.concatenate([buffer, rows])
-        while len(buffer) >= height * 2 + search:
-            cut = best_cut(buffer, height, search, avoid)
-            flush(buffer[:cut])
-            buffer = buffer[cut:]
-            avoid = [(top - cut, bottom - cut) for top, bottom in avoid if bottom - cut > 0]
+        avoid.extend((len(buffer) + int(top * scale), len(buffer) + int(bottom * scale)) for top, bottom in ranges)
+        # Feed the page in blocks: the pending rows stay a few thousand
+        # pixels tall instead of the page plus everything before it
+        # (1.2 GB for a 60 000 px strip).
+        for top in range(0, page.height, FEED_ROWS):
+            block = np.asarray(page.crop((0, top, page.width, min(page.height, top + FEED_ROWS))))
+            buffer = block if not len(buffer) else np.concatenate([buffer, block])
+            cut_while(height * 2 + search + sliver)
+        del page
         progress(int(index * 95 / max(1, total)) if total else 50)
-    while buffer is not None and len(buffer) >= height + search:
-        cut = best_cut(buffer, height, search, avoid)
-        flush(buffer[:cut])
-        buffer = buffer[cut:]
-        avoid = [(top - cut, bottom - cut) for top, bottom in avoid if bottom - cut > 0]
-    if buffer is not None and len(buffer):
-        # A short tail joins the previous slice instead of becoming a sliver.
-        if written and len(buffer) < height * .25:
-            with Image.open(written[-1]) as previous:
-                merged = np.concatenate([np.asarray(previous.convert("RGB")), buffer])
-            written.pop().unlink()
-            flush(merged)
-        else:
-            flush(buffer)
+    cut_while(height + search)
+    if len(buffer):
+        flush(buffer)
     if options.make_zip and written:
         archive = destination.parent / f"{destination.name}.zip"
         with zipfile.ZipFile(archive, "w", compression=zipfile.ZIP_STORED) as bundle:

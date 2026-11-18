@@ -52,6 +52,7 @@ def _installed_windows_fonts() -> tuple[tuple[str, Path], ...]:
     return tuple(entries)
 
 
+@lru_cache(maxsize=256)
 def _font_path(family: str | None = None, weight: int = 400, italic: bool = False) -> Path | None:
     fonts = Path("C:/Windows/Fonts")
     family_key = (family or "").casefold().strip()
@@ -87,6 +88,7 @@ def _font_path(family: str | None = None, weight: int = 400, italic: bool = Fals
     return next((candidate for candidate in candidates if candidate.is_file()), None)
 
 
+@lru_cache(maxsize=512)
 def _font(
     size: int,
     family: str | None = None,

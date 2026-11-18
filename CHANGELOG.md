@@ -1,5 +1,39 @@
 # Historial de cambios
 
+## 0.2.28 — revisión completa: no perder trabajo, gastar menos y menos clics
+
+Resultado de una revisión del programa entero. Comprobado con las tiras del capítulo 185.
+
+**No perder trabajo**
+- El resultado de detectar, leer o traducir la «página actual» se aplica en la página donde se lanzó: si cambiaste de página mientras corría, el programa vuelve a ella antes de aplicarlo. Antes caía en la página que estuvieras viendo.
+- Abrir otro capítulo o proyecto, soltar una carpeta sobre la ventana y cerrar el programa preguntan qué hacer con los cambios sin guardar. En «Recuperar trabajo», «Más tarde» conserva el autoguardado.
+- Editar una caja mientras el OCR corre ya no pierde el texto leído ni deshace lo que cambiaste.
+- Globos cortados entre dos páginas: releer una mitad vuelve a leer el globo entero, la mitad sin texto cuenta como terminada, y un fallo al unirlos no descarta las páginas ya leídas.
+- «Abrir página» con la lista invertida, Supr sin página seleccionada, una URL de OCR inválida con Gemini elegido y el tamaño de letra puesto después de igualar ya se comportan bien.
+
+**Gastar menos**
+- Los rótulos de una línea que se repiten con el mismo tamaño (el texto de una marca de agua) no se envían a OCR ni a traducción; se siguen limpiando. En el capítulo 185 eran 17 de 119 cajas.
+- Cada lote de traducción lleva solo los términos del glosario que aparecen en él.
+- Si la traducción del capítulo falla en una página, las anteriores se conservan y se avisa dónde se detuvo. Un tiempo de espera agotado ya no reenvía el lote.
+
+**Calidad**
+- Varios párrafos de narración ya no se unen en una sola caja (la de 2450 px del capítulo 185 pasa a tres) y el OCR nunca reduce un recorte a menos de la mitad.
+- Importar contexto (.txt): una regla de estilo con dos puntos ya no abre el glosario ni crea términos falsos.
+- «Listo para subir» reemplaza las imágenes numeradas de la exportación anterior, no deja una última imagen fina y usa menos memoria.
+
+**Menos clics y más claro**
+- «Procesar capítulo completo» detecta, lee, limpia y traduce el capítulo en orden; se detiene en el primer problema y no repite lo ya hecho.
+- El alcance («Página actual» / «Todo el capítulo») se comparte entre los pasos y se recuerda.
+- Atajos: P, S, H, R y M para los pinceles (se anunciaban pero no existían) y RePág / AvPág para cambiar de página.
+- Los errores se muestran como error y duran más en pantalla; «Eliminar todas» pide confirmación.
+- «Configurar OCR» abre la pestaña de claves; los mensajes indican la pestaña correcta.
+- Bordes de botones y campos más visibles, foco del teclado visible, letras de al menos 11 px y leyenda de los estados de página.
+- Los botones de los diálogos (Guardar, Cancelar, Eliminar, Cerrar) aparecen en español.
+- Cambiar el perfil de rendimiento ya no vuelve a cobrar el OCR de las cajas ya leídas.
+
+**Velocidad**
+- Exportar es más rápido: cada fuente se carga una vez por tamaño.
+
 ## 0.2.27 — Gemini para OCR, menos gasto y mejor typeo
 
 Comprobado con las tiras del capítulo 185.

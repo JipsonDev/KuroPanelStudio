@@ -17,7 +17,8 @@ class UploadExportDialog(QDialog):
         layout = QVBoxLayout(self)
         intro = QLabel(
             "Une las páginas del capítulo y las corta a la misma altura, sin cortar por las cajas de texto, "
-            "con nombres 001, 002… y un .zip para subir."
+            "con nombres 001, 002… y un .zip para subir. Las imágenes numeradas de una exportación "
+            "anterior en esa carpeta se reemplazan."
         )
         intro.setWordWrap(True)
         intro.setObjectName("Muted")
@@ -69,6 +70,14 @@ class UploadExportDialog(QDialog):
         chosen = QFileDialog.getExistingDirectory(self, "Carpeta donde crear la exportación", str(current.parent))
         if chosen:
             self.folder.setText(str(Path(chosen) / current.name))
+
+    def accept(self) -> None:
+        text = self.folder.text().strip()
+        if not text or not Path(text).is_absolute():
+            self.folder.setFocus()
+            self.folder.setPlaceholderText("Elige una carpeta para la exportación")
+            return
+        super().accept()
 
     def options(self) -> UploadOptions:
         return UploadOptions(

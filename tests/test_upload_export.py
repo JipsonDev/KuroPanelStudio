@@ -60,3 +60,27 @@ def test_a_text_block_taller_than_the_window_is_not_cut():
     rows = np.full((6000, 50, 3), 255, np.uint8)
     cut = best_cut(rows, 2000, 400, [(1300, 3750)])
     assert cut == 1300 - 12
+
+
+def test_a_second_export_replaces_the_first(tmp_path):
+    folder = tmp_path / "out"
+    options = UploadOptions(slice_height=1000, format_name="PNG", make_zip=False)
+    first = export_for_upload([page(6000)], folder, options)
+    (folder / "notas.txt").write_text("mías")
+    second = export_for_upload([page(2000)], folder, options)
+    assert len(first) > len(second)
+    assert sorted(path.name for path in folder.iterdir()) == sorted([*(p.name for p in second), "notas.txt"])
+
+
+def test_no_thin_last_image_and_nothing_is_lost(tmp_path):
+    for total in (2100, 2450, 4990, 5250):
+        files = export_for_upload([page(total)], tmp_path / str(total),
+                                  UploadOptions(slice_height=1000, format_name="PNG", make_zip=False))
+        heights = [Image.open(path).height for path in files]
+        assert sum(heights) == total and min(heights) >= 250, (total, heights)
+
+
+def test_empty_destination_is_refused():
+    import pytest
+    with pytest.raises(ValueError):
+        export_for_upload([page(500)], "", UploadOptions())

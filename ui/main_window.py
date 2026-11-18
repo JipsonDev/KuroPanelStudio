@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import copy
 import os
+import re
 import subprocess
 import sys
 import threading
@@ -13,8 +14,8 @@ from pathlib import Path
 import numpy as np
 
 from PySide6.QtCore import QFile, QFileSystemWatcher, QPoint, QThreadPool, QTimer, Qt
-from PySide6.QtGui import QAction, QGuiApplication
-from PySide6.QtWidgets import QApplication, QCheckBox, QFileDialog, QDialog, QHBoxLayout, QMainWindow, QMessageBox, QProgressDialog, QScrollArea, QSplitter, QStackedWidget, QVBoxLayout, QWidget
+from PySide6.QtGui import QAction, QGuiApplication, QKeySequence
+from PySide6.QtWidgets import QApplication, QCheckBox, QFileDialog, QLineEdit, QPlainTextEdit, QTextEdit, QDialog, QHBoxLayout, QMainWindow, QMessageBox, QProgressDialog, QScrollArea, QSplitter, QStackedWidget, QVBoxLayout, QWidget
 
 from core.cleaning_process_manager import CleaningProcessManager
 from core.app_updater import ReleaseUpdater, UpdateInfo, check_available_update
@@ -22,7 +23,7 @@ from core.app_version import APP_UPDATE_CHANNEL, APP_VERSION
 from core.balloon_classifier import BALLOON_KINDS, KIND_LOOK_KEYS, KIND_LOOKS, classify_balloon
 from core.credential_store import CredentialStore
 from core.detection_manager import DetectionManager
-from core.chapter_detection import detect_chapter
+from core.chapter_detection import mark_repeated_captions, detect_chapter
 from core.font_profile_manager import FontProfileManager
 from core.history_manager import HistoryManager
 from core.image_manager import ImageManager
@@ -33,7 +34,7 @@ from core.upload_export import safe_export_folder
 from core.psd_manager import is_psd, load_source_image
 from PIL import Image
 from core.chapter_font_size import measure_chapter_font_size, unify_chapter_font_size
-from core.seam_balloons import SEAM_PARTNER_KEY, anchor_first, seam_pairs, stitched_file
+from core.seam_balloons import SEAM_CHILD_KEY, SEAM_PARTNER_KEY, purge_stitched_files, anchor_first, seam_pairs, stitched_file
 from core.project_manager import ProjectManager
 from core.psd_sync import file_signature, inspect_stable_source, reconcile_layer_states
 from core.performance_manager import (
@@ -438,6 +439,8 @@ class MainWindow(QMainWindow):
         self.ai_panel = AIOptionsPanel()
         self.ai_panel.setMinimumWidth(280)
         self.ai_panel.set_configuration(self.settings.data)
+        self.ai_panel.set_scope(int(self.settings.data.get("general", {}).get("scope", 1)))
+        self.ai_panel.scope_changed.connect(self._remember_scope)
         self.script_panel = ScriptPanel()
         self.text_panel = TextOptionsPanel()
         self.text_panel.set_presets(self.style_presets)
@@ -674,22 +677,32 @@ class MainWindow(QMainWindow):
         remove_retouch.triggered.connect(self.remove_last_retouch)
         self.addAction(remove_retouch)
         brush_p = QAction("Pincel de color", self)
-        brush_p.setShortcut("Ctrl+P")
+        brush_p.setShortcuts([QKeySequence("P"), QKeySequence("Ctrl+P")])
         brush_p.triggered.connect(lambda: self._toggle_brush_mode("paint"))
         self.addAction(brush_p)
         brush_s = QAction("Tampón de clonar", self)
         brush_s.triggered.connect(lambda: self._toggle_brush_mode("clone"))
+        brush_s.setShortcut("S")  # single keys do not fire while a text field has the focus
         self.addAction(brush_s)
         brush_h = QAction("Pincel corrector puntual", self)
         brush_h.triggered.connect(lambda: self._toggle_brush_mode("heal"))
+        brush_h.setShortcut("H")  # single keys do not fire while a text field has the focus
         self.addAction(brush_h)
         brush_r = QAction("Restaurar original", self)
         brush_r.triggered.connect(lambda: self._toggle_brush_mode("restore"))
+        brush_r.setShortcut("R")  # single keys do not fire while a text field has the focus
         self.addAction(brush_r)
         brush_m = QAction("Pincel de máscara", self)
         brush_m.triggered.connect(lambda: self._toggle_brush_mode("mask"))
+        brush_m.setShortcut("M")  # single keys do not fire while a text field has the focus
         self.addAction(brush_m)
-        delete_region = QAction("Eliminar cuadro", self)
+        for label, keys, handler in (("Página anterior", "PgUp", self.previous_page),
+                                     ("Página siguiente", "PgDown", self.next_page)):
+            page_action = QAction(label, self)
+            page_action.setShortcut(keys)
+            page_action.triggered.connect(handler)
+            self.addAction(page_action)
+        delete_region = QAction("Eliminar caja", self)
         delete_region.setShortcut("Delete")
         delete_region.triggered.connect(self._delete_active_region_action)
         self.addAction(delete_region)
@@ -840,6 +853,10 @@ class MainWindow(QMainWindow):
             self.import_translation_context()
         elif action == "edit_typography":
             self.edit_typography()
+        elif action in {"settings_ocr", "settings_translation"}:
+            self.open_settings("credentials")
+        elif action == "process_chapter":
+            self.process_chapter()
         elif action == "settings":
             self.open_settings()
         elif action == "check_updates":
@@ -867,10 +884,22 @@ class MainWindow(QMainWindow):
         elif action == "delete_last":
             self.canvas_shell.canvas.delete_last_region()
         elif action == "delete_all":
+            count = len(self.regions)
+            if count and self.ASK_BEFORE_DISCARD:
+                box = QMessageBox(self)
+                box.setIcon(QMessageBox.Warning)
+                box.setWindowTitle("Eliminar cajas")
+                box.setText(f"¿Eliminar las {count} cajas de esta página?")
+                box.setInformativeText("Se quitan también su texto y su traducción. Puedes deshacerlo con Ctrl+Z.")
+                confirm = box.addButton("Eliminar cajas", QMessageBox.DestructiveRole)
+                box.addButton("Cancelar", QMessageBox.RejectRole)
+                box.exec()
+                if box.clickedButton() is not confirm:
+                    return
             self.canvas_shell.canvas.delete_all_regions()
         elif action == "delete_selected":
             self.canvas_shell.canvas.delete_selected_regions()
-            self._toast("Selecciones eliminadas", "Se quitaron las regiones seleccionadas.")
+            self._toast("Cajas eliminadas", "Se quitaron las cajas seleccionadas.")
         elif action == "save_current":
             self.save_current()
         elif action == "save_all":
@@ -888,7 +917,7 @@ class MainWindow(QMainWindow):
         elif action == "redo":
             self.redo()
         else:
-            self._toast("Función sin backend", f"{action}: requiere un modelo o flujo adicional.")
+            self._toast("Función no disponible", f"Esta acción todavía no está disponible ({action}).")
 
     def _set_retouch_mode(self, enabled: bool) -> None:
         self._set_brush_mode("paint" if enabled else None)
@@ -1091,6 +1120,8 @@ class MainWindow(QMainWindow):
         self._active_operation_key = f"foreground:{id(task)}"
         self._active_operation_name = title
         self._active_task_page_key = None if "capítulo" in title.casefold() else self._active_key()
+        page_bound = "capítulo" not in title.casefold() and not title.startswith("Exportación")
+        self._task_origin_key = self._active_key() if page_bound else None
         self.performance.start(self._active_operation_key)
         self.task_progress.start(title, stage)
         task.signals.progress.connect(self.task_progress.update_progress)
@@ -1104,6 +1135,87 @@ class MainWindow(QMainWindow):
         task.signals.completed.connect(lambda result: self._task_completed(result, title, message, finished))
         task.signals.failed.connect(self._task_failed)
         self.thread_pool.start(task)
+
+    PIPELINE_STEPS = (
+        ("Detectar cajas", "run_detection_chapter"), ("Leer texto (OCR)", "run_ocr_api_all"),
+        ("Limpiar", "_pipeline_clean"), ("Traducir", "run_translation_chapter"),
+    )
+
+    def _pipeline_clean(self) -> None:
+        """Clean the chapter unless every page with boxes is already clean."""
+        pending = [page for page in self.project.pages
+                   if self.page_regions.get(page_key(page))
+                   and not self.clean_results.get(page_key(page), {}).get("patches")]
+        if pending:
+            self.clean_chapter()
+
+    def _remember_scope(self, index: int) -> None:
+        general = self.settings.data.setdefault("general", {})
+        if general.get("scope") != index:
+            general["scope"] = index
+            self.settings.save()
+
+    def process_chapter(self) -> None:
+        """Detect, read, clean and translate the whole chapter, one step after another.
+
+        Each step is the same one its own button runs, so pages already done
+        are skipped and nothing is paid twice. The chain stops at the first
+        failure or warning; translation goes last because it ends by
+        unifying the font size.
+        """
+        if self.current_task is not None:
+            self._toast("Proceso en curso", "Espera a que termine la tarea actual.")
+            return
+        if not self.project.pages:
+            self._toast("Abre un capítulo", "Carga las imágenes antes de procesar el capítulo.")
+            return
+        self._update_provider_statuses()
+        if not self.ai_panel.is_ready("ocr"):
+            self._toast("Configura el OCR", "Falta la clave del proveedor de OCR para procesar el capítulo.")
+            self.open_settings("credentials")
+            return
+        self._pipeline = [name for _label, name in self.PIPELINE_STEPS]
+        self._advance_pipeline()
+
+    def _advance_pipeline(self) -> None:
+        while getattr(self, "_pipeline", None) and self.current_task is None:
+            step = self._pipeline.pop(0)
+            label = next(text for text, name in self.PIPELINE_STEPS if name == step)
+            remaining = len(self._pipeline)
+            self.inspector.set_stage(f"Procesar capítulo · {label}" + (f" · faltan {remaining} paso(s)" if remaining else ""))
+            getattr(self, step)()
+            # A step with nothing to do returns without starting a task:
+            # the loop goes straight to the next one.
+
+    def _pipeline_step_finished(self, ok: bool) -> None:
+        if not getattr(self, "_pipeline", None):
+            return
+        if not ok:
+            pending = len(self._pipeline)
+            self._pipeline = []
+            self._toast("Proceso del capítulo detenido",
+                        f"Quedaron {pending} paso(s) sin hacer. Corrige el problema y vuelve a pulsar "
+                        "«Procesar capítulo completo»: lo ya hecho no se repite.", kind="warning")
+            return
+        QTimer.singleShot(0, self._advance_pipeline)
+
+    def _return_to_task_page(self) -> None:
+        """Show the page a page-scoped task was launched on before applying its result.
+
+        The result handlers work on the visible page; without this, changing
+        page while detection or translation ran wrote the result over the
+        page being viewed.
+        """
+        origin, self._task_origin_key = getattr(self, "_task_origin_key", None), None
+        if not origin or origin == self._active_key():
+            return
+        for index, page in enumerate(self.project.pages):
+            if page_key(page) == origin:
+                self.images_panel.select_page(index)
+                if self._active_key() != origin:
+                    self._set_page(index)
+                self._toast("Resultado en su página", f"Se volvió a «{page.name}», donde se inició el proceso.")
+                return
 
     def _task_stage(self, stage: str, page_id: str) -> None:
         self.task_progress.set_stage(stage)
@@ -2648,7 +2760,7 @@ class MainWindow(QMainWindow):
             if provider != "Gemini":  # the regional URL only applies to Alibaba
                 OCRManager.normalize_endpoint(endpoint)
             endpoint_error = ""
-        except ValueError as error:
+        except (RuntimeError, ValueError) as error:
             endpoint_error = str(error)
         if provider not in OCR_PROVIDERS:
             ocr_reason = f"Proveedor OCR no disponible: {provider}"
@@ -2680,7 +2792,7 @@ class MainWindow(QMainWindow):
         """Open the project & profile chooser anytime to switch library/project."""
         project_types = self.font_profiles.project_types()
         if not any(self.font_profiles.projects(pt) for pt in project_types):
-            self._toast("Sin proyectos", "Abre Ajustes para crear tu primer proyecto de traducción.")
+            self._toast("Sin proyectos", "Abre Configuración → Perfiles de fuentes para crear tu primer proyecto.")
             return
         selector = ProjectSelectionDialog(
             self.font_profiles, self.active_font_type, self.active_font_profile, self,
@@ -2807,7 +2919,7 @@ class MainWindow(QMainWindow):
             self._toast("No se pudo abrir el instalador", str(error), "error")
             self.show()
 
-    def open_settings(self) -> None:
+    def open_settings(self, tab: str = "") -> None:
         # Existing imported project fonts must be registered before the profile
         # editor builds its picker and preview.
         register_profile_fonts(self.font_profiles)
@@ -2815,6 +2927,8 @@ class MainWindow(QMainWindow):
             self.settings.data, self.credentials, self.font_profiles,
             False, self,
         )
+        if tab:
+            dialog.select_tab(tab)
         if dialog.exec() != QDialog.Accepted:
             return
         if dialog.profile_settings is not None:
@@ -2836,7 +2950,10 @@ class MainWindow(QMainWindow):
         previous_resource_profile = self.resource_policy.name
         self.settings.update_workflow(values)
         self.ui_translator.set_language(self.settings.data["general"]["ui_language"])
-        self.ocr.set_endpoint(values.get("ocr_base_url", ""))
+        try:
+            self.ocr.set_endpoint(values.get("ocr_base_url", ""))
+        except (RuntimeError, ValueError) as error:
+            self._toast("URL de OCR no válida", str(error), kind="error")
         # Show what was just saved: the panel kept the previous translation
         # provider/model, so the app used one model and displayed another.
         self.ai_panel.set_configuration(self.settings.data)
@@ -3263,7 +3380,7 @@ class MainWindow(QMainWindow):
             if self.project.pages:
                 index = min(max(0, int(snapshot.get("active_index", 0))), len(self.project.pages) - 1)
                 self.images_panel.list.blockSignals(True)
-                self.images_panel.list.setCurrentRow(index)
+                self.images_panel.select_page(index)
                 self.images_panel.list.blockSignals(False)
                 self._set_page(index)
                 self.canvas_shell.canvas.restore_view_state(view_state)
@@ -3321,6 +3438,7 @@ class MainWindow(QMainWindow):
             self.status.set_operation_time(metric.name, metric.seconds)
             self._refresh_performance_monitor()
         self._task_warning = None
+        self._return_to_task_page()
         try:
             if finished:
                 finished(result)
@@ -3330,6 +3448,7 @@ class MainWindow(QMainWindow):
                 self.task_progress.finish(warning=warning[0], warning_detail=warning[1])
             else:
                 self.task_progress.finish()
+            self._pipeline_step_finished(ok=not warning)
         category = self._operation_category(title)
         if category:
             completed = {page_id} if page_id and "capítulo" not in title.casefold() else set()
@@ -3367,6 +3486,7 @@ class MainWindow(QMainWindow):
         return ""
 
     def _task_failed(self, message: str) -> None:
+        self._pipeline_step_finished(ok=False)
         self.ai_panel.set_ocr_usage(self.ocr.usage_stats())
         operation_name = self._active_operation_name
         page_id = self._active_task_page_key
@@ -3702,14 +3822,14 @@ class MainWindow(QMainWindow):
             if self.canvas_shell.strip_button.isChecked():
                 self.canvas_shell.strip_view.jump_to_page(self.canvas_shell.strip_view.visible_page() - 1)
             else:
-                self.images_panel.list.setCurrentRow(max(0, self.project.active_index - 1))
+                self.images_panel.select_page(max(0, self.project.active_index - 1))
 
     def next_page(self) -> None:
         if self.project.pages:
             if self.canvas_shell.strip_button.isChecked():
                 self.canvas_shell.strip_view.jump_to_page(self.canvas_shell.strip_view.visible_page() + 1)
             else:
-                self.images_panel.list.setCurrentRow(min(len(self.project.pages) - 1, self.project.active_index + 1))
+                self.images_panel.select_page(min(len(self.project.pages) - 1, self.project.active_index + 1))
 
     def _adjust_zoom(self, delta: int) -> None:
         view = self.canvas_shell.active_view()
@@ -3754,9 +3874,45 @@ class MainWindow(QMainWindow):
         if paths:
             self.load_chapter_folder(paths[0].parent, paths)
 
+    # Modal questions would block an automated run; tests exercise the
+    # decision through _unsaved_choice instead.
+    ASK_BEFORE_DISCARD = "pytest" not in sys.modules
+
+    def _unsaved_choice(self, action: str) -> str:
+        """Ask what to do with unsaved work: "save", "discard" or "cancel"."""
+        if not self.ASK_BEFORE_DISCARD:
+            return "discard"
+        box = QMessageBox(self)
+        box.setIcon(QMessageBox.Warning)
+        box.setWindowTitle("Cambios sin guardar")
+        box.setText("Este capítulo tiene cambios sin guardar.")
+        box.setInformativeText(f"Si continúas sin guardar, se perderán al {action}.")
+        save = box.addButton("Guardar proyecto", QMessageBox.AcceptRole)
+        discard = box.addButton("No guardar", QMessageBox.DestructiveRole)
+        box.addButton("Cancelar", QMessageBox.RejectRole)
+        box.setDefaultButton(save)
+        box.exec()
+        clicked = box.clickedButton()
+        return "save" if clicked is save else "discard" if clicked is discard else "cancel"
+
+    def _may_replace_work(self, action: str) -> bool:
+        """True when the open chapter can be replaced or closed."""
+        if self.current_task is not None:
+            self._toast("Proceso en curso", f"Espera a que termine la tarea antes de {action}.")
+            return False
+        if not (self.project.pages and self._dirty):
+            return True
+        choice = self._unsaved_choice(action)
+        if choice == "save":
+            self.save_project()
+            return not self._dirty  # the save dialog may have been cancelled
+        return choice == "discard"
+
     def load_chapter_folder(self, folder: Path, selected_paths: list[Path] | None = None) -> None:
         if not folder.is_dir():
             self._toast("Carpeta no válida", "Arrastra una carpeta local que contenga imágenes.")
+            return
+        if not self._may_replace_work("abrir otro capítulo"):
             return
         project_types = self.font_profiles.project_types()
         has_profiles = any(self.font_profiles.projects(project_type) for project_type in project_types)
@@ -3927,6 +4083,7 @@ class MainWindow(QMainWindow):
                 self.page_regions[key] = regions
                 self._refresh_page_text(key)
                 applied += 1
+            self._note_repeated_captions(mark_repeated_captions(self.page_regions))
             if self._active_key() in results:
                 self.regions = self.page_regions.get(self._active_key(), [])
                 self._render_page_layers(self._active_key())
@@ -3959,7 +4116,20 @@ class MainWindow(QMainWindow):
             self._toast("Abre un capítulo", "Selecciona una carpeta con imágenes antes de ejecutar OCR.")
             return
         if not target_regions:
-            self._toast("Sin cajas de texto", "Primero ejecuta Autodetectar texto (YOLO).")
+            self._toast("Sin cajas de texto", "Primero pulsa Detectar cajas o dibuja una a mano.")
+            return
+        if force:
+            for region in target_regions:
+                region.pop("repeated_caption", None)
+        seamed = [region for region in target_regions if region.get(SEAM_PARTNER_KEY)
+                  and (force or OCRManager.needs_recognition(region))]
+        if seamed:
+            # Half of a balloon cut between two pages: both halves are read
+            # together by the chapter OCR, never one alone.
+            self._release_broken_seams(seamed)
+            self._toast("Globo cortado entre páginas",
+                        "Se leerá junto con su otra mitad, en la página contigua.")
+            self.run_ocr_api_all()
             return
         if not force:
             target_regions = [
@@ -3980,7 +4150,7 @@ class MainWindow(QMainWindow):
             self.ocr.set_endpoint(self.settings.data["ocr"].get("base_url", ""))
             self.ocr.validate(provider, key)
         except (RuntimeError, ValueError) as error:
-            self._toast("OCR mediante API", str(error))
+            self._toast("No se pudo leer el texto", str(error), kind="error")
             return
         page = self.project.active_page
         source_states = copy.deepcopy(self._source_layer_states(self._active_key()))
@@ -4016,7 +4186,7 @@ class MainWindow(QMainWindow):
         if failed:
             self._report_ocr_failures({self._active_key(): failed})
         if request_targets:
-            self._merge_ocr_results(regions, request_targets)
+            self._merge_ocr_results(regions, request_targets, self.regions)
         else:
             # Compatibility for restored tasks created before request tokens.
             recognized = {region.get("id"): region for region in regions}
@@ -4067,6 +4237,7 @@ class MainWindow(QMainWindow):
 
     def _merge_ocr_results(
         self, recognized_regions: list[dict], request_targets: dict[str, dict],
+        live: list[dict] | None = None,
     ) -> None:
         """Apply OCR by an opaque request token, never by a visible layer ID."""
         for recognized in recognized_regions:
@@ -4074,14 +4245,24 @@ class MainWindow(QMainWindow):
             target = request_targets.get(token)
             if target is None:
                 continue
+            if live is not None and not any(region is target for region in live):
+                # The box was edited while the request ran and its dict was
+                # replaced: write to the box that now has that id, or drop
+                # the reading if the box was deleted (it stays in the cache).
+                target = next((region for region in live if region.get("id") == target.get("id")), None)
+                if target is None:
+                    continue
             old_source = str(target.get("text", ""))
             old_translation = str(target.get("translation", ""))
             old_applied = str(target.get("applied_text", ""))
-            payload = {
-                key: value for key, value in recognized.items()
-                if key != "_ocr_request_token"
-            }
-            target.update(payload)
+            # Only what the OCR produced: the request carried a copy of the
+            # box, and writing it all back undid edits made meanwhile.
+            target.update({
+                key: recognized[key] for key in ("text", SEAM_PARTNER_KEY, SEAM_CHILD_KEY) if key in recognized
+            })
+            if SEAM_PARTNER_KEY not in recognized:
+                target.pop(SEAM_PARTNER_KEY, None)
+                target.pop(SEAM_CHILD_KEY, None)
             source = OCRManager.normalize_cjk_text(str(target.get("text", "")))
             target["text"] = source
             target["ocr_stale"] = False
@@ -4102,6 +4283,7 @@ class MainWindow(QMainWindow):
         if not self.project.pages:
             self._toast("Abre un capítulo", "Carga imágenes antes de ejecutar OCR por lote.")
             return
+        self._release_broken_seams()
         work = []
         chapter_targets: dict[str, dict[str, dict]] = {}
         for page in self.project.pages:
@@ -4138,10 +4320,13 @@ class MainWindow(QMainWindow):
             self.ocr.set_endpoint(self.settings.data["ocr"].get("base_url", ""))
             self.ocr.validate(provider, key)
         except (RuntimeError, ValueError) as error:
-            self._toast("OCR mediante API", str(error))
+            self._toast("No se pudo leer el texto", str(error), kind="error")
             return
 
         seam_jobs = self._chapter_seam_jobs(work)
+        # Read on the interface thread: the worker lanes must not touch page_styles.
+        layer_states = {page_key(page): copy.deepcopy(self._source_layer_states(page_key(page)))
+                        for page, _boxes in work}
 
         def recognize_chapter(progress, cancelled):
             # Two pages share the connection budget. A page with fewer boxes
@@ -4181,7 +4366,7 @@ class MainWindow(QMainWindow):
                         # Another page's failure only stops new pages: this
                         # page keeps the readings it already paid for.
                         cancelled,
-                        copy.deepcopy(self._source_layer_states(page_id)),
+                        layer_states[page_id],
                         keep_going=True, max_workers=connections,
                     )
                 except Exception:
@@ -4201,7 +4386,11 @@ class MainWindow(QMainWindow):
                 if stop.is_set() or cancelled():
                     break
                 progress(99, f"Globos cortados entre páginas · {number} de {len(seam_jobs)}", page_key(upper_page))
-                self._read_seam_balloon(upper_page, upper, lower_page, lower, provider, model, key, cancelled)
+                try:
+                    self._read_seam_balloon(upper_page, upper, lower_page, lower, provider, model, key, cancelled)
+                except Exception as error:  # one cut balloon must not discard the pages already read
+                    for part in (upper, lower):
+                        part[OCRManager.FAILED_KEY] = f"No se pudo unir el globo cortado: {error}"
                 results.setdefault(page_key(upper_page), []).append(upper)
                 results.setdefault(page_key(lower_page), []).append(lower)
             if cancelled():
@@ -4290,6 +4479,35 @@ class MainWindow(QMainWindow):
             f"{changed} globo(s) ajustado(s). Los que no tienen espacio usan un tamaño menor.",
         )
 
+    def _release_broken_seams(self, reread: list[dict] | None = None) -> None:
+        """Undo cut-balloon pairs that can no longer be read as one.
+
+        A pair is released when one half was deleted, or when either half is
+        about to be read again (``reread``): both halves then need OCR and
+        the chapter OCR joins them again. Reading the half that holds the
+        text on its own replaced the whole balloon with half of it.
+        """
+        by_id = {str(region.get("id")): region
+                 for regions in self.page_regions.values() for region in regions}
+        again = {id(region) for region in reread or ()}
+        for regions in self.page_regions.values():
+            for region in regions:
+                partner_id = region.get(SEAM_PARTNER_KEY)
+                if not partner_id:
+                    continue
+                partner = by_id.get(str(partner_id))
+                if partner is not None and id(region) not in again and id(partner) not in again \
+                        and partner.get(SEAM_PARTNER_KEY) == region.get("id"):
+                    continue
+                for part in (region, partner):
+                    if part is None:
+                        continue
+                    part.pop(SEAM_PARTNER_KEY, None)
+                    part.pop(SEAM_CHILD_KEY, None)
+                    part["ocr_checked"] = False
+                    part["ocr_completed"] = False
+                    part["ocr_stale"] = True
+
     def _chapter_seam_jobs(self, work: list[tuple]) -> list[tuple]:
         """Take balloons cut by a page join out of the per-page requests.
 
@@ -4340,6 +4558,8 @@ class MainWindow(QMainWindow):
         other["text"] = ""
         anchor[SEAM_PARTNER_KEY] = other.get("id")
         other[SEAM_PARTNER_KEY] = anchor.get("id")
+        anchor.pop(SEAM_CHILD_KEY, None)
+        other[SEAM_CHILD_KEY] = True
 
     def _show_chapter_ocr(
         self, results: dict[str, list[dict]],
@@ -4358,7 +4578,7 @@ class MainWindow(QMainWindow):
             self._report_ocr_failures(failures)
         for key, recognized_regions in results.items():
             if chapter_targets and key in chapter_targets:
-                self._merge_ocr_results(recognized_regions, chapter_targets[key])
+                self._merge_ocr_results(recognized_regions, chapter_targets[key], self.page_regions.get(key))
                 merged = self.page_regions.get(key, [])
             else:
                 recognized = {region.get("id"): region for region in recognized_regions}
@@ -4453,7 +4673,7 @@ class MainWindow(QMainWindow):
         try:
             self.translator.validate(provider, api_key)
         except RuntimeError as error:
-            self._toast("Traducción", str(error))
+            self._toast("No se pudo traducir", str(error), kind="error")
             return
         texts = [str(region["text"]) for region in ordered]
         context = self._recent_translation_context(limit=5000)
@@ -4507,7 +4727,7 @@ class MainWindow(QMainWindow):
         try:
             self.translator.validate(provider, api_key)
         except RuntimeError as error:
-            self._toast("Traducción", str(error))
+            self._toast("No se pudo traducir", str(error), kind="error")
             return
         configuration = self.settings.data["translate"]
         profile_type, profile_name = self.active_font_type, self.active_font_profile
@@ -4538,16 +4758,27 @@ class MainWindow(QMainWindow):
                 offset, span = page_index * 100 / len(pages), 100 / len(pages)
                 page_stage = f"Página {page_index + 1} de {len(pages)} · traducción"
                 progress(int(offset), page_stage, key)
-                result = self.translator.translate_with_context(
-                    texts, provider, model, api_key,
-                    configuration.get("source_language", "ZH"), configuration.get("target_language", "ES"),
-                    translation_profile.get("glossary", []), translation_profile.get("prompt", ""),
-                    "\n".join(context_blocks)[-5000:],
-                    lambda value, base=offset, amount=span, label=page_stage, current=key: progress(
-                        int(base + value * amount / 100), label, current,
-                    ),
-                    cancelled,
-                )
+                try:
+                    result = self.translator.translate_with_context(
+                        texts, provider, model, api_key,
+                        configuration.get("source_language", "ZH"), configuration.get("target_language", "ES"),
+                        translation_profile.get("glossary", []), translation_profile.get("prompt", ""),
+                        "\n".join(context_blocks)[-5000:],
+                        lambda value, base=offset, amount=span, label=page_stage, current=key: progress(
+                            int(base + value * amount / 100), label, current,
+                        ),
+                        cancelled,
+                    )
+                except Exception as error:
+                    if not translated_pages:
+                        raise
+                    # The pages already translated were paid for: keep them
+                    # and report where it stopped.
+                    return {
+                        "pages": translated_pages, "terms": learned_terms,
+                        "profile_type": profile_type, "profile_name": profile_name,
+                        "stopped": (page.name, str(error), len(pages) - len(translated_pages)),
+                    }
                 values = list(result.get("translations", []))
                 translated_pages[key] = [(region.get("id"), value) for region, value in zip(ordered, values)]
                 learned_terms.extend(result.get("terms", []))
@@ -4584,6 +4815,16 @@ class MainWindow(QMainWindow):
             self.regions = self.page_regions[self._active_key()]
             self._render_page_layers(self._active_key())
         self._record_history()
+        if payload.get("stopped"):
+            name, detail, pending = payload["stopped"]
+            failure = describe_failure("translation", detail)
+            self._task_warning = (
+                f"La traducción se detuvo en «{name}»",
+                f"{failure.title}. {failure.action}\n\n{len(payload.get('pages', {}))} página(s) ya quedaron "
+                f"traducidas y {pending} siguen pendientes. Vuelve a traducir el capítulo: solo se enviará "
+                f"lo que falta.\n\nDetalle técnico:\n{detail}",
+                {},
+            )
         if payload.get("pages"):
             # After the progress bar of the translation has closed.
             QTimer.singleShot(0, lambda: self.unify_chapter_font_size(automatic=True))
@@ -4632,6 +4873,14 @@ class MainWindow(QMainWindow):
                 f"{len(new_terms)} término(s) revisados · {len(combined)} guardados en {profile_name}.",
             )
 
+    def _note_repeated_captions(self, count: int) -> None:
+        if count:
+            self._toast(
+                "Rótulos repetidos sin leer",
+                f"{count} caja(s) iguales que se repiten (marca de agua) no se enviarán a OCR ni a traducción. "
+                "Para leer una, selecciónala y usa «Releer caja».", kind="info",
+            )
+
     def _show_regions(self, regions: list[dict]) -> None:
         key = self._active_key()
         manga_mode = self._manga_mode_for_key(key)
@@ -4642,6 +4891,7 @@ class MainWindow(QMainWindow):
             self._consume_pending_text(key, regions)
         self.regions = regions
         self._store_active_regions(regions)
+        self._note_repeated_captions(mark_repeated_captions(self.page_regions))
         self.canvas_shell.canvas.set_regions(regions, manga_mode=manga_mode)
         self.canvas_shell.canvas.add_text(
             [region.get("applied_text") or region.get("translation") or region.get("text", "") for region in regions],
@@ -4759,7 +5009,7 @@ class MainWindow(QMainWindow):
 
     def clean_text(self) -> None:
         if not self.project.pages or not self.regions:
-            self._toast("No hay regiones", "Ejecuta la detección antes de limpiar.")
+            self._toast("Sin cajas de texto", "Primero pulsa Detectar cajas o dibuja una a mano.")
             return
         if self._retouch_layer_state(self._active_key())["automatic"].get("locked", False):
             self._toast("Limpieza bloqueada", "Desbloquea la capa Limpieza automática.")
@@ -4775,7 +5025,7 @@ class MainWindow(QMainWindow):
             return
         selected = [item.region for item in self.canvas_shell.canvas._regions if item.isSelected()]
         if not selected:
-            self._toast("Selecciona una capa", "Haz clic en una caja del lienzo y pulsa Una capa.")
+            self._toast("Selecciona una caja", "Haz clic en una caja del lienzo y elige Caja seleccionada.")
             return
         self._prepare_clean_mask(selected)
 
@@ -5156,7 +5406,7 @@ class MainWindow(QMainWindow):
     def _edit_strip_page(self, index: int) -> None:
         self.canvas_shell.set_strip_mode(False)
         self.canvas_shell.strip_view.dispose()
-        self.images_panel.list.setCurrentRow(index)
+        self.images_panel.select_page(index)
         self._set_page(index)
 
     def _export_folder(self) -> Path:
@@ -5193,10 +5443,11 @@ class MainWindow(QMainWindow):
         page = self.project.pages[index]
         box = QMessageBox(self)
         box.setIcon(QMessageBox.Question)
-        box.setWindowTitle("Quitar imagen del capítulo")
+        box.setWindowTitle("Quitar página del capítulo")
         box.setText(f"¿Quitar «{page.name}» del capítulo?")
         box.setInformativeText(
-            "Se quitan sus cajas, textos y limpieza del proyecto. Esto no se puede deshacer. "
+            "Se quitan sus cajas, textos y limpieza del proyecto, y se borra el historial de deshacer. "
+            "Esto no se puede deshacer. "
             "La imagen original se conserva salvo que marques la casilla."
         )
         trash = QCheckBox("Enviar también el archivo a la Papelera de reciclaje")
@@ -5237,7 +5488,7 @@ class MainWindow(QMainWindow):
             self.project.active_index = new_index
             self._refresh_page_statuses()
             self.images_panel.list.blockSignals(True)
-            self.images_panel.list.setCurrentRow(new_index)
+            self.images_panel.select_page(new_index)
             self.images_panel.list.blockSignals(False)
             self._set_page(new_index)
         self.history.reset(self._snapshot())
@@ -5450,6 +5701,8 @@ class MainWindow(QMainWindow):
         self._toast("Proyecto guardado", f"Cajas, textos, estilos y limpiezas: {destination.name}")
 
     def open_project(self) -> None:
+        if not self._may_replace_work("abrir otro proyecto"):
+            return
         filename, _ = QFileDialog.getOpenFileName(self, "Abrir proyecto editable", "", "Proyecto KuroPanel (*.mseproj)")
         if not filename:
             return
@@ -5518,7 +5771,7 @@ class MainWindow(QMainWindow):
             self.images_panel.refresh_pages(self.project.pages)
             self._refresh_page_statuses()
             self.images_panel.list.blockSignals(True)
-            self.images_panel.list.setCurrentRow(self.project.active_index)
+            self.images_panel.select_page(self.project.active_index)
             self.images_panel.list.blockSignals(False)
             self._set_page(self.project.active_index)
         finally:
@@ -5558,12 +5811,20 @@ class MainWindow(QMainWindow):
     def _offer_recovery(self) -> None:
         if not self.recovery.has_recovery() or self.project.pages:
             return
-        answer = QMessageBox.question(
-            self, "Recuperar trabajo", "Se encontró un autoguardado de una sesión anterior. ¿Deseas recuperarlo?",
-            QMessageBox.Yes | QMessageBox.No, QMessageBox.Yes,
-        )
-        if answer != QMessageBox.Yes:
+        box = QMessageBox(self)
+        box.setIcon(QMessageBox.Question)
+        box.setWindowTitle("Recuperar trabajo")
+        box.setText("Se encontró un autoguardado de una sesión anterior.")
+        box.setInformativeText("Si lo descartas, no se podrá recuperar. «Más tarde» lo conserva para la próxima vez.")
+        recover = box.addButton("Recuperar", QMessageBox.AcceptRole)
+        discard = box.addButton("Descartar autoguardado", QMessageBox.DestructiveRole)
+        box.addButton("Más tarde", QMessageBox.RejectRole)
+        box.setDefaultButton(recover)
+        box.exec()
+        if box.clickedButton() is discard:
             self.recovery.clear_recovery()
+            return
+        if box.clickedButton() is not recover:
             return
         try:
             state = load_project_bundle(self.recovery.autosave_path)
@@ -5579,6 +5840,20 @@ class MainWindow(QMainWindow):
             self._toast("No se pudo recuperar", str(error))
 
     def closeEvent(self, event) -> None:
+        if self.project.pages and self._dirty and self.ASK_BEFORE_DISCARD:
+            choice = self._unsaved_choice("cerrar el programa")
+            if choice == "save":
+                self.save_project()
+                if self._dirty:
+                    event.ignore()
+                    return
+            elif choice == "cancel":
+                event.ignore()
+                return
+        try:
+            purge_stitched_files()
+        except Exception:
+            pass
         # A closed window may remain alive while a worker finishes. Its timers
         # must not enqueue new page/model work after the process is disposed.
         for timer in self.findChildren(QTimer):
@@ -5673,5 +5948,7 @@ class MainWindow(QMainWindow):
         self._layout_toasts()
         toast.raise_()
         toast.show()
-        duration = 5200 if semantic_kind == "error" else (3800 if semantic_kind == "warning" else 2800)
+        # Long enough to read: an error used to vanish in about five seconds
+        # and a two-sentence hint in under three.
+        duration = {"error": 9000, "warning": 6000, "info": 5000}.get(semantic_kind, 3200)
         QTimer.singleShot(duration, lambda current=toast: self._remove_toast(current))

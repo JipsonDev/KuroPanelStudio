@@ -193,5 +193,6 @@ class TaskProgress(QFrame):
         title = "Proceso incompleto" if self.property("state") == "warning" else "Error de proceso"
         text = self._explanation or self._error
         self._dialog = QMessageBox(QMessageBox.Warning, title, text, QMessageBox.Ok, self)
+        self._dialog.button(QMessageBox.Ok).setText("Cerrar")
         self._dialog.setTextFormat(Qt.PlainText)
         self._dialog.open()

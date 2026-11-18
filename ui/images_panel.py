@@ -147,7 +147,7 @@ class ImageListItem(QWidget):
             badge.setObjectName("PageStatusBadge")
             badge.setProperty("done", False)
             badge.setAlignment(Qt.AlignCenter)
-            badge.setFixedSize(17, 15)
+            badge.setFixedSize(22, 18)
             badge.setToolTip(tooltip)
             state_row.addWidget(badge)
             self.status_badges[key] = badge
@@ -241,7 +241,6 @@ class ImagesPanel(QFrame):
         self.legend.setObjectName("Caption")
         self.legend.setWordWrap(True)
         self.legend.setToolTip("Estados del flujo de cada página")
-        self.legend.hide()
         layout.addWidget(self.legend)
         filters = QHBoxLayout(); filters.setSpacing(5)
         self.grid_button = ModernButton("", icon_name="grid")
@@ -299,7 +298,8 @@ class ImagesPanel(QFrame):
         self.list.setContextMenuPolicy(Qt.CustomContextMenu)
         self.list.customContextMenuRequested.connect(self._show_menu)
         self.list.delete_pressed.connect(
-            lambda: self.page_remove_requested.emit(self._display_to_source[self.list.currentRow()])
+            lambda: (self.page_remove_requested.emit(self._display_to_source[self.list.currentRow()])
+                     if 0 <= self.list.currentRow() < len(self._display_to_source) else None)
         )
         self.list.currentRowChanged.connect(
             lambda row: self.page_selected.emit(self._display_to_source[row]
@@ -490,13 +490,18 @@ class ImagesPanel(QFrame):
         self.list.setCurrentRow(selected)
         self.set_statuses(self._statuses)
 
+    def select_page(self, index: int) -> None:
+        """Select a page by its position in the chapter, whatever the list order."""
+        # The list's setCurrentRow already maps chapter order to its row.
+        self.list.setCurrentRow(index)
+
     def _show_row_menu(self, index: int) -> None:
         if index not in self.list.source_to_row:
             return
         row = self.list.source_to_row[index]
         widget = self.list.itemWidget(self.list.item(row))
         menu = QMenu(self)
-        menu.addAction("Abrir página", lambda: self.list.setCurrentRow(index))
+        menu.addAction("Abrir página", lambda: self.select_page(index))
         menu.addSeparator()
         menu.addAction(icon("trash", "#FF7A7A"), "Quitar del capítulo…  (Supr)",
                        lambda: self.page_remove_requested.emit(index))

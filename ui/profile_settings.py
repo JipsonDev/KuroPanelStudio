@@ -408,20 +408,24 @@ class ProfileSettingsWidget(QWidget):
             self.active_type = renamed
         self._refresh_types(renamed)
 
+    def _confirm(self, title: str, text: str) -> bool:
+        box = QMessageBox(QMessageBox.Warning, title, text, parent=self)
+        delete = box.addButton("Eliminar", QMessageBox.DestructiveRole)
+        cancel = box.addButton("Cancelar", QMessageBox.RejectRole)
+        box.setDefaultButton(cancel)
+        box.exec()
+        return box.clickedButton() is delete
+
     def _delete_type(self) -> None:
         project_type = self._current_type()
         if not project_type:
             return
         count = len(self.manager.projects(project_type))
-        answer = QMessageBox.question(
-            self,
+        if not self._confirm(
             "Eliminar tipo de proyecto",
             f"¿Eliminar '{project_type}' y sus {count} proyecto(s)?\n\n"
             "Se eliminarán también sus asignaciones y archivos de fuentes importados.",
-            QMessageBox.Yes | QMessageBox.No,
-            QMessageBox.No,
-        )
-        if answer != QMessageBox.Yes:
+        ):
             return
         try:
             self.manager.delete_type(project_type)
@@ -455,15 +459,11 @@ class ProfileSettingsWidget(QWidget):
         project_type, project = self._current_type(), self._current_project()
         if not project_type or not project:
             return
-        answer = QMessageBox.question(
-            self,
+        if not self._confirm(
             "Eliminar proyecto",
             f"¿Eliminar el perfil '{project}'?\n\n"
             "Se eliminarán sus asignaciones y archivos de fuentes importados.",
-            QMessageBox.Yes | QMessageBox.No,
-            QMessageBox.No,
-        )
-        if answer != QMessageBox.Yes:
+        ):
             return
         try:
             self.manager.delete_project(project_type, project)
